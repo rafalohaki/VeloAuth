@@ -1,0 +1,11 @@
+{
+  "id": "veloauth",
+  "name": "VeloAuth",
+  "version": "1.0.0",
+  "description": "Complete Velocity Authentication Plugin with BCrypt, Virtual Threads and multi-database support",
+  "authors": [
+    "Rafal"
+  ],
+  "main": "net.rafalohaki.veloauth.VeloAuth",
+  "dependencies": []
+}

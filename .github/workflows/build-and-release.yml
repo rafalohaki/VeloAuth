@@ -1,0 +1,149 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        
+    - name: Cache Maven dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+        
+    - name: Build with Maven
+      run: mvn clean package -B -V
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: veloauth-jar
+        path: target/veloauth-*.jar
+        retention-days: 30
+        
+    - name: Generate release notes
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+      run: |
+        if [ "${{ github.ref_type }}" == "tag" ]; then
+          VERSION="${{ github.ref_name }}"
+        else
+          VERSION="latest-$(date +%Y%m%d-%H%M%S)"
+        fi
+        echo "## VeloAuth $VERSION" > release_notes.md
+        echo "" >> release_notes.md
+        echo "### Installation" >> release_notes.md
+        echo '```bash' >> release_notes.md
+        echo "wget https://github.com/${{ github.repository }}/releases/download/$VERSION/veloauth-$VERSION.jar" >> release_notes.md
+        echo "# Place the JAR file in your Velocity proxy plugins directory" >> release_notes.md
+        echo "# Restart your Velocity proxy" >> release_notes.md
+        echo '```' >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Requirements" >> release_notes.md
+        echo "- Java 21+" >> release_notes.md
+        echo "- Velocity proxy server" >> release_notes.md
+        echo "- PostgreSQL database (recommended) or MySQL/SQLite" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Features" >> release_notes.md
+        echo "- 🔒 Fail-secure database operations" >> release_notes.md
+        echo "- 🛡️ Database bypass vulnerability protection" >> release_notes.md
+        echo "- 📊 Database health monitoring" >> release_notes.md
+        echo "- 🔐 BCrypt password hashing" >> release_notes.md
+        echo "- ⚡ Virtual Thread support for Java 21+" >> release_notes.md
+        echo "- 🎯 UUID verification and session management" >> release_notes.md
+        echo "- 📝 Comprehensive logging and security events" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Security Fixes in This Release" >> release_notes.md
+        echo "- Database connection failures now deny access (fail-secure)" >> release_notes.md
+        echo "- UUID verification race condition resolved" >> release_notes.md
+        echo "- Database health checks with automatic monitoring" >> release_notes.md
+        echo "- Session cache invalidation on database errors" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Configuration" >> release_notes.md
+        echo "Configure your database connection in `plugins/VeloAuth/config.yml`" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Support" >> release_notes.md
+        echo "- Issues: https://github.com/${{ github.repository }}/issues" >> release_notes.md
+        echo "- Documentation: Check the in-plugin commands `/vauth help`"
+        
+    - name: Upload release notes
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-notes
+        path: release_notes.md
+        retention-days: 30
+        
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: veloauth-jar
+        path: ./
+        
+    - name: Download release notes
+      uses: actions/download-artifact@v4
+      with:
+        name: release-notes
+        path: ./
+        
+    - name: Create tag and version
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      run: |
+        VERSION="latest-$(date +%Y%m%d-%H%M%S)"
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "$VERSION" -m "Release $VERSION"
+        git push origin "$VERSION"
+        
+    - name: Set version from tag
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+        
+    - name: Rename JAR for release
+      run: |
+        mv veloauth-*.jar "veloauth-$VERSION.jar"
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ env.VERSION }}
+        files: veloauth-*.jar
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
