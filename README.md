@@ -1,5 +1,8 @@
 # VeloAuth v1.0.0
 
+[![Modrinth](https://img.shields.io/badge/Modrinth-00AF5C?style=for-the-badge&logo=modrinth&logoColor=white)](https://modrinth.com/plugin/veloauth)
+[![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/e2RkPbc3ZR)
+
 **Complete Velocity Authentication Plugin** with BCrypt, Virtual Threads and multi-database support.
 
 ## Description
