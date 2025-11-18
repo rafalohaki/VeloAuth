@@ -75,6 +75,18 @@ public class ConnectionManager {
     public CompletableFuture<Boolean> handlePlayerConnection(Player player) {
         return CompletableFuture.supplyAsync(() -> {
             try {
+                // CRITICAL SECURITY: Block connections until plugin is fully initialized
+                if (!plugin.isInitialized()) {
+                    logger.warn("🔒 BLOKADA STARTU: Gracz {} próbował połączyć się przed pełną inicjalizacją VeloAuth - rozłączanie", 
+                            player.getUsername());
+                    
+                    player.disconnect(Component.text(
+                            "VeloAuth się uruchamia. Spróbuj połączyć się ponownie za chwilę.",
+                            NamedTextColor.RED
+                    ));
+                    return false;
+                }
+
                 String playerIp = getPlayerIp(player);
                 InetAddress playerAddress = getPlayerAddress(player);
 
@@ -111,7 +123,7 @@ public class ConnectionManager {
                 }
 
             } catch (Exception e) {
-                logger.error("Błąd podczas obsługi połączenia gracza: " + player.getUsername(), e);
+                logger.error("Błąd podczas obsługi połączenia gracza: {}", player.getUsername(), e);
 
                 player.disconnect(Component.text(
                         "Wystąpił błąd podczas łączenia. Spróbuj ponownie.",
@@ -205,7 +217,7 @@ public class ConnectionManager {
             return transferToBackend(player);
 
         } catch (Exception e) {
-            logger.error("Błąd podczas weryfikacji gracza: " + player.getUsername(), e);
+            logger.error("Błąd podczas weryfikacji gracza: {}", player.getUsername(), e);
             return transferToPicoLimbo(player);
         }
     }
@@ -270,7 +282,7 @@ public class ConnectionManager {
             return executePicoLimboTransfer(player, targetServer);
 
         } catch (Exception e) {
-            logger.error("Krytyczny błąd podczas próby transferu gracza na PicoLimbo: " + player.getUsername(), e);
+            logger.error("Krytyczny błąd podczas próby transferu gracza na PicoLimbo: {}", player.getUsername(), e);
 
             disconnectWithError(player, "Wystąpił krytyczny błąd podczas łączenia z serwerem autoryzacji.");
             return false;
@@ -464,7 +476,7 @@ public class ConnectionManager {
             logger.info("Wymuszono ponowną autoryzację gracza: {}", player.getUsername());
 
         } catch (Exception e) {
-            logger.error("Błąd podczas wymuszania ponownej autoryzacji: " + player.getUsername(), e);
+            logger.error("Błąd podczas wymuszania ponownej autoryzacji: {}", player.getUsername(), e);
         }
     }
 

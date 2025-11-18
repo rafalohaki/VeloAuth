@@ -64,7 +64,7 @@ public class PremiumUuidDao {
             return Optional.of(result);
 
         } catch (SQLException e) {
-            logger.error(DB_MARKER, "Błąd podczas wyszukiwania premium UUID dla nickname: " + nickname, e);
+            logger.error(DB_MARKER, "Błąd podczas wyszukiwania premium UUID dla nickname: {}", nickname, e);
             return Optional.empty();
         }
     }
@@ -87,7 +87,7 @@ public class PremiumUuidDao {
             return Optional.of(result);
 
         } catch (SQLException e) {
-            logger.error(DB_MARKER, "Błąd podczas wyszukiwania premium UUID dla UUID: " + uuid, e);
+            logger.error(DB_MARKER, "Błąd podczas wyszukiwania premium UUID dla UUID: {}", uuid, e);
             return Optional.empty();
         }
     }
@@ -143,7 +143,7 @@ public class PremiumUuidDao {
             });
 
         } catch (Exception e) {
-            logger.error(DB_MARKER, "Błąd podczas zapisu/aktualizacji premium UUID: " + uuid + " -> " + nickname, e);
+            logger.error(DB_MARKER, "Błąd podczas zapisu/aktualizacji premium UUID: {} -> {}", uuid, nickname, e);
             return false;
         }
     }

@@ -169,7 +169,7 @@ public class Messages {
                 logger.error("Could not find language file: {}", fileName);
             }
         } catch (Exception e) {
-            logger.error("Error loading language file: " + fileName, e);
+            logger.error("Error loading language file: {}", fileName, e);
         }
         
         return properties;

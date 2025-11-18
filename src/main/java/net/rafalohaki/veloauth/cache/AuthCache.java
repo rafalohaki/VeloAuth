@@ -230,8 +230,10 @@ public class AuthCache {
                 }
 
                 authorizedPlayers.put(uuid, user);
-                logger.debug(messages.get("cache.debug.auth.added"),
-                        user.getNickname(), uuid);
+                if (logger.isDebugEnabled()) {
+                    logger.debug(messages.get("cache.debug.auth.added"),
+                            user.getNickname(), uuid);
+                }
 
             } finally {
                 cacheLock.unlock();
@@ -258,8 +260,10 @@ public class AuthCache {
             cacheMisses.incrementAndGet();
             double rate = (double) cacheHits.get() / Math.max(1, cacheHits.get() + cacheMisses.get()) * 100;
             String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
-            logger.debug(messages.get("cache.debug.uuid.miss"),
-                    uuid, rateStr);
+            if (logger.isDebugEnabled()) {
+                logger.debug(messages.get("cache.debug.uuid.miss"),
+                        uuid, rateStr);
+            }
             return null;
         }
 
@@ -269,15 +273,19 @@ public class AuthCache {
             cacheMisses.incrementAndGet();
             double rate = (double) cacheHits.get() / Math.max(1, cacheHits.get() + cacheMisses.get()) * 100;
             String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
-            logger.debug(messages.get("cache.debug.uuid.expired"),
-                    uuid, rateStr);
+            if (logger.isDebugEnabled()) {
+                logger.debug(messages.get("cache.debug.uuid.expired"),
+                        uuid, rateStr);
+            }
             return null;
         }
 
         cacheHits.incrementAndGet();
         double rate = (double) cacheHits.get() / Math.max(1, cacheHits.get() + cacheMisses.get()) * 100;
         String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
-        logger.debug(messages.get("cache.debug.hit.rate"), rateStr);
+        if (logger.isDebugEnabled()) {
+            logger.debug(messages.get("cache.debug.hit.rate"), rateStr);
+        }
         return user;
     }
 
@@ -290,8 +298,10 @@ public class AuthCache {
         if (uuid != null) {
             CachedAuthUser removed = authorizedPlayers.remove(uuid);
             if (removed != null) {
+                if (logger.isDebugEnabled()) {
                 logger.debug(messages.get("cache.debug.player.removed"),
                         removed.getNickname(), uuid);
+            }
             }
         }
     }
@@ -325,8 +335,10 @@ public class AuthCache {
 
         PremiumCacheEntry removed = premiumCache.remove(nickname.toLowerCase());
         if (removed != null) {
+            if (logger.isDebugEnabled()) {
             logger.debug(messages.get("cache.debug.premium.removed"),
                     nickname, removed.isPremium());
+        }
         }
     }
 
@@ -354,8 +366,10 @@ public class AuthCache {
                 PremiumCacheEntry entry = new PremiumCacheEntry(premiumUuid != null, premiumUuid);
                 premiumCache.put(nickname.toLowerCase(), entry);
 
+                if (logger.isDebugEnabled()) {
                 logger.debug(messages.get("cache.debug.premium.added"),
                         nickname, premiumUuid != null);
+            }
 
             } finally {
                 cacheLock.unlock();
@@ -397,8 +411,10 @@ public class AuthCache {
                     logger.warn(messages.get("cache.warn.ip.blocked"),
                             address.getHostAddress(), entry.getAttempts());
                 } else {
-                    logger.debug(messages.get("cache.debug.failed.login"),
-                            address.getHostAddress(), entry.getAttempts(), maxLoginAttempts);
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(messages.get("cache.debug.failed.login"),
+                                address.getHostAddress(), entry.getAttempts(), maxLoginAttempts);
+                    }
                 }
 
                 return blocked;
@@ -450,7 +466,9 @@ public class AuthCache {
         if (address != null) {
             BruteForceEntry removed = bruteForceAttempts.remove(address);
             if (removed != null) {
+                if (logger.isDebugEnabled()) {
                 logger.debug(messages.get("cache.debug.reset.attempts"), address.getHostAddress());
+            }
             }
         }
     }
@@ -521,7 +539,9 @@ public class AuthCache {
 
                 ActiveSession session = new ActiveSession(uuid, nickname, ip);
                 activeSessions.put(uuid, session);
+                if (logger.isDebugEnabled()) {
                 logger.debug(messages.get("cache.debug.session.started"), nickname, uuid, ip);
+            }
 
             } finally {
                 cacheLock.unlock();
@@ -542,7 +562,9 @@ public class AuthCache {
 
         ActiveSession removed = activeSessions.remove(uuid);
         if (removed != null) {
+            if (logger.isDebugEnabled()) {
             logger.debug(messages.get("cache.debug.session.ended"), removed.getNickname(), uuid);
+        }
         }
     }
 

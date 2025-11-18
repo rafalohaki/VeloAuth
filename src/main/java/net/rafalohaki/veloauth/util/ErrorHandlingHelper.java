@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.util;
 
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.command.ValidationUtils;
+import net.rafalohaki.veloauth.constants.StringConstants;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
@@ -38,7 +39,7 @@ public final class ErrorHandlingHelper {
         logger.error(marker, errorMessage, throwable);
 
         if (player != null) {
-            String userMessage = messages.get("error.database.query");
+            String userMessage = messages.get(StringConstants.ERROR_DATABASE_QUERY);
             PlayerHelper.sendErrorMessage(player, userMessage);
         }
     }
@@ -80,7 +81,7 @@ public final class ErrorHandlingHelper {
         logger.error(marker, errorMessage, e);
 
         if (player != null) {
-            player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+            player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
         }
     }
 

@@ -177,13 +177,17 @@ public final class AuthenticationHelper {
                 
                 RegisteredPlayer registeredPlayer = playerResult.getValue();
                 if (registeredPlayer == null) {
+                    if (logger.isDebugEnabled()) {
                     logger.debug(dbMarker, messages.get("player.not_found"), username);
+                }
                     return null;
                 }
 
                 // Verify password
                 if (!verifyPassword(password, registeredPlayer.getHash())) {
+                    if (logger.isDebugEnabled()) {
                     logger.debug(dbMarker, messages.get("player.password.invalid"), username);
+                }
                     return null;
                 }
 
@@ -200,69 +204,61 @@ public final class AuthenticationHelper {
     /**
      * Performs password change with verification.
      *
-     * @param databaseManager Database manager for operations
-     * @param username        Player's username
-     * @param oldPassword     Current password
-     * @param newPassword     New password
-     * @param settings        Plugin settings
-     * @param logger          Logger for events
-     * @param dbMarker        Database logging marker
+     * @param context Password change context containing all required parameters
      * @return CompletableFuture containing true if successful, false otherwise
      */
-    public static CompletableFuture<Boolean> performPasswordChange(
-            DatabaseManager databaseManager, String username, String oldPassword, String newPassword,
-            Settings settings, Logger logger, Marker dbMarker, Messages messages) {
+    public static CompletableFuture<Boolean> performPasswordChange(PasswordChangeContext context) {
 
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Find player in database
-                String lowercaseNick = username.toLowerCase();
-                var playerResult = databaseManager.findPlayerByNickname(lowercaseNick).join();
+                String lowercaseNick = context.username().toLowerCase();
+                var playerResult = context.databaseManager().findPlayerByNickname(lowercaseNick).join();
                 
                 // CRITICAL: Fail-secure on database errors
                 if (playerResult.isDatabaseError()) {
-                    logger.error(dbMarker, "Database error during password change lookup for {}: {}", 
-                            username, playerResult.getErrorMessage());
+                    context.logger().error(context.dbMarker(), "Database error during password change lookup for {}: {}", 
+                            context.username(), playerResult.getErrorMessage());
                     return false;
                 }
                 
                 RegisteredPlayer registeredPlayer = playerResult.getValue();
                 if (registeredPlayer == null) {
-                    logger.debug(dbMarker, messages.get("player.not_found"), username);
+                    context.logger().debug(context.dbMarker(), context.messages().get("player.not_found"), context.username());
                     return false;
                 }
 
                 // Verify old password
-                if (!verifyPassword(oldPassword, registeredPlayer.getHash())) {
-                    logger.debug(dbMarker, messages.get("player.old_password.invalid"), username);
+                if (!verifyPassword(context.oldPassword(), registeredPlayer.getHash())) {
+                    context.logger().debug(context.dbMarker(), context.messages().get("player.old_password.invalid"), context.username());
                     return false;
                 }
 
                 // Hash new password
-                String newHashedPassword = hashPassword(newPassword, settings);
+                String newHashedPassword = hashPassword(context.newPassword(), context.settings());
 
                 // Update player
                 registeredPlayer.setHash(newHashedPassword);
-                var saveResult = databaseManager.savePlayer(registeredPlayer).join();
+                var saveResult = context.databaseManager().savePlayer(registeredPlayer).join();
                 
                 // CRITICAL: Fail-secure on database errors
                 if (saveResult.isDatabaseError()) {
-                    logger.error(dbMarker, "Database error during password change save for {}: {}", 
-                            username, saveResult.getErrorMessage());
+                    context.logger().error(context.dbMarker(), "Database error during password change save for {}: {}", 
+                            context.username(), saveResult.getErrorMessage());
                     return false;
                 }
                 
                 boolean saved = saveResult.getValue();
                 if (saved) {
-                    logger.info(dbMarker, messages.get("player.password.changed.success"), username);
+                    context.logger().info(context.dbMarker(), context.messages().get("player.password.changed.success"), context.username());
                     return true;
                 } else {
-                    logger.error(dbMarker, messages.get("player.password.save.failed"), username);
+                    context.logger().error(context.dbMarker(), context.messages().get("player.password.save.failed"), context.username());
                     return false;
                 }
 
             } catch (Exception e) {
-                logger.error(dbMarker, messages.get("player.password.change.error"), username, e);
+                context.logger().error(context.dbMarker(), context.messages().get("player.password.change.error"), context.username(), e);
                 return false;
             }
         });
@@ -298,13 +294,17 @@ public final class AuthenticationHelper {
                 RegisteredPlayer registeredPlayer = playerResult.getValue();
 
                 if (registeredPlayer == null) {
+                    if (logger.isDebugEnabled()) {
                     logger.debug(dbMarker, messages.get("player.not_found"), username);
+                }
                     return false;
                 }
 
                 // Verify password
                 if (!verifyPassword(password, registeredPlayer.getHash())) {
+                    if (logger.isDebugEnabled()) {
                     logger.debug(dbMarker, messages.get("player.password.invalid.deletion"), username);
+                }
                     return false;
                 }
 

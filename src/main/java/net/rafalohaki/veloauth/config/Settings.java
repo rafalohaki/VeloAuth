@@ -72,7 +72,7 @@ public class Settings {
         try {
             Files.createDirectories(dataDirectory);
         } catch (IOException e) {
-            logger.error("Nie udało się utworzyć katalogu danych: " + dataDirectory, e);
+            logger.error("Nie udało się utworzyć katalogu danych: {}", dataDirectory, e);
         }
     }
 
@@ -114,10 +114,10 @@ public class Settings {
             return true;
 
         } catch (JsonProcessingException e) {
-            logger.error("Błąd parsowania YAML w pliku konfiguracji: " + configFile, e);
+            logger.error("Błąd parsowania YAML w pliku konfiguracji: {}", configFile, e);
             return false;
         } catch (IOException e) {
-            logger.error("Błąd odczytu pliku konfiguracji: " + configFile, e);
+            logger.error("Błąd odczytu pliku konfiguracji: {}", configFile, e);
             return false;
         }
     }
@@ -296,9 +296,9 @@ public class Settings {
             parseConnectionCredentials(remaining);
 
         } catch (StringIndexOutOfBoundsException e) {
-            logger.error("Nieprawidłowy format URL połączenia z bazą danych: " + connectionUrl, e);
+            logger.error("Nieprawidłowy format URL połączenia z bazą danych: {}", connectionUrl, e);
         } catch (IllegalArgumentException e) {
-            logger.error("Nieprawidłowe parametry URL połączenia: " + connectionUrl, e);
+            logger.error("Nieprawidłowe parametry URL połączenia: {}", connectionUrl, e);
         }
     }
 

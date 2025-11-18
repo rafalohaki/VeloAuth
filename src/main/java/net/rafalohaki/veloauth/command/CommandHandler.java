@@ -11,6 +11,7 @@ import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
+import net.rafalohaki.veloauth.constants.StringConstants;
 import net.rafalohaki.veloauth.util.SecurityHelper;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.slf4j.Logger;
@@ -124,7 +125,7 @@ public class CommandHandler {
             String[] args = invocation.arguments();
 
             if (!(source instanceof Player player)) {
-                source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.player_only")));
+                source.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_PLAYER_ONLY)));
                 return;
             }
 
@@ -156,7 +157,7 @@ public class CommandHandler {
 
             // Sprawdź brute force
             if (playerAddress != null && authCache.isBlocked(playerAddress)) {
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("security.brute_force.blocked")));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.SECURITY_BRUTE_FORCE_BLOCKED)));
                 return;
             }
 
@@ -165,8 +166,8 @@ public class CommandHandler {
             CompletableFuture.runAsync(() -> processLogin(player, password, playerAddress),
                             VirtualThreadExecutorProvider.getVirtualExecutor())
                     .exceptionally(throwable -> {
-                        logger.error("Błąd podczas asynchronicznego logowania gracza: " + player.getUsername(), throwable);
-                        player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                        logger.error("Błąd podczas asynchronicznego logowania gracza: {}", player.getUsername(), throwable);
+                        player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                         return null;
                     });
         }
@@ -182,7 +183,7 @@ public class CommandHandler {
                 if (dbResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Login failed for {}: {}", 
                             player.getUsername(), dbResult.getErrorMessage());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return;
                 }
 
@@ -204,8 +205,8 @@ public class CommandHandler {
                 }
 
             } catch (Exception e) {
-                logger.error(DB_MARKER, "Błąd podczas logowania gracza: " + player.getUsername(), e);
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                logger.error(DB_MARKER, "Błąd podczas logowania gracza: {}", player.getUsername(), e);
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
             }
         }
 
@@ -219,13 +220,13 @@ public class CommandHandler {
                 if (saveResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Failed to save login data for {}: {}", 
                             player.getUsername(), saveResult.getErrorMessage());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return;
                 }
                 
                 if (!saveResult.getValue()) {
                     logger.error(DB_MARKER, "Nie udało się zapisać danych logowania dla gracza: {}", player.getUsername());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return;
                 }
 
@@ -236,7 +237,7 @@ public class CommandHandler {
                 if (premiumResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Failed to check premium status for {}: {}", 
                             player.getUsername(), premiumResult.getErrorMessage());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return;
                 }
                 
@@ -258,8 +259,8 @@ public class CommandHandler {
                 plugin.getConnectionManager().transferToBackend(player);
 
             } catch (Exception e) {
-                logger.error("Błąd podczas przetwarzania udanego logowania: " + player.getUsername(), e);
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                logger.error("Błąd podczas przetwarzania udanego logowania: {}", player.getUsername(), e);
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
             }
         }
 
@@ -271,7 +272,7 @@ public class CommandHandler {
             }
 
             if (blocked) {
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("security.brute_force.blocked")));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.SECURITY_BRUTE_FORCE_BLOCKED)));
                 logger.warn("Gracz {} zablokowany za brute force z IP {}",
                         player.getUsername(), ValidationUtils.getPlayerIp(player));
             } else {
@@ -294,7 +295,7 @@ public class CommandHandler {
             String[] args = invocation.arguments();
 
             if (!(source instanceof Player player)) {
-                source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.player_only")));
+                source.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_PLAYER_ONLY)));
                 return;
             }
 
@@ -343,8 +344,8 @@ public class CommandHandler {
                             logger.error("Timeout during registration for {}", player.getUsername());
                             player.sendMessage(ValidationUtils.createErrorComponent(messages.get("auth.registration.timeout")));
                         } else {
-                            logger.error("Błąd podczas asynchronicznej rejestracji gracza: " + player.getUsername(), throwable);
-                            player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                            logger.error("Błąd podczas asynchronicznej rejestracji gracza: {}", player.getUsername(), throwable);
+                            player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                         }
                         return null;
                     });
@@ -355,7 +356,7 @@ public class CommandHandler {
 
             // DODATKOWE SPRAWDZENIE BRUTE FORCE dla rejestracji
             if (playerAddress != null && authCache.isBlocked(playerAddress)) {
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("security.brute_force.blocked")));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.SECURITY_BRUTE_FORCE_BLOCKED)));
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} próbował rejestracji",
                         playerAddress.getHostAddress());
                 return;
@@ -364,8 +365,8 @@ public class CommandHandler {
             try {
                 executeRegistrationTransaction(player, password, playerAddress);
             } catch (Exception e) {
-                logger.error(DB_MARKER, "Błąd podczas rejestracji gracza: " + player.getUsername(), e);
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                logger.error(DB_MARKER, "Błąd podczas rejestracji gracza: {}", player.getUsername(), e);
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
             }
         }
 
@@ -389,7 +390,7 @@ public class CommandHandler {
                 if (existingResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Registration check failed for {}: {}", 
                             player.getUsername(), existingResult.getErrorMessage());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return false;
                 }
 
@@ -417,12 +418,12 @@ public class CommandHandler {
                 if (saveResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Failed to save new player {}: {}", 
                             player.getUsername(), saveResult.getErrorMessage());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return false;
                 }
                 
                 if (!saveResult.getValue()) {
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     logger.error(DB_MARKER, "Nie udało się zapisać nowego gracza: {}", lowercaseNick);
                     return false;
                 }
@@ -444,7 +445,7 @@ public class CommandHandler {
                 if (premiumResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Failed to check premium status for {}: {}", 
                             player.getUsername(), premiumResult.getErrorMessage());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return false;
                 }
                 
@@ -460,8 +461,8 @@ public class CommandHandler {
 
             }).whenComplete((success, throwable) -> {
                 if (throwable != null) {
-                    logger.error("Błąd transakcji rejestracji: " + player.getUsername(), throwable);
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    logger.error("Błąd transakcji rejestracji: {}", player.getUsername(), throwable);
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                 }
             });
         }
@@ -479,7 +480,7 @@ public class CommandHandler {
             String[] args = invocation.arguments();
 
             if (!(source instanceof Player player)) {
-                source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.player_only")));
+                source.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_PLAYER_ONLY)));
                 return;
             }
 
@@ -504,8 +505,8 @@ public class CommandHandler {
             CompletableFuture.runAsync(() -> processPasswordChange(player, oldPassword, newPassword),
                             VirtualThreadExecutorProvider.getVirtualExecutor())
                     .exceptionally(throwable -> {
-                        logger.error("Błąd podczas asynchronicznej zmiany hasła gracza: " + player.getUsername(), throwable);
-                        player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                        logger.error("Błąd podczas asynchronicznej zmiany hasła gracza: {}", player.getUsername(), throwable);
+                        player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                         return null;
                     });
         }
@@ -515,7 +516,7 @@ public class CommandHandler {
 
             // DODATKOWE SPRAWDZENIE BRUTE FORCE dla zmiany hasła
             if (playerAddress != null && authCache.isBlocked(playerAddress)) {
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("security.brute_force.blocked")));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.SECURITY_BRUTE_FORCE_BLOCKED)));
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} próbował zmienić hasło",
                         playerAddress.getHostAddress());
                 return;
@@ -531,7 +532,7 @@ public class CommandHandler {
                 if (dbResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Password change failed for {}: {}", 
                             player.getUsername(), dbResult.getErrorMessage());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return;
                 }
                 
@@ -564,7 +565,7 @@ public class CommandHandler {
                 if (saveResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Password change save failed for {}: {}", 
                             player.getUsername(), saveResult.getErrorMessage());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return;
                 }
                 
@@ -605,13 +606,13 @@ public class CommandHandler {
                             player.getUsername(), ValidationUtils.getPlayerIp(player));
 
                 } else {
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     logger.error(DB_MARKER, "Nie udało się zapisać nowego hasła dla gracza {}", player.getUsername());
                 }
 
             } catch (Exception e) {
-                logger.error(DB_MARKER, "Błąd podczas zmiany hasła gracza: " + player.getUsername(), e);
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                logger.error(DB_MARKER, "Błąd podczas zmiany hasła gracza: {}", player.getUsername(), e);
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
             }
         }
     }
@@ -646,8 +647,8 @@ public class CommandHandler {
             CompletableFuture.runAsync(() -> processAdminUnregistration(source, nickname),
                             VirtualThreadExecutorProvider.getVirtualExecutor())
                     .exceptionally(throwable -> {
-                        logger.error("Błąd podczas asynchronicznego usuwania konta gracza: " + nickname, throwable);
-                        source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                        logger.error("Błąd podczas asynchronicznego usuwania konta gracza: {}", nickname, throwable);
+                        source.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                         return null;
                     });
         }
@@ -663,7 +664,7 @@ public class CommandHandler {
                 if (dbResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Admin unregistration failed for {}: {}", 
                             nickname, dbResult.getErrorMessage());
-                    source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    source.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return;
                 }
                 
@@ -690,7 +691,7 @@ public class CommandHandler {
                 if (deleteResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Admin unregistration delete failed for {}: {}", 
                             nickname, deleteResult.getErrorMessage());
-                    source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    source.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     return;
                 }
                 
@@ -715,13 +716,13 @@ public class CommandHandler {
                             source instanceof Player ? ((Player) source).getUsername() : "CONSOLE", nickname);
 
                 } else {
-                    source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                    source.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
                     logger.error(DB_MARKER, "Nie udało się usunąć konta gracza {} przez admina", nickname);
                 }
 
             } catch (Exception e) {
-                logger.error(DB_MARKER, "Błąd podczas admin-usuwania konta gracza: " + nickname, e);
-                source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+                logger.error(DB_MARKER, "Błąd podczas admin-usuwania konta gracza: {}", nickname, e);
+                source.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
             }
         }
     }

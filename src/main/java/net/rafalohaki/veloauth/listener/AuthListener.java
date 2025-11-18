@@ -209,6 +209,18 @@ public class AuthListener {
 
         boolean allowed = true;
         try {
+            // CRITICAL SECURITY: Block login attempts until plugin is fully initialized
+            if (!plugin.isInitialized()) {
+                logger.warn("🔒 BLOKADA STARTU: Gracz {} próbował zalogować się przed pełną inicjalizacją VeloAuth - blokada logowania", 
+                        playerName);
+                
+                event.setResult(LoginEvent.ComponentResult.denied(
+                        Component.text("VeloAuth się uruchamia. Spróbuj zalogować się ponownie za chwilę.",
+                                NamedTextColor.RED)
+                ));
+                return;
+            }
+
             logger.debug("LoginEvent dla gracza {} (UUID: {}) z IP {}",
                     playerName, playerUuid, playerIp);
 
@@ -261,8 +273,7 @@ public class AuthListener {
             logger.debug("Gracz {} rozłączył się - sesja pozostaje aktywna", player.getUsername());
 
         } catch (Exception e) {
-            logger.error("Błąd podczas obsługi DisconnectEvent dla gracza: " +
-                    event.getPlayer().getUsername(), e);
+            logger.error("Błąd podczas obsługi DisconnectEvent dla gracza: {}", event.getPlayer().getUsername(), e);
         }
     }
 
@@ -338,8 +349,7 @@ public class AuthListener {
             }).schedule();
 
         } catch (Exception e) {
-            logger.error("Błąd podczas obsługi PostLoginEvent dla gracza: " +
-                    event.getPlayer().getUsername(), e);
+            logger.error("Błąd podczas obsługi PostLoginEvent dla gracza: {}", event.getPlayer().getUsername(), e);
 
             event.getPlayer().disconnect(Component.text(
                     "Wystąpił błąd podczas łączenia. Spróbuj ponownie.",
@@ -596,7 +606,7 @@ public class AuthListener {
 
                     return matches;
                 } catch (Exception e) {
-                    logger.error("Błąd podczas weryfikacji UUID dla gracza: " + player.getUsername(), e);
+                    logger.error("Błąd podczas weryfikacji UUID dla gracza: {}", player.getUsername(), e);
                     // Remove from cache for security on any error
                     authCache.removeAuthorizedPlayer(player.getUniqueId());
                     authCache.endSession(player.getUniqueId());
@@ -604,7 +614,7 @@ public class AuthListener {
                 }
             }).join(); // Blokuj do czasu uzyskania wyniku
         } catch (Exception e) {
-            logger.error("Błąd podczas weryfikacji UUID dla gracza: " + player.getUsername(), e);
+            logger.error("Błąd podczas weryfikacji UUID dla gracza: {}", player.getUsername(), e);
             // Remove from cache for security on any error
             authCache.removeAuthorizedPlayer(player.getUniqueId());
             authCache.endSession(player.getUniqueId());

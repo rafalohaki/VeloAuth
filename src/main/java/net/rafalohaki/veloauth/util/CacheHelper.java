@@ -36,7 +36,9 @@ public final class CacheHelper {
 
         try {
             authCache.addAuthorizedPlayer(playerUuid, cachedUser);
+            if (logger.isDebugEnabled()) {
             logger.debug(authMarker, messages.get("cache.add.player"), playerName);
+        }
         } catch (Exception e) {
             logger.error(authMarker, messages.get("cache.error.add.player"), playerName, e);
         }
@@ -80,7 +82,9 @@ public final class CacheHelper {
 
         try {
             authCache.removeAuthorizedPlayer(playerUuid);
+            if (logger.isDebugEnabled()) {
             logger.debug(authMarker, messages.get("cache.remove.player"), playerName);
+        }
         } catch (Exception e) {
             logger.error(authMarker, messages.get("cache.error.remove.player"), playerName, e);
         }
@@ -103,7 +107,9 @@ public final class CacheHelper {
 
         try {
             authCache.startSession(playerUuid, playerName, playerIp);
+            if (logger.isDebugEnabled()) {
             logger.debug(authMarker, messages.get("session.start"), playerName, playerIp);
+        }
         } catch (Exception e) {
             logger.error(authMarker, messages.get("session.error.start"), playerName, e);
         }
@@ -125,7 +131,9 @@ public final class CacheHelper {
 
         try {
             authCache.endSession(playerUuid);
+            if (logger.isDebugEnabled()) {
             logger.debug(authMarker, messages.get("session.end"), playerName);
+        }
         } catch (Exception e) {
             logger.error(authMarker, messages.get("session.error.end"), playerName, e);
         }
@@ -149,7 +157,9 @@ public final class CacheHelper {
 
         try {
             boolean authorized = authCache.isPlayerAuthorized(playerUuid, playerIp);
+            if (logger.isDebugEnabled()) {
             logger.debug(authMarker, messages.get("cache.check.auth"), playerName, authorized);
+        }
             return authorized;
         } catch (Exception e) {
             logger.error(authMarker, messages.get("cache.error.check.auth"), playerName, e);
@@ -171,7 +181,9 @@ public final class CacheHelper {
 
         try {
             authCache.removePremiumPlayer(playerName);
+            if (logger.isDebugEnabled()) {
             logger.debug(authMarker, messages.get("cache.remove.premium"), playerName);
+        }
         } catch (Exception e) {
             logger.error(authMarker, messages.get("cache.error.remove.premium"), playerName, e);
         }
@@ -192,7 +204,9 @@ public final class CacheHelper {
         try {
             if (playerAddress != null) {
                 authCache.resetLoginAttempts(playerAddress);
-                logger.debug(authMarker, messages.get("brute.force.reset"), playerAddress.getHostAddress());
+                if (logger.isDebugEnabled()) {
+            logger.debug(authMarker, messages.get("brute.force.reset"), playerAddress.getHostAddress());
+        }
             }
         } catch (Exception e) {
             logger.error(authMarker, messages.get("cache.error.reset.brute.force"), playerAddress != null ? playerAddress.getHostAddress() : StringConstants.UNKNOWN, e);

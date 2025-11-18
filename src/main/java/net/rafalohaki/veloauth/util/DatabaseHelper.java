@@ -45,7 +45,7 @@ public final class DatabaseHelper {
                     return dbResult.getValue();
                 })
                 .exceptionally(throwable -> {
-                    logger.error(marker, messages.get("database.error.finding") + lowercaseNick, throwable);
+                    logger.error(marker, "{}{}", messages.get("database.error.finding"), lowercaseNick, throwable);
                     return null;
                 });
     }

@@ -431,7 +431,7 @@ public class DatabaseManager {
                 }
                 return DbResult.success(player);
             } catch (SQLException e) {
-                logger.error(DB_MARKER, "Błąd podczas wyszukiwania gracza: " + lowercaseNickname, e);
+                logger.error(DB_MARKER, "Błąd podczas wyszukiwania gracza: {}", lowercaseNickname, e);
                 // CRITICAL: Return database error instead of null to prevent bypass
                 return DbResult.databaseError(messages.get("database.error") + ": " + e.getMessage());
             }
@@ -460,7 +460,7 @@ public class DatabaseManager {
                 }
                 return DbResult.success(success);
             } catch (SQLException e) {
-                logger.error(DB_MARKER, "Błąd podczas zapisywania gracza: " + player.getNickname(), e);
+                logger.error(DB_MARKER, "Błąd podczas zapisywania gracza: {}", player.getNickname(), e);
                 return DbResult.databaseError(messages.get("database.error") + ": " + e.getMessage());
             }
         }, dbExecutor);
@@ -492,7 +492,7 @@ public class DatabaseManager {
                 logger.debug(DB_MARKER, "Gracz nie znaleziony do usunięcia: {}", lowercaseNickname);
                 return DbResult.success(false);
             } catch (SQLException e) {
-                logger.error(DB_MARKER, "Błąd podczas usuwania gracza: " + lowercaseNickname, e);
+                logger.error(DB_MARKER, "Błąd podczas usuwania gracza: {}", lowercaseNickname, e);
                 return DbResult.databaseError(messages.get("database.error") + ": " + e.getMessage());
             }
         }, dbExecutor);
@@ -518,7 +518,7 @@ public class DatabaseManager {
                 logger.debug(DB_MARKER, "Premium status z PREMIUM_UUIDS dla {}: {}", username, premium);
                 return DbResult.success(premium);
             } catch (Exception e) {
-                logger.error(DB_MARKER, "Błąd podczas sprawdzania premium status dla gracza: " + username, e);
+                logger.error(DB_MARKER, "Błąd podczas sprawdzania premium status dla gracza: {}", username, e);
                 return DbResult.databaseError(messages.get("database.error") + ": " + e.getMessage());
             }
         }, dbExecutor);
