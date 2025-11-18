@@ -38,13 +38,38 @@ public class DatabaseManager {
     private static final String ALTER_TABLE = "ALTER TABLE ";
     private static final String ADD_COLUMN = " ADD COLUMN ";
     
-    // Stałe dla nazw tabel i kolumn PostgreSQL - eliminacja duplikacji
+    // Stałe dla nazw tabel i kolumn - używane w innych metodach
     private static final String AUTH_TABLE = "AUTH";
-    private static final String PREMIUM_TABLE = "PREMIUM_UUIDS";
-    private static final String UUID_COLUMN = "UUID";
-    private static final String HASH_COLUMN = "HASH";
     private static final String WHERE_CLAUSE = " WHERE ";
-    private static final String AS_UUID_FROM = " AS uuid FROM ";
+    
+    // Predefined SQL query templates for security - no dynamic concatenation at execution time
+    private static final String TOTAL_ACCOUNTS_QUERY_POSTGRESQL = 
+        "SELECT COUNT(DISTINCT uuid) FROM (" +
+        " SELECT \"UUID\" AS uuid FROM \"AUTH\" WHERE \"UUID\" IS NOT NULL " +
+        " UNION " +
+        " SELECT \"UUID\" AS uuid FROM \"PREMIUM_UUIDS\"" +
+        ") AS combined_uuids";
+        
+    private static final String TOTAL_ACCOUNTS_QUERY_OTHER = 
+        "SELECT COUNT(DISTINCT uuid) FROM (" +
+        " SELECT UUID AS uuid FROM AUTH WHERE UUID IS NOT NULL " +
+        " UNION " +
+        " SELECT UUID AS uuid FROM PREMIUM_UUIDS" +
+        ") AS combined_uuids";
+        
+    private static final String PREMIUM_ACCOUNTS_QUERY_POSTGRESQL = 
+        "SELECT COUNT(DISTINCT uuid) FROM (" +
+        " SELECT \"UUID\" AS uuid FROM \"AUTH\" WHERE \"HASH\" IS NULL " +
+        " UNION " +
+        " SELECT \"UUID\" AS uuid FROM \"PREMIUM_UUIDS\"" +
+        ") AS premium";
+        
+    private static final String PREMIUM_ACCOUNTS_QUERY_OTHER = 
+        "SELECT COUNT(DISTINCT uuid) FROM (" +
+        " SELECT UUID AS uuid FROM AUTH WHERE HASH IS NULL " +
+        " UNION " +
+        " SELECT UUID AS uuid FROM PREMIUM_UUIDS" +
+        ") AS premium";
 
     // Markery SLF4J dla kategoryzowanego logowania
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
@@ -1061,20 +1086,15 @@ public class DatabaseManager {
         return DatabaseType.POSTGRESQL.getName().equalsIgnoreCase(config.getStorageType());
     }
     
-    /**
-     * Zwraca nazwę tabeli/kolumny z odpowiednim formatowaniem dla PostgreSQL.
-     */
-    private String getTableName(String tableName, boolean postgres) {
-        return postgres ? "\"" + tableName + "\"" : tableName;
-    }
     
-    private String getColumnName(String columnName, boolean postgres) {
-        return postgres ? "\"" + columnName + "\"" : columnName;
-    }
     
     /**
      * Wykonuje zapytanie COUNT i zwraca wynik.
+     * 
+     * SECURITY: Uses predefined query templates with no user input.
+     * SQL queries are built from hardcoded constants only, eliminating injection risks.
      */
+    @SuppressWarnings("java:S2077") // Safe: predefined templates only, no user input
     private int executeCountQuery(String sql) throws SQLException {
         DatabaseConnection dbConnection = connectionSource.getReadWriteConnection(null);
         try {
@@ -1094,47 +1114,20 @@ public class DatabaseManager {
     /**
      * Buduje zapytanie SQL do liczenia wszystkich kont.
      * 
-     * SECURITY NOTE: This method uses string concatenation but is SAFE from SQL injection
-     * because it only uses hardcoded constants (AUTH_TABLE, PREMIUM_TABLE, UUID_COLUMN, etc.)
-     * - No user input is concatenated into the query
-     * - All table/column names are internal constants defined in this class
-     * - The database type flag only controls quoting, not content
+     * SECURITY: Uses predefined query templates - no dynamic concatenation at execution time.
+     * This eliminates SQL injection risks while supporting multiple database types.
      */
-    @SuppressWarnings("java:S2077") // Safe: only hardcoded constants, no user input
     private String buildTotalAccountsQuery() {
-        boolean postgres = isPostgreSQL();
-        String auth = getTableName(AUTH_TABLE, postgres);
-        String premium = getTableName(PREMIUM_TABLE, postgres);
-        String uuid = getColumnName(UUID_COLUMN, postgres);
-        
-        return "SELECT COUNT(DISTINCT uuid) FROM (" +
-                " SELECT " + uuid + AS_UUID_FROM + auth + WHERE_CLAUSE + uuid + " IS NOT NULL " +
-                " UNION " +
-                " SELECT " + uuid + AS_UUID_FROM + premium +
-                ") AS combined_uuids";
+        return isPostgreSQL() ? TOTAL_ACCOUNTS_QUERY_POSTGRESQL : TOTAL_ACCOUNTS_QUERY_OTHER;
     }
     
     /**
      * Buduje zapytanie SQL do liczenia kont premium.
      * 
-     * SECURITY NOTE: This method uses string concatenation but is SAFE from SQL injection
-     * because it only uses hardcoded constants (AUTH_TABLE, PREMIUM_TABLE, UUID_COLUMN, HASH_COLUMN)
-     * - No user input is concatenated into the query
-     * - All table/column names are internal constants defined in this class
-     * - The database type flag only controls quoting, not content
+     * SECURITY: Uses predefined query templates - no dynamic concatenation at execution time.
+     * This eliminates SQL injection risks while supporting multiple database types.
      */
-    @SuppressWarnings("java:S2077") // Safe: only hardcoded constants, no user input
     private String buildPremiumAccountsQuery() {
-        boolean postgres = isPostgreSQL();
-        String auth = getTableName(AUTH_TABLE, postgres);
-        String premium = getTableName(PREMIUM_TABLE, postgres);
-        String uuid = getColumnName(UUID_COLUMN, postgres);
-        String hash = getColumnName(HASH_COLUMN, postgres);
-        
-        return "SELECT COUNT(DISTINCT uuid) FROM (" +
-                " SELECT " + uuid + AS_UUID_FROM + auth + WHERE_CLAUSE + hash + " IS NULL " +
-                " UNION " +
-                " SELECT " + uuid + AS_UUID_FROM + premium +
-                ") AS premium";
+        return isPostgreSQL() ? PREMIUM_ACCOUNTS_QUERY_POSTGRESQL : PREMIUM_ACCOUNTS_QUERY_OTHER;
     }
 }
