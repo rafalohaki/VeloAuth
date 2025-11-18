@@ -1,8 +1,8 @@
 package net.rafalohaki.veloauth.util;
 
 import net.rafalohaki.veloauth.database.DatabaseManager;
-import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
+import net.rafalohaki.veloauth.i18n.Messages;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
 
@@ -11,8 +11,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 /**
- * Utility class for consistent database operations across VeloAuth.
- * Centralizes common database patterns with proper error handling and logging.
+ * Utility methods for database operations with centralized error handling.
+ * This class provides helper methods for common database operations
+ * while maintaining consistent error handling throughout the application.
  */
 public final class DatabaseHelper {
 
@@ -22,13 +23,15 @@ public final class DatabaseHelper {
 
     /**
      * Finds a player by nickname with consistent error handling.
+     * This method uses the centralized VeloAuthErrorHandler to ensure
+     * fail-secure behavior and consistent logging.
      *
-     * @param databaseManager The database manager to use
-     * @param nickname        The player nickname (case-insensitive)
-     * @param logger          Logger for error reporting
-     * @param marker          Marker for categorized logging
-     * @param messages        Messages system for i18n
-     * @return CompletableFuture containing the player or null if not found
+     * @param databaseManager Database manager instance
+     * @param nickname Player nickname to search for
+     * @param logger Logger for error reporting
+     * @param marker Optional marker for categorized logging
+     * @param messages Messages instance for error message generation
+     * @return CompletableFuture containing the registered player or null if not found
      */
     public static CompletableFuture<RegisteredPlayer> findPlayerByNickname(
             DatabaseManager databaseManager, String nickname, Logger logger, Marker marker, Messages messages) {
@@ -38,16 +41,101 @@ public final class DatabaseHelper {
                 .thenApply(dbResult -> {
                     // CRITICAL: Fail-secure on database errors
                     if (dbResult.isDatabaseError()) {
-                        logger.error(marker, "Database error finding player {}: {}",
-                                nickname, dbResult.getErrorMessage());
+                        // Use centralized error handling
+                        VeloAuthErrorHandler.handleDatabaseError(
+                                new RuntimeException(dbResult.getErrorMessage()),
+                                "player lookup",
+                                logger,
+                                marker,
+                                messages,
+                                "nickname: " + nickname
+                        );
                         return null;
                     }
                     return dbResult.getValue();
                 })
                 .exceptionally(throwable -> {
-                    logger.error(marker, "{}{}", messages.get("database.error.finding"), nickname, throwable);
+                    // Use centralized error handling for exceptions
+                    VeloAuthErrorHandler.handleDatabaseError(
+                            throwable,
+                            "player lookup",
+                            logger,
+                            marker,
+                            messages,
+                            "nickname: " + nickname
+                    );
                     return null;
                 });
+    }
+
+    /**
+     * Simplified version without marker for backward compatibility.
+     *
+     * @param databaseManager Database manager instance
+     * @param nickname Player nickname to search for
+     * @param logger Logger for error reporting
+     * @param messages Messages instance for error message generation
+     * @return CompletableFuture containing the registered player or null if not found
+     */
+    public static CompletableFuture<RegisteredPlayer> findPlayerByNickname(
+            DatabaseManager databaseManager, String nickname, Logger logger, Messages messages) {
+
+        return findPlayerByNickname(databaseManager, nickname, logger, null, messages);
+    }
+
+    /**
+     * Validates database operation result with centralized error handling.
+     *
+     * @param dbResult Database result to validate
+     * @param operation Operation description for error logging
+     * @param logger Logger for error reporting
+     * @param marker Optional marker for categorized logging
+     * @param messages Messages instance for error message generation
+     * @param context Additional context information
+     * @param <T> Result type
+     * @return The value if successful, null if database error occurred
+     */
+    public static <T> T validateDbResult(
+            DatabaseManager.DbResult<T> dbResult,
+            String operation,
+            Logger logger,
+            Marker marker,
+            Messages messages,
+            String context) {
+
+        if (dbResult.isDatabaseError()) {
+            VeloAuthErrorHandler.handleDatabaseError(
+                    new RuntimeException(dbResult.getErrorMessage()),
+                    operation,
+                    logger,
+                    marker,
+                    messages,
+                    context
+            );
+            return null;
+        }
+        return dbResult.getValue();
+    }
+
+    /**
+     * Simplified version without marker for backward compatibility.
+     *
+     * @param dbResult Database result to validate
+     * @param operation Operation description for error logging
+     * @param logger Logger for error reporting
+     * @param messages Messages instance for error message generation
+     * @param context Additional context information
+     * @param <T> Result type
+     * @return The value if successful, null if database error occurred
+     */
+    public static <T> T validateDbResult(
+            DatabaseManager.DbResult<T> dbResult,
+            String operation,
+            Logger logger,
+            Messages messages,
+            String context) {
+
+        return validateDbResult(dbResult, operation, logger, null, messages, context);
     }
 
     /**
@@ -67,8 +155,15 @@ public final class DatabaseHelper {
                 .thenApply(dbResult -> {
                     // CRITICAL: Fail-secure on database errors
                     if (dbResult.isDatabaseError()) {
-                        logger.error(marker, "Database error saving player {}: {}",
-                                player.getNickname(), dbResult.getErrorMessage());
+                        // Use centralized error handling
+                        VeloAuthErrorHandler.handleDatabaseError(
+                                new RuntimeException(dbResult.getErrorMessage()),
+                                "player save",
+                                logger,
+                                marker,
+                                messages,
+                                "player: " + player.getNickname()
+                        );
                         return false;
                     }
                     return dbResult.getValue();

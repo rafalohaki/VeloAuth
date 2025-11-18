@@ -39,7 +39,7 @@ public final class ErrorHandlingHelper {
         logger.error(marker, errorMessage, throwable);
 
         if (player != null) {
-            String userMessage = messages.get(StringConstants.ERROR_DATABASE_QUERY);
+            String userMessage = messages.get("error.database.query");
             PlayerHelper.sendErrorMessage(player, userMessage);
         }
     }
@@ -81,7 +81,7 @@ public final class ErrorHandlingHelper {
         logger.error(marker, errorMessage, e);
 
         if (player != null) {
-            player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+            player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
         }
     }
 

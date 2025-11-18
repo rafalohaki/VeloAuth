@@ -133,13 +133,14 @@ public class AuthListener {
      * Tutaj sprawdzamy premium PRZED weryfikacją UUID!
      * Jeśli premium → forceOnlineMode() = Velocity zweryfikuje
      * <p>
-     * PRIORYTET 100 + PostOrder.FIRST - wykonuje się PRZED innymi pluginami
+     * KRYTYCZNE: Używamy async = false + maksymalny priorytet dla bezpieczeństwa
+     * Zapobiega race conditions gdzie async handlers mogą wykonać się przed sync handlers
      * <p>
      * UWAGA: PreLoginEvent WYMAGA synchronicznej odpowiedzi.
      * Premium resolution na cache miss blokuje, ale to ograniczenie API Velocity.
      * Dwa warstwy cache (AuthCache + PremiumResolverService) minimalizują impact.
      */
-    @Subscribe(priority = 100, order = PostOrder.FIRST)
+    @Subscribe(priority = Short.MAX_VALUE, async = false, order = PostOrder.FIRST)
     public void onPreLogin(PreLoginEvent event) {
         String username = event.getUsername();
         logger.info("\uD83D\uDD0D PreLogin: {}", username);
@@ -246,9 +247,10 @@ public class AuthListener {
      * Obsługuje event logowania gracza.
      * Sprawdza brute force i premium status SYNCHRONICZNIE.
      * <p>
-     * PRIORYTET 100 + PostOrder.FIRST - wykonuje się przed innymi pluginami
+     * KRYTYCZNE: Używamy async = false + maksymalny priorytet dla bezpieczeństwa
+     * Zapobiega race conditions w procesie autoryzacji
      */
-    @Subscribe(priority = 100, order = PostOrder.FIRST)
+    @Subscribe(priority = Short.MAX_VALUE, async = false, order = PostOrder.FIRST)
     public void onLogin(LoginEvent event) {
         Player player = event.getPlayer();
         String playerName = player.getUsername();
@@ -409,9 +411,10 @@ public class AuthListener {
      * Obsługuje event przed połączeniem z serwerem.
      * Blokuje nieautoryzowane połączenia z serwerami backend.
      * <p>
-     * PRIORYTET 200 + PostOrder.FIRST - FIRST priority przed innymi pluginami
+     * KRYTYCZNE: Używamy async = false + maksymalny priorytet dla bezpieczeństwa
+     * Zapobiega obejściu autoryzacji przez race conditions
      */
-    @Subscribe(priority = 200, order = PostOrder.FIRST)
+    @Subscribe(priority = Short.MAX_VALUE, async = false, order = PostOrder.FIRST)
     public void onServerPreConnect(ServerPreConnectEvent event) {
         try {
             Player player = event.getPlayer();

@@ -2,7 +2,6 @@ package net.rafalohaki.veloauth.util;
 
 import at.favre.lib.crypto.bcrypt.BCrypt;
 import net.rafalohaki.veloauth.config.Settings;
-import net.rafalohaki.veloauth.constants.StringConstants;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -147,7 +146,7 @@ public final class AuthenticationHelper {
                 RegisteredPlayer registeredPlayer = playerResult.getValue();
                 if (registeredPlayer == null) {
                     if (logger.isDebugEnabled()) {
-                        logger.debug(dbMarker, messages.get(StringConstants.PLAYER_NOT_FOUND), username);
+                        logger.debug(dbMarker, messages.get("player.not.found"), username);
                     }
                     return null;
                 }
@@ -192,7 +191,7 @@ public final class AuthenticationHelper {
 
                 RegisteredPlayer registeredPlayer = playerResult.getValue();
                 if (registeredPlayer == null) {
-                    context.logger().debug(context.dbMarker(), context.messages().get(StringConstants.PLAYER_NOT_FOUND), context.username());
+                    context.logger().debug(context.dbMarker(), context.messages().get("player.not.found"), context.username());
                     return false;
                 }
 
@@ -252,7 +251,7 @@ public final class AuthenticationHelper {
         RegisteredPlayer registeredPlayer = playerResult.getValue();
         if (registeredPlayer == null) {
             if (context.logger().isDebugEnabled()) {
-                context.logger().debug(context.dbMarker(), context.messages().get(StringConstants.PLAYER_NOT_FOUND), context.username());
+                context.logger().debug(context.dbMarker(), context.messages().get("player.not.found"), context.username());
             }
             return null;
         }

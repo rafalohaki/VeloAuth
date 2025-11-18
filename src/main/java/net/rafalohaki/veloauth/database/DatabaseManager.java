@@ -8,7 +8,6 @@ import com.j256.ormlite.misc.TransactionManager;
 import com.j256.ormlite.support.ConnectionSource;
 import com.j256.ormlite.support.DatabaseConnection;
 import com.j256.ormlite.table.TableUtils;
-import net.rafalohaki.veloauth.constants.StringConstants;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.PremiumUuid;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -372,7 +371,7 @@ public class DatabaseManager {
             } catch (SQLException e) {
                 logger.error(DB_MARKER, "Błąd podczas wyszukiwania gracza: {}", normalizedNickname, e);
                 // CRITICAL: Return database error instead of null to prevent bypass
-                return DbResult.databaseError(messages.get(StringConstants.DATABASE_ERROR) + ": " + e.getMessage());
+                return DbResult.databaseError(messages.get("database.error") + ": " + e.getMessage());
             }
         }, dbExecutor);
     }
@@ -400,7 +399,7 @@ public class DatabaseManager {
                 return DbResult.success(success);
             } catch (SQLException e) {
                 logger.error(DB_MARKER, "Błąd podczas zapisywania gracza: {}", player.getNickname(), e);
-                return DbResult.databaseError(messages.get(StringConstants.DATABASE_ERROR) + ": " + e.getMessage());
+                return DbResult.databaseError(messages.get("database.error") + ": " + e.getMessage());
             }
         }, dbExecutor);
     }
@@ -432,7 +431,7 @@ public class DatabaseManager {
                 return DbResult.success(false);
             } catch (SQLException e) {
                 logger.error(DB_MARKER, "Błąd podczas usuwania gracza: {}", lowercaseNickname, e);
-                return DbResult.databaseError(messages.get(StringConstants.DATABASE_ERROR) + ": " + e.getMessage());
+                return DbResult.databaseError(messages.get("database.error") + ": " + e.getMessage());
             }
         }, dbExecutor);
     }
@@ -458,7 +457,7 @@ public class DatabaseManager {
                 return DbResult.success(premium);
             } catch (RuntimeException e) {
                 logger.error(DB_MARKER, "Błąd wykonania podczas sprawdzania premium status dla gracza: {}", username, e);
-                return DbResult.databaseError(messages.get(StringConstants.DATABASE_ERROR) + ": " + e.getMessage());
+                return DbResult.databaseError(messages.get("database.error") + ": " + e.getMessage());
             }
         }, dbExecutor);
     }

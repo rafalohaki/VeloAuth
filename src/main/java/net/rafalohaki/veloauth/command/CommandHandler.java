@@ -7,7 +7,6 @@ import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
-import net.rafalohaki.veloauth.constants.StringConstants;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
@@ -113,7 +112,7 @@ public class CommandHandler {
         if (result.isDatabaseError()) {
             logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}",
                     operation, player.getUsername(), result.getErrorMessage());
-            player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+            player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
             return true;
         }
         return false;
@@ -163,13 +162,13 @@ public class CommandHandler {
 
             // Sprawdź brute force
             if (playerAddress != null && authCache.isBlocked(playerAddress)) {
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.SECURITY_BRUTE_FORCE_BLOCKED)));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("security.brute_force.blocked")));
                 return;
             }
 
             // Asynchroniczne logowanie z Virtual Threads
             CommandHelper.runAsyncCommand(() -> processLogin(player, password, playerAddress),
-                    messages, source, StringConstants.ERROR_DATABASE_QUERY);
+                    messages, source, "error.database.query");
         }
 
         private void processLogin(Player player, String password, InetAddress playerAddress) {
@@ -204,7 +203,7 @@ public class CommandHandler {
 
             } catch (Exception e) {
                 logger.error(DB_MARKER, "Błąd podczas logowania gracza: {}", player.getUsername(), e);
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
             }
         }
 
@@ -222,7 +221,7 @@ public class CommandHandler {
                 boolean saved = saveResult.getValue();
                 if (!saved) {
                     logger.error(DB_MARKER, "Nie udało się zapisać danych logowania dla gracza: {}", player.getUsername());
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
                     return;
                 }
 
@@ -253,7 +252,7 @@ public class CommandHandler {
 
             } catch (Exception e) {
                 logger.error("Błąd podczas przetwarzania udanego logowania: {}", player.getUsername(), e);
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
             }
         }
 
@@ -265,7 +264,7 @@ public class CommandHandler {
             }
 
             if (blocked) {
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.SECURITY_BRUTE_FORCE_BLOCKED)));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("security.brute_force.blocked")));
                 logger.warn("Gracz {} zablokowany za brute force z IP {}",
                         player.getUsername(), ValidationUtils.getPlayerIp(player));
             } else {
@@ -340,7 +339,7 @@ public class CommandHandler {
 
             // Asynchroniczna rejestracja z Virtual Threads
             CommandHelper.runAsyncCommandWithTimeout(() -> processRegistration(player, password),
-                    messages, source, StringConstants.ERROR_DATABASE_QUERY, "auth.registration.timeout");
+                    messages, source, "error.database.query", "auth.registration.timeout");
         }
 
         private void processRegistration(Player player, String password) {
@@ -348,7 +347,7 @@ public class CommandHandler {
 
             // DODATKOWE SPRAWDZENIE BRUTE FORCE dla rejestracji
             if (playerAddress != null && authCache.isBlocked(playerAddress)) {
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.SECURITY_BRUTE_FORCE_BLOCKED)));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("security.brute_force.blocked")));
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} próbował rejestracji",
                         playerAddress.getHostAddress());
                 return;
@@ -358,7 +357,7 @@ public class CommandHandler {
                 executeRegistrationTransaction(player, password, playerAddress);
             } catch (Exception e) {
                 logger.error(DB_MARKER, "Błąd podczas rejestracji gracza: {}", player.getUsername(), e);
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
             }
         }
 
@@ -411,7 +410,7 @@ public class CommandHandler {
 
                 boolean saved = saveResult.getValue();
                 if (!saved) {
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
                     logger.error(DB_MARKER, "Nie udało się zapisać nowego gracza: {}", username);
                     return false;
                 }
@@ -447,7 +446,7 @@ public class CommandHandler {
             }).whenComplete((success, throwable) -> {
                 if (throwable != null) {
                     logger.error("Błąd transakcji rejestracji: {}", player.getUsername(), throwable);
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
                 }
             });
         }
@@ -487,7 +486,7 @@ public class CommandHandler {
 
             // Asynchroniczna zmiana hasła z Virtual Threads
             CommandHelper.runAsyncCommand(() -> processPasswordChange(player, oldPassword, newPassword),
-                    messages, source, StringConstants.ERROR_DATABASE_QUERY);
+                    messages, source, "error.database.query");
         }
 
         private void processPasswordChange(Player player, String oldPassword, String newPassword) {
@@ -495,7 +494,7 @@ public class CommandHandler {
 
             // DODATKOWE SPRAWDZENIE BRUTE FORCE dla zmiany hasła
             if (playerAddress != null && authCache.isBlocked(playerAddress)) {
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.SECURITY_BRUTE_FORCE_BLOCKED)));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("security.brute_force.blocked")));
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} próbował zmienić hasło",
                         playerAddress.getHostAddress());
                 return;
@@ -581,13 +580,13 @@ public class CommandHandler {
                             player.getUsername(), ValidationUtils.getPlayerIp(player));
 
                 } else {
-                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+                    player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
                     logger.error(DB_MARKER, "Nie udało się zapisać nowego hasła dla gracza {}", player.getUsername());
                 }
 
             } catch (Exception e) {
                 logger.error(DB_MARKER, "Błąd podczas zmiany hasła gracza: {}", player.getUsername(), e);
-                player.sendMessage(ValidationUtils.createErrorComponent(messages.get(StringConstants.ERROR_DATABASE_QUERY)));
+                player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
             }
         }
     }
@@ -618,7 +617,7 @@ public class CommandHandler {
 
             // Asynchroniczne usuwanie konta z Virtual Threads
             CommandHelper.runAsyncCommand(() -> processAdminUnregistration(source, nickname),
-                    messages, source, StringConstants.ERROR_DATABASE_QUERY);
+                    messages, source, "error.database.query");
         }
 
         private void processAdminUnregistration(CommandSource source, String nickname) {
@@ -633,7 +632,7 @@ public class CommandHandler {
                 if (dbResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Admin unregistration failed for {}: {}",
                             nickname, dbResult.getErrorMessage());
-                    CommandHelper.sendError(source, messages, StringConstants.ERROR_DATABASE_QUERY);
+                    CommandHelper.sendError(source, messages, "error.database.query");
                     return;
                 }
 
@@ -656,7 +655,7 @@ public class CommandHandler {
                 if (deleteResult.isDatabaseError()) {
                     logger.error(SECURITY_MARKER, "[DATABASE ERROR] Admin unregistration delete failed for {}: {}",
                             nickname, deleteResult.getErrorMessage());
-                    CommandHelper.sendError(source, messages, StringConstants.ERROR_DATABASE_QUERY);
+                    CommandHelper.sendError(source, messages, "error.database.query");
                     return;
                 }
 
@@ -681,13 +680,13 @@ public class CommandHandler {
                             source instanceof Player ? ((Player) source).getUsername() : "CONSOLE", nickname);
 
                 } else {
-                    CommandHelper.sendError(source, messages, StringConstants.ERROR_DATABASE_QUERY);
+                    CommandHelper.sendError(source, messages, "error.database.query");
                     logger.error(DB_MARKER, "Nie udało się usunąć konta gracza {} przez admina", nickname);
                 }
 
             } catch (Exception e) {
                 logger.error(DB_MARKER, "Błąd podczas admin-usuwania konta gracza: {}", nickname, e);
-                CommandHelper.sendError(source, messages, StringConstants.ERROR_DATABASE_QUERY);
+                CommandHelper.sendError(source, messages, "error.database.query");
             }
         }
 
@@ -760,12 +759,12 @@ public class CommandHandler {
                     var stats = authCache.getStats();
                     CommandHelper.sendWarning(source, messages.get("admin.stats.header"));
                     CommandHelper.sendWarning(source, messages.get("admin.stats.registered_accounts", stats.authorizedPlayersCount()));
-                    CommandHelper.sendWarning(source, messages.get(StringConstants.ADMIN_STATS_CACHE_SIZE, stats.bruteForceEntriesCount()));
-                    CommandHelper.sendWarning(source, messages.get(StringConstants.ADMIN_STATS_CACHE_SIZE, stats.premiumCacheCount()));
+                    CommandHelper.sendWarning(source, messages.get("admin.stats.cache_size", stats.bruteForceEntriesCount()));
+                    CommandHelper.sendWarning(source, messages.get("admin.stats.cache_size", stats.premiumCacheCount()));
+                    CommandHelper.sendWarning(source, messages.get("admin.stats.cache_size", databaseManager.getCacheSize()));
                     CommandHelper.sendWarning(source, messages.get("admin.stats.database_status", String.format("%.1f%%", stats.getHitRate())));
                     CommandHelper.sendWarning(source, messages.get("admin.stats.registered_accounts", stats.getTotalRequests()));
                     CommandHelper.sendWarning(source, messages.get("admin.stats.database_status", databaseManager.isConnected() ? messages.get("database.connected") : messages.get("database.disconnected")));
-                    CommandHelper.sendWarning(source, messages.get(StringConstants.ADMIN_STATS_CACHE_SIZE, databaseManager.getCacheSize()));
                 }
                 default -> sendAdminHelp(source);
             }
