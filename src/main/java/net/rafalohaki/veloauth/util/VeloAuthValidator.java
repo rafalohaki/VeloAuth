@@ -114,21 +114,7 @@ public final class VeloAuthValidator {
      * @return true if valid for authentication purposes
      */
     public static boolean isValidInetAddress(InetAddress address) {
-        if (address == null) {
-            return false;
-        }
-
-        // Allow loopback for testing but log it
-        if (address.isLoopbackAddress()) {
-            return true;
-        }
-
-        // Block any local address that's not loopback (security risk)
-        if (address.isAnyLocalAddress()) {
-            return false;
-        }
-
-        return true;
+        return address != null && !address.isAnyLocalAddress();
     }
 
     /**
