@@ -131,22 +131,29 @@ public final class VeloAuthErrorHandler {
 
         // Check for connection-related errors
         if (throwable instanceof SQLException sqlException) {
-            String message = sqlException.getMessage().toLowerCase();
-
-            return message.contains("connection") ||
-                    message.contains("timeout") ||
-                    message.contains("network") ||
-                    message.contains("communication") ||
+            return hasCriticalDatabaseMessage(sqlException.getMessage()) ||
                     isConnectionErrorCode(sqlException.getErrorCode());
         }
 
         // Check for common database connectivity issues
-        String message = throwable.getMessage().toLowerCase();
-        return message.contains("connection") ||
-                message.contains("timeout") ||
-                message.contains("network") ||
-                message.contains("pool") ||
-                message.contains("datasource");
+        return hasCriticalDatabaseMessage(throwable.getMessage()) ||
+                hasPoolRelatedMessage(throwable.getMessage());
+    }
+    
+    private static boolean hasCriticalDatabaseMessage(String message) {
+        if (message == null) return false;
+        String lowerMessage = message.toLowerCase();
+        return lowerMessage.contains("connection") ||
+                lowerMessage.contains("timeout") ||
+                lowerMessage.contains("network") ||
+                lowerMessage.contains("communication");
+    }
+    
+    private static boolean hasPoolRelatedMessage(String message) {
+        if (message == null) return false;
+        String lowerMessage = message.toLowerCase();
+        return lowerMessage.contains("pool") ||
+                lowerMessage.contains("datasource");
     }
 
     /**

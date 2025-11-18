@@ -291,49 +291,58 @@ public final class DatabaseConfig {
     private static String buildJdbcUrl(DatabaseType dbType, String hostname, int port, String database,
                                        String connectionParameters,
                                        net.rafalohaki.veloauth.config.Settings.PostgreSQLSettings postgreSQLSettings) {
-        String params = "";
-
-        // Process connection parameters
-        if (connectionParameters != null && !connectionParameters.trim().isEmpty()) {
-            // Ensure it starts with ?
-            if (!connectionParameters.startsWith("?") && !connectionParameters.startsWith("&")) {
-                params += "?";
-            }
-            params += connectionParameters;
-        }
+        String params = processConnectionParameters(connectionParameters);
 
         return switch (dbType) {
-            case MYSQL -> {
-                // Build MySQL URL with parameters
-                String baseUrl = String.format("jdbc:mysql://%s:%d/%s", hostname, port, database);
-                // Add default parameters if not already present
-                if (params.isEmpty()) {
-                    params = "?useSSL=false&serverTimezone=UTC&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048";
-                } else if (!params.contains("useSSL")) {
-                    params += "&useSSL=false";
-                }
-                yield baseUrl + params;
-            }
-            case POSTGRESQL -> {
-                // Build PostgreSQL URL with parameters
-                String baseUrl = String.format("jdbc:postgresql://%s:%d/%s", hostname, port, database);
-
-                // Handle PostgreSQL SSL settings
-                String sslParams = buildPostgreSQLSslParams(postgreSQLSettings);
-                params = mergeSslParams(params, sslParams);
-
-                yield baseUrl + params;
-            }
-            case H2 -> String.format(
-                    "jdbc:h2:file:./data/%s;MODE=MySQL;DATABASE_TO_LOWER=TRUE",
-                    database
-            );
-            case SQLITE -> String.format(
-                    "jdbc:sqlite:./data/%s.db",
-                    database
-            );
+            case MYSQL -> buildMySqlUrl(hostname, port, database, params);
+            case POSTGRESQL -> buildPostgreSqlUrl(hostname, port, database, params, postgreSQLSettings);
+            case H2 -> buildH2Url(database);
+            case SQLITE -> buildSqliteUrl(database);
             default -> throw new IllegalArgumentException("Invalid storage type: " + dbType);
         };
+    }
+    
+    private static String processConnectionParameters(String connectionParameters) {
+        if (connectionParameters == null || connectionParameters.trim().isEmpty()) {
+            return "";
+        }
+        
+        // Ensure it starts with ?
+        if (!connectionParameters.startsWith("?") && !connectionParameters.startsWith("&")) {
+            return "?" + connectionParameters;
+        }
+        return connectionParameters;
+    }
+    
+    private static String buildMySqlUrl(String hostname, int port, String database, String params) {
+        String baseUrl = String.format("jdbc:mysql://%s:%d/%s", hostname, port, database);
+        String mysqlParams = addMySqlDefaultParams(params);
+        return baseUrl + mysqlParams;
+    }
+    
+    private static String addMySqlDefaultParams(String params) {
+        if (params.isEmpty()) {
+            return "?useSSL=false&serverTimezone=UTC&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048";
+        } else if (!params.contains("useSSL")) {
+            return params + "&useSSL=false";
+        }
+        return params;
+    }
+    
+    private static String buildPostgreSqlUrl(String hostname, int port, String database, String params,
+                                            net.rafalohaki.veloauth.config.Settings.PostgreSQLSettings postgreSQLSettings) {
+        String baseUrl = String.format("jdbc:postgresql://%s:%d/%s", hostname, port, database);
+        String sslParams = buildPostgreSQLSslParams(postgreSQLSettings);
+        String mergedParams = mergeSslParams(params, sslParams);
+        return baseUrl + mergedParams;
+    }
+    
+    private static String buildH2Url(String database) {
+        return String.format("jdbc:h2:file:./data/%s;MODE=MySQL;DATABASE_TO_LOWER=TRUE", database);
+    }
+    
+    private static String buildSqliteUrl(String database) {
+        return String.format("jdbc:sqlite:./data/%s.db", database);
     }
 
     private static String resolveDriverClass(DatabaseType dbType) {
@@ -378,29 +387,44 @@ public final class DatabaseConfig {
             return "sslmode=disable";
         }
 
+        return buildEnabledSslParams(postgreSQLSettings);
+    }
+    
+    private static String buildEnabledSslParams(net.rafalohaki.veloauth.config.Settings.PostgreSQLSettings postgreSQLSettings) {
         String sslParams = "ssl=true";
-
-        // Default to require for external services unless explicitly set
-        String sslMode = postgreSQLSettings.getSslMode();
+        sslParams = addSslMode(sslParams, postgreSQLSettings.getSslMode());
+        sslParams = addSslCert(sslParams, postgreSQLSettings.getSslCert());
+        sslParams = addSslKey(sslParams, postgreSQLSettings.getSslKey());
+        sslParams = addSslRootCert(sslParams, postgreSQLSettings.getSslRootCert());
+        return sslParams;
+    }
+    
+    private static String addSslMode(String sslParams, String sslMode) {
         if (sslMode == null || sslMode.isEmpty()) {
-            sslParams += "&sslmode=require";
+            return sslParams + "&sslmode=require";
         } else {
-            sslParams += "&sslmode=" + sslMode;
+            return sslParams + "&sslmode=" + sslMode;
         }
-
-        if (postgreSQLSettings.getSslCert() != null && !postgreSQLSettings.getSslCert().isEmpty()) {
-            sslParams += "&sslcert=" + postgreSQLSettings.getSslCert();
+    }
+    
+    private static String addSslCert(String sslParams, String sslCert) {
+        if (sslCert != null && !sslCert.isEmpty()) {
+            return sslParams + "&sslcert=" + sslCert;
         }
-        if (postgreSQLSettings.getSslKey() != null && !postgreSQLSettings.getSslKey().isEmpty()) {
-            sslParams += "&sslkey=" + postgreSQLSettings.getSslKey();
+        return sslParams;
+    }
+    
+    private static String addSslKey(String sslParams, String sslKey) {
+        if (sslKey != null && !sslKey.isEmpty()) {
+            return sslParams + "&sslkey=" + sslKey;
         }
-        if (postgreSQLSettings.getSslRootCert() != null && !postgreSQLSettings.getSslRootCert().isEmpty()) {
-            sslParams += "&sslrootcert=" + postgreSQLSettings.getSslRootCert();
+        return sslParams;
+    }
+    
+    private static String addSslRootCert(String sslParams, String sslRootCert) {
+        if (sslRootCert != null && !sslRootCert.isEmpty()) {
+            return sslParams + "&sslrootcert=" + sslRootCert;
         }
-        if (postgreSQLSettings.getSslPassword() != null && !postgreSQLSettings.getSslPassword().isEmpty()) {
-            sslParams += "&sslpassword=" + postgreSQLSettings.getSslPassword();
-        }
-
         return sslParams;
     }
 
