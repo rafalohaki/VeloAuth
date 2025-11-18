@@ -234,9 +234,13 @@ public final class CacheHelper {
             // End active session
             endSession(authCache, playerUuid, playerName, logger, authMarker, messages);
 
-            logger.info(authMarker, messages.get("cache.cleanup.complete"), playerName);
+            if (logger.isInfoEnabled()) {
+                logger.info(authMarker, messages.get("cache.cleanup.complete"), playerName);
+            }
         } catch (Exception e) {
-            logger.error(authMarker, messages.get("cache.error.cleanup"), playerName, e);
+            if (logger.isErrorEnabled()) {
+                logger.error(authMarker, messages.get("cache.error.cleanup"), playerName, e);
+            }
         }
     }
 }

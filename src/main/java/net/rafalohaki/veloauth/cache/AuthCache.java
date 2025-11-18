@@ -205,8 +205,10 @@ public class AuthCache {
                 5, 5, TimeUnit.MINUTES
         );
 
-        logger.info(messages.get("cache.auth.created"),
-                ttlMinutes, maxSize, maxLoginAttempts, bruteForceTimeoutMinutes);
+        if (logger.isInfoEnabled()) {
+            logger.info(messages.get("cache.auth.created"),
+                    ttlMinutes, maxSize, maxLoginAttempts, bruteForceTimeoutMinutes);
+        }
     }
 
     /**
@@ -404,8 +406,10 @@ public class AuthCache {
 
                 boolean blocked = entry.getAttempts() >= maxLoginAttempts;
                 if (blocked) {
-                    logger.warn(messages.get("cache.warn.ip.blocked"),
-                            address.getHostAddress(), entry.getAttempts());
+                    if (logger.isWarnEnabled()) {
+                        logger.warn(messages.get("cache.warn.ip.blocked"),
+                                address.getHostAddress(), entry.getAttempts());
+                    }
                 } else {
                     if (logger.isDebugEnabled()) {
                         logger.debug(messages.get("cache.debug.failed.login"),
@@ -578,9 +582,11 @@ public class AuthCache {
 
         // KLUCZOWE: Sprawdź czy nickname się zgadza
         if (!session.getNickname().equalsIgnoreCase(nickname)) {
-            logger.warn(SECURITY_MARKER,
-                    messages.get("security.session.hijack"),
-                    uuid, session.getNickname(), nickname);
+            if (logger.isWarnEnabled()) {
+                logger.warn(SECURITY_MARKER,
+                        messages.get("security.session.hijack"),
+                        uuid, session.getNickname(), nickname);
+            }
 
             // Usuń podejrzaną sesję
             activeSessions.remove(uuid);
@@ -589,8 +595,10 @@ public class AuthCache {
 
         // NOWE: Sprawdź czy IP się zgadza
         if (!session.getIp().equals(currentIp)) {
-            logger.warn(SECURITY_MARKER, messages.get("security.session.ip.mismatch"),
-                    uuid, session.getIp(), currentIp);
+            if (logger.isWarnEnabled()) {
+                logger.warn(SECURITY_MARKER, messages.get("security.session.ip.mismatch"),
+                        uuid, session.getIp(), currentIp);
+            }
             activeSessions.remove(uuid);
             return false;
         }
@@ -792,8 +800,10 @@ public class AuthCache {
             if (cacheHits.get() + cacheMisses.get() > 0) {
                 double rate = (double) cacheHits.get() / (cacheHits.get() + cacheMisses.get()) * 100;
                 String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
-                logger.info(messages.get("cache.stats_final"),
-                        cacheHits.get(), cacheMisses.get(), rateStr);
+                if (logger.isInfoEnabled()) {
+                    logger.info(messages.get("cache.stats_final"),
+                            cacheHits.get(), cacheMisses.get(), rateStr);
+                }
             }
 
             // Zamknij cleanup scheduler

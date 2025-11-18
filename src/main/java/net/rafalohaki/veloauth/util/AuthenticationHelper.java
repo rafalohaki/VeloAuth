@@ -290,10 +290,14 @@ public final class AuthenticationHelper {
 
         boolean deleted = deleteResult.getValue();
         if (deleted) {
-            context.logger().info(context.dbMarker(), context.messages().get("player.account.deleted.success"), context.username());
+            if (context.logger().isInfoEnabled()) {
+                context.logger().info(context.dbMarker(), context.messages().get("player.account.deleted.success"), context.username());
+            }
             return true;
         } else {
-            context.logger().error(context.dbMarker(), context.messages().get("player.account.delete.failed"), context.username());
+            if (context.logger().isErrorEnabled()) {
+                context.logger().error(context.dbMarker(), context.messages().get("player.account.delete.failed"), context.username());
+            }
             return false;
         }
     }

@@ -144,9 +144,13 @@ public class VeloAuth {
      */
     @Subscribe
     public void onProxyShutdown(ProxyShutdownEvent event) {
-        logger.info(messages.get("plugin.initialization.shutdown"));
+        if (logger.isInfoEnabled()) {
+            logger.info(messages.get("plugin.initialization.shutdown"));
+        }
         shutdown();
-        logger.info(messages.get("plugin.initialization.closed"));
+        if (logger.isInfoEnabled()) {
+            logger.info(messages.get("plugin.initialization.closed"));
+        }
     }
 
     /**
@@ -163,16 +167,22 @@ public class VeloAuth {
             }
 
             // 2. Inicjalizacja systemu wiadomości (i18n)
-            logger.info("Initializing message system...");
+            if (logger.isInfoEnabled()) {
+                logger.info("Initializing message system...");
+            }
             messages = new Messages();
             messages.setLanguage(settings.getLanguage());
 
             // Now we can use localized messages
-            logger.info(messages.get("plugin.initialization.loading_config"));
-            logger.info(messages.get("plugin.initialization.init_messages"));
+            if (logger.isInfoEnabled()) {
+                logger.info(messages.get("plugin.initialization.loading_config"));
+                logger.info(messages.get("plugin.initialization.init_messages"));
+            }
 
             // 3. Inicjalizacja bazy danych
-            logger.info(messages.get("plugin.initialization.init_database"));
+            if (logger.isInfoEnabled()) {
+                logger.info(messages.get("plugin.initialization.init_database"));
+            }
             DatabaseConfig dbConfig = createDatabaseConfig();
             databaseManager = new DatabaseManager(dbConfig, messages);
 
@@ -182,7 +192,9 @@ public class VeloAuth {
             }
 
             // 4. Inicjalizacja cache
-            logger.info(messages.get("plugin.initialization.init_cache"));
+            if (logger.isInfoEnabled()) {
+                logger.info(messages.get("plugin.initialization.init_cache"));
+            }
             authCache = new AuthCache(
                     settings.getCacheTtlMinutes(),
                     settings.getCacheMaxSize(),
@@ -196,28 +208,40 @@ public class VeloAuth {
             );
 
             // 5. Inicjalizacja command handler
-            logger.info(messages.get("plugin.initialization.registering_commands"));
+            if (logger.isInfoEnabled()) {
+                logger.info(messages.get("plugin.initialization.registering_commands"));
+            }
             commandHandler = new CommandHandler(this, databaseManager, authCache, settings, messages);
             commandHandler.registerCommands();
 
             // 6. Inicjalizacja connection manager
-            logger.info(messages.get("plugin.initialization.init_connection_manager"));
+            if (logger.isInfoEnabled()) {
+                logger.info(messages.get("plugin.initialization.init_connection_manager"));
+            }
             connectionManager = new ConnectionManager(this, databaseManager, authCache, settings, messages);
 
             // 7. Premium resolver service
-            logger.info(messages.get("plugin.initialization.init_premium_resolver"));
+            if (logger.isInfoEnabled()) {
+                logger.info(messages.get("plugin.initialization.init_premium_resolver"));
+            }
             premiumResolverService = new PremiumResolverService(logger, settings, databaseManager.getPremiumUuidDao());
 
             // 8. Rejestracja pełnego AuthListener z wszystkimi zależnościami
-            logger.info(messages.get("plugin.initialization.registering_listeners"));
+            if (logger.isInfoEnabled()) {
+                logger.info(messages.get("plugin.initialization.registering_listeners"));
+            }
             authListener = new AuthListener(this, connectionManager, authCache, settings, premiumResolverService, databaseManager, messages);
             server.getEventManager().register(this, authListener);
-            logger.info("✅ Full AuthListener registered after initialization");
+            if (logger.isInfoEnabled()) {
+                logger.info("✅ Full AuthListener registered after initialization");
+            }
 
             // 9. Debug serwerów (zgodnie z notes.txt)
             connectionManager.debugServers();
 
-            logger.info(messages.get("plugin.initialization.components_ready"));
+            if (logger.isInfoEnabled()) {
+                logger.info(messages.get("plugin.initialization.components_ready"));
+            }
 
         } catch (IllegalStateException e) {
             logger.error("Critical state error during VeloAuth initialization", e);
@@ -239,7 +263,9 @@ public class VeloAuth {
      * Components handle their own graceful shutdown internally.
      */
     private void waitForPendingOperations() {
-        logger.debug("Component shutdown in progress - pending operations handled internally");
+        if (logger.isDebugEnabled()) {
+            logger.debug("Component shutdown in progress - pending operations handled internally");
+        }
     }
 
     /**

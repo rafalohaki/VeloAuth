@@ -61,8 +61,10 @@ public class ConnectionManager {
         this.logger = plugin.getLogger();
         this.messages = messages;
 
-        logger.info(messages.get("connection.manager.initialized"),
-                settings.getPicoLimboServerName());
+        if (logger.isInfoEnabled()) {
+            logger.info(messages.get("connection.manager.initialized"),
+                    settings.getPicoLimboServerName());
+        }
     }
 
     /**
@@ -312,12 +314,16 @@ public class ConnectionManager {
                     .join();  // Czekaj na zakończenie transferu
 
             if (result.isSuccessful()) {
-                logger.info(messages.get("player.transfer.success"), player.getUsername());
+                if (logger.isInfoEnabled()) {
+                    logger.info(messages.get("player.transfer.success"), player.getUsername());
+                }
                 return true;
             } else {
-                logger.warn("❌ Transfer {} na PicoLimbo FAILED: {}",
-                        player.getUsername(),
-                        result.getReasonComponent().orElse(createUnknownErrorComponent()));
+                if (logger.isWarnEnabled()) {
+                    logger.warn("❌ Transfer {} na PicoLimbo FAILED: {}",
+                            player.getUsername(),
+                            result.getReasonComponent().orElse(createUnknownErrorComponent()));
+                }
 
                 player.sendMessage(Component.text(
                         "Nie udało się połączyć z serwerem autoryzacji. Spróbuj ponownie.",
@@ -326,8 +332,10 @@ public class ConnectionManager {
                 return false;
             }
         } catch (Exception e) {
-            logger.error("Błąd podczas transferu gracza {} na PicoLimbo: {}",
-                    player.getUsername(), e.getMessage(), e);
+            if (logger.isErrorEnabled()) {
+                logger.error("Błąd podczas transferu gracza {} na PicoLimbo: {}",
+                        player.getUsername(), e.getMessage(), e);
+            }
 
             player.sendMessage(Component.text(
                     "Wystąpił błąd podczas łączenia z serwerem autoryzacji.",

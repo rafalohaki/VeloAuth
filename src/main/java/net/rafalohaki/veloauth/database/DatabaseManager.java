@@ -118,7 +118,9 @@ public class DatabaseManager {
         this.lastHealthCheckTime = 0;
         this.lastHealthCheckPassed = false;
 
-        logger.info(DB_MARKER, messages.get("database.manager.created"), config.getStorageType());
+        if (logger.isInfoEnabled()) {
+            logger.info(DB_MARKER, messages.get("database.manager.created"), config.getStorageType());
+        }
     }
 
     /**
@@ -134,21 +136,29 @@ public class DatabaseManager {
                 try {
 
                     if (connected) {
-                        logger.warn(DB_MARKER, "Baza danych już jest połączona");
+                        if (logger.isWarnEnabled()) {
+                            logger.warn(DB_MARKER, "Baza danych już jest połączona");
+                        }
                         return true;
                     }
 
                     // Sprawdź czy używać HikariCP
                     if (config.hasDataSource()) {
                         // Użyj HikariCP DataSource z DatabaseConfig
-                        logger.info(DB_MARKER, messages.get("database.manager.hikari_init"));
+                        if (logger.isInfoEnabled()) {
+                            logger.info(DB_MARKER, messages.get("database.manager.hikari_init"));
+                        }
                         connectionSource = new DataSourceConnectionSource(config.getDataSource(), config.getJdbcUrl());
 
-                        logger.info(DB_MARKER, messages.get("database.manager.hikari_ready"), config.getStorageType());
+                        if (logger.isInfoEnabled()) {
+                            logger.info(DB_MARKER, messages.get("database.manager.hikari_ready"), config.getStorageType());
+                        }
                     } else {
                         // Fallback dla H2/SQLite lub gdy HikariCP nie jest skonfigurowany
                         String jdbcUrl = config.getJdbcUrl();
-                        logger.info(DB_MARKER, "Connecting to database (standard JDBC): {}", jdbcUrl);
+                        if (logger.isInfoEnabled()) {
+                            logger.info(DB_MARKER, "Connecting to database (standard JDBC): {}", jdbcUrl);
+                        }
 
                         connectionSource = new JdbcConnectionSource(
                                 jdbcUrl,
@@ -156,7 +166,9 @@ public class DatabaseManager {
                                 config.getPassword()
                         );
 
-                        logger.info(DB_MARKER, messages.get("database.manager.standard_jdbc"), config.getStorageType());
+                        if (logger.isInfoEnabled()) {
+                            logger.info(DB_MARKER, messages.get("database.manager.standard_jdbc"), config.getStorageType());
+                        }
                     }
 
                     // Tworzenie DAO
@@ -168,7 +180,9 @@ public class DatabaseManager {
                     createTablesIfNotExists();
 
                     connected = true;
-                    logger.info(DB_MARKER, messages.get("database.manager.connected"), config.getStorageType());
+                    if (logger.isInfoEnabled()) {
+                        logger.info(DB_MARKER, messages.get("database.manager.connected"), config.getStorageType());
+                    }
 
                     // Uruchom health checks co 30 sekund
                     startHealthChecks();
@@ -180,7 +194,9 @@ public class DatabaseManager {
                 }
 
             } catch (SQLException e) {
-                logger.error(DB_MARKER, "Błąd podczas inicjalizacji bazy danych", e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd podczas inicjalizacji bazy danych", e);
+                }
                 return false;
             }
         }, dbExecutor);
@@ -206,13 +222,19 @@ public class DatabaseManager {
                 return transactionManager.callInTransaction(operation);
 
             } catch (SQLException e) {
-                logger.error(DB_MARKER, "Błąd SQL podczas transakcji", e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd SQL podczas transakcji", e);
+                }
                 throw new RuntimeException("SQL transaction failed", e);
             } catch (IllegalStateException e) {
-                logger.error(DB_MARKER, "Błąd stanu w transakcji DB", e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd stanu w transakcji DB", e);
+                }
                 throw new RuntimeException("Transaction state failed", e);
             } catch (RuntimeException e) {
-                logger.error(DB_MARKER, "Błąd wykonania w transakcji DB", e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd wykonania w transakcji DB", e);
+                }
                 throw new RuntimeException("Transaction execution failed", e);
             }
         }, dbExecutor);
@@ -226,11 +248,15 @@ public class DatabaseManager {
             try {
                 performHealthCheck();
             } catch (Exception e) {
-                logger.error(DB_MARKER, "Błąd podczas health check bazy danych", e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd podczas health check bazy danych", e);
+                }
             }
         }, 30, 30, TimeUnit.SECONDS); // Start po 30 sekundach, co 30 sekund
 
-        logger.info(DB_MARKER, messages.get("database.manager.health_checks_started"));
+        if (logger.isInfoEnabled()) {
+            logger.info(DB_MARKER, messages.get("database.manager.health_checks_started"));
+        }
     }
 
     /**
@@ -239,7 +265,9 @@ public class DatabaseManager {
     private void performHealthCheck() {
         try {
             if (!connected) {
-                logger.debug(DB_MARKER, "Health check pominięty - baza danych nie jest połączona");
+                if (logger.isDebugEnabled()) {
+                    logger.debug(DB_MARKER, "Health check pominięty - baza danych nie jest połączona");
+                }
                 return;
             }
 
@@ -249,11 +277,15 @@ public class DatabaseManager {
             lastHealthCheckPassed = healthy;
 
             if (!healthy) {
-                logger.warn(DB_MARKER, "\u274C Database health check FAILED - connection may be unstable");
+                if (logger.isWarnEnabled()) {
+                    logger.warn(DB_MARKER, "\u274C Database health check FAILED - connection may be unstable");
+                }
                 // Don't set connected=false for single health check failure
                 // Only log warning - HikariCP will handle connection recovery
             } else {
-                logger.debug(DB_MARKER, "\u2705 Database health check PASSED");
+                if (logger.isDebugEnabled()) {
+                    logger.debug(DB_MARKER, "\u2705 Database health check PASSED");
+                }
             }
 
         } catch (Exception e) {
@@ -261,7 +293,9 @@ public class DatabaseManager {
             lastHealthCheckPassed = false;
             // Don't set connected=false for health check exceptions
             // Only log error - HikariCP will handle connection recovery
-            logger.error(DB_MARKER, "❌ Database health check FAILED with exception: {}", e.getMessage());
+            if (logger.isErrorEnabled()) {
+                logger.error(DB_MARKER, "❌ Database health check FAILED with exception: {}", e.getMessage());
+            }
         }
     }
 
@@ -299,7 +333,9 @@ public class DatabaseManager {
                     healthCheckExecutor.shutdownNow();
                     Thread.currentThread().interrupt();
                 }
-                logger.info(DB_MARKER, "Health checks zatrzymane");
+                if (logger.isInfoEnabled()) {
+                    logger.info(DB_MARKER, "Health checks zatrzymane");
+                }
             }
 
             databaseLock.lock();
@@ -307,16 +343,22 @@ public class DatabaseManager {
                 if (connectionSource != null) {
                     connectionSource.close();
                     connectionSource = null;
-                    logger.info(DB_MARKER, messages.get("database.manager.connection_closed"));
+                    if (logger.isInfoEnabled()) {
+                        logger.info(DB_MARKER, messages.get("database.manager.connection_closed"));
+                    }
                 }
                 connected = false;
                 playerCache.clear();
-                logger.debug(CACHE_MARKER, "Cache graczy wyczyszczony");
+                if (logger.isDebugEnabled()) {
+                    logger.debug(CACHE_MARKER, "Cache graczy wyczyszczony");
+                }
             } finally {
                 databaseLock.unlock();
             }
         } catch (Exception e) {
-            logger.error(DB_MARKER, "Błąd podczas zamykania bazy danych", e);
+            if (logger.isErrorEnabled()) {
+                logger.error(DB_MARKER, "Błąd podczas zamykania bazy danych", e);
+            }
         } finally {
             dbExecutor.shutdown();
         }
@@ -344,15 +386,21 @@ public class DatabaseManager {
                 if (!cached.getLowercaseNickname().equals(normalizedNickname)) {
                     // Cache corruption detected - remove invalid entry
                     playerCache.remove(normalizedNickname);
-                    logger.warn(CACHE_MARKER, "Cache corruption detected for {} - removing invalid entry", normalizedNickname);
+                    if (logger.isWarnEnabled()) {
+                        logger.warn(CACHE_MARKER, "Cache corruption detected for {} - removing invalid entry", normalizedNickname);
+                    }
                 } else {
-                    logger.debug(CACHE_MARKER, "Cache HIT dla gracza: {}", normalizedNickname);
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(CACHE_MARKER, "Cache HIT dla gracza: {}", normalizedNickname);
+                    }
                     return DbResult.success(cached);
                 }
             }
 
             if (!connected || !isHealthy()) {
-                logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED);
+                if (logger.isWarnEnabled()) {
+                    logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED);
+                }
                 return DbResult.databaseError(DATABASE_NOT_CONNECTED);
             }
 
@@ -362,17 +410,25 @@ public class DatabaseManager {
                     // Double-check: only cache if the keys match
                     if (player.getLowercaseNickname().equals(normalizedNickname)) {
                         playerCache.put(normalizedNickname, player);
-                        logger.debug(CACHE_MARKER, "Cache MISS -> DB HIT dla gracza: {}", normalizedNickname);
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(CACHE_MARKER, "Cache MISS -> DB HIT dla gracza: {}", normalizedNickname);
+                        }
                     } else {
-                        logger.warn(CACHE_MARKER, "Database inconsistency for {} - expected {}, found {}", 
-                                normalizedNickname, normalizedNickname, player.getLowercaseNickname());
+                        if (logger.isWarnEnabled()) {
+                            logger.warn(CACHE_MARKER, "Database inconsistency for {} - expected {}, found {}", 
+                                    normalizedNickname, normalizedNickname, player.getLowercaseNickname());
+                        }
                     }
                 } else {
-                    logger.debug(DB_MARKER, "Gracz nie znaleziony: {}", normalizedNickname);
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(DB_MARKER, "Gracz nie znaleziony: {}", normalizedNickname);
+                    }
                 }
                 return DbResult.success(player);
             } catch (SQLException e) {
-                logger.error(DB_MARKER, "Błąd podczas wyszukiwania gracza: {}", normalizedNickname, e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd podczas wyszukiwania gracza: {}", normalizedNickname, e);
+                }
                 // CRITICAL: Return database error instead of null to prevent bypass
                 return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
             }
@@ -389,7 +445,9 @@ public class DatabaseManager {
 
         return CompletableFuture.supplyAsync(() -> {
             if (!connected) {
-                logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED);
+                if (logger.isWarnEnabled()) {
+                    logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED);
+                }
                 return DbResult.databaseError(DATABASE_NOT_CONNECTED);
             }
 
@@ -397,11 +455,15 @@ public class DatabaseManager {
                 boolean success = jdbcAuthDao.upsertPlayer(player);
                 if (success) {
                     playerCache.put(player.getLowercaseNickname(), player);
-                    logger.debug(DB_MARKER, "Zapisano gracza (upsert): {}", player.getNickname());
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(DB_MARKER, "Zapisano gracza (upsert): {}", player.getNickname());
+                    }
                 }
                 return DbResult.success(success);
             } catch (SQLException e) {
-                logger.error(DB_MARKER, "Błąd podczas zapisywania gracza: {}", player.getNickname(), e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd podczas zapisywania gracza: {}", player.getNickname(), e);
+                }
                 return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
             }
         }, dbExecutor);
@@ -417,7 +479,9 @@ public class DatabaseManager {
 
         return CompletableFuture.supplyAsync(() -> {
             if (!connected) {
-                logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED);
+                if (logger.isWarnEnabled()) {
+                    logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED);
+                }
                 return DbResult.databaseError(DATABASE_NOT_CONNECTED);
             }
 
@@ -426,14 +490,20 @@ public class DatabaseManager {
                 playerCache.remove(lowercaseNickname);
 
                 if (deleted) {
-                    logger.debug(DB_MARKER, "Usunięto gracza: {}", lowercaseNickname);
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(DB_MARKER, "Usunięto gracza: {}", lowercaseNickname);
+                    }
                     return DbResult.success(true);
                 }
 
-                logger.debug(DB_MARKER, "Gracz nie znaleziony do usunięcia: {}", lowercaseNickname);
+                if (logger.isDebugEnabled()) {
+                    logger.debug(DB_MARKER, "Gracz nie znaleziony do usunięcia: {}", lowercaseNickname);
+                }
                 return DbResult.success(false);
             } catch (SQLException e) {
-                logger.error(DB_MARKER, "Błąd podczas usuwania gracza: {}", lowercaseNickname, e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd podczas usuwania gracza: {}", lowercaseNickname, e);
+                }
                 return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
             }
         }, dbExecutor);
@@ -449,17 +519,23 @@ public class DatabaseManager {
 
         return CompletableFuture.supplyAsync(() -> {
             if (!connected) {
-                logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED_PREMIUM_CHECK, username);
+                if (logger.isWarnEnabled()) {
+                    logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED_PREMIUM_CHECK, username);
+                }
                 return DbResult.databaseError(DATABASE_NOT_CONNECTED);
             }
 
             try {
                 // Use PREMIUM_UUIDS table for premium status lookup
                 boolean premium = premiumUuidDao.findByNickname(username).isPresent();
-                logger.debug(DB_MARKER, "Premium status z PREMIUM_UUIDS dla {}: {}", username, premium);
+                if (logger.isDebugEnabled()) {
+                    logger.debug(DB_MARKER, "Premium status z PREMIUM_UUIDS dla {}: {}", username, premium);
+                }
                 return DbResult.success(premium);
             } catch (RuntimeException e) {
-                logger.error(DB_MARKER, "Błąd wykonania podczas sprawdzania premium status dla gracza: {}", username, e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd wykonania podczas sprawdzania premium status dla gracza: {}", username, e);
+                }
                 return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
             }
         }, dbExecutor);
@@ -472,17 +548,23 @@ public class DatabaseManager {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 if (!connected || playerDao == null) {
-                    logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED);
+                    if (logger.isWarnEnabled()) {
+                        logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED);
+                    }
                     return List.of();
                 }
 
                 List<RegisteredPlayer> players = playerDao.queryForAll();
-                logger.debug(DB_MARKER, "Pobrano {} graczy z bazy danych", players.size());
+                if (logger.isDebugEnabled()) {
+                    logger.debug(DB_MARKER, "Pobrano {} graczy z bazy danych", players.size());
+                }
 
                 return players;
 
             } catch (SQLException e) {
-                logger.error(DB_MARKER, "Błąd podczas pobierania wszystkich graczy", e);
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Błąd podczas pobierania wszystkich graczy", e);
+                }
                 return List.of();
             }
         }, dbExecutor);
@@ -493,7 +575,9 @@ public class DatabaseManager {
      */
     public void clearCache() {
         playerCache.clear();
-        logger.debug(CACHE_MARKER, "Cache graczy wyczyszczony");
+        if (logger.isDebugEnabled()) {
+            logger.debug(CACHE_MARKER, "Cache graczy wyczyszczony");
+        }
     }
 
     /**
@@ -504,7 +588,9 @@ public class DatabaseManager {
     public void removeCachedPlayer(String lowercaseNickname) {
         if (lowercaseNickname != null) {
             playerCache.remove(lowercaseNickname);
-            logger.debug("Usunięto z cache gracza: {}", lowercaseNickname);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Usunięto z cache gracza: {}", lowercaseNickname);
+            }
         }
     }
 
@@ -548,7 +634,9 @@ public class DatabaseManager {
      * Tworzy tabele jeśli nie istnieją i migruje schemat dla kompatybilności z limboauth.
      */
     private void createTablesIfNotExists() throws SQLException {
-        logger.info(messages.get("database.manager.creating_tables"));
+        if (logger.isInfoEnabled()) {
+            logger.info(messages.get("database.manager.creating_tables"));
+        }
 
         // Tworzenie tabeli AUTH
         TableUtils.createTableIfNotExists(connectionSource, RegisteredPlayer.class);
@@ -562,7 +650,9 @@ public class DatabaseManager {
         // Tworzenie indeksów dla wydajności
         createIndexesIfNotExists();
 
-        logger.info(messages.get("database.manager.tables_created"));
+        if (logger.isInfoEnabled()) {
+            logger.info(messages.get("database.manager.tables_created"));
+        }
     }
 
     /**
@@ -587,32 +677,42 @@ public class DatabaseManager {
                     String sql = "ALTER TABLE " + quote + "AUTH" + quote + 
                                  " ADD COLUMN " + quote + "PREMIUMUUID" + quote + " VARCHAR(36)";
                     executeAlterTable(connection, sql);
-                    logger.info(DB_MARKER, "Dodano kolumnę PREMIUMUUID do tabeli AUTH");
+                    if (logger.isInfoEnabled()) {
+                        logger.info(DB_MARKER, "Dodano kolumnę PREMIUMUUID do tabeli AUTH");
+                    }
                 }
 
                 if (!hasTotpToken) {
                     String sql = "ALTER TABLE " + quote + "AUTH" + quote + 
                                  " ADD COLUMN " + quote + "TOTPTOKEN" + quote + " VARCHAR(32)";
                     executeAlterTable(connection, sql);
-                    logger.info(DB_MARKER, "Dodano kolumnę TOTPTOKEN do tabeli AUTH");
+                    if (logger.isInfoEnabled()) {
+                        logger.info(DB_MARKER, "Dodano kolumnę TOTPTOKEN do tabeli AUTH");
+                    }
                 }
 
                 if (!hasIssuedTime) {
                     String sql = "ALTER TABLE " + quote + "AUTH" + quote + 
                                  " ADD COLUMN " + quote + "ISSUEDTIME" + quote + " BIGINT DEFAULT 0";
                     executeAlterTable(connection, sql);
-                    logger.info(DB_MARKER, "Dodano kolumnę ISSUEDTIME do tabeli AUTH");
+                    if (logger.isInfoEnabled()) {
+                        logger.info(DB_MARKER, "Dodano kolumnę ISSUEDTIME do tabeli AUTH");
+                    }
                 }
 
                 if (!hasPremiumUuid || !hasTotpToken || !hasIssuedTime) {
-                    logger.info(DB_MARKER, "Migracja schematu AUTH dla limboauth zakończona");
+                    if (logger.isInfoEnabled()) {
+                        logger.info(DB_MARKER, "Migracja schematu AUTH dla limboauth zakończona");
+                    }
                 }
 
             } finally {
                 // Nie zamykaj połączenia - jest zarządzane przez ConnectionSource
             }
         } catch (SQLException e) {
-            logger.error(DB_MARKER, "Błąd podczas migracji tabeli AUTH dla limboauth", e);
+            if (logger.isErrorEnabled()) {
+                logger.error(DB_MARKER, "Błąd podczas migracji tabeli AUTH dla limboauth", e);
+            }
             throw e;
         }
     }
@@ -659,7 +759,9 @@ public class DatabaseManager {
             // H2 i SQLite tworzą indeksy automatycznie dla kluczy obcych
 
         } catch (SQLException e) {
-            logger.warn(messages.get("database.manager.index_error"), e.getMessage());
+            if (logger.isWarnEnabled()) {
+                logger.warn(messages.get("database.manager.index_error"), e.getMessage());
+            }
         }
     }
 

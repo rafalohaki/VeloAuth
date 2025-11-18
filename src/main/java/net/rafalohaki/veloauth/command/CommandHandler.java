@@ -90,7 +90,9 @@ public class CommandHandler {
         commandManager.register(commandManager.metaBuilder(COMMAND_UNREGISTER).build(), new UnregisterCommand());
         commandManager.register(commandManager.metaBuilder(COMMAND_VAUTH).build(), new VAuthCommand());
 
-        logger.info(messages.get("connection.commands.registered"));
+        if (logger.isInfoEnabled()) {
+            logger.info(messages.get("connection.commands.registered"));
+        }
     }
 
     /**
@@ -105,7 +107,9 @@ public class CommandHandler {
         commandManager.unregister(COMMAND_UNREGISTER);
         commandManager.unregister(COMMAND_VAUTH);
 
-        logger.info("Komendy wyrejestrowane");
+        if (logger.isInfoEnabled()) {
+            logger.info("Komendy wyrejestrowane");
+        }
     }
 
     /**
@@ -224,7 +228,7 @@ public class CommandHandler {
             Player player = (Player) source;
             
             // Use template method for common checks
-            AuthenticationContext authContext = validateAndAuthenticatePlayer(source, "login");
+            AuthenticationContext authContext = validateAndAuthenticatePlayer(source, COMMAND_LOGIN);
             if (authContext == null) {
                 return;
             }
@@ -346,7 +350,7 @@ public class CommandHandler {
 
             // Asynchroniczna rejestracja z Virtual Threads
             CommandHelper.runAsyncCommandWithTimeout(() -> processRegistration(player, password),
-                    messages, source, "error.database.query", "auth.registration.timeout");
+                    messages, source, ERROR_DATABASE_QUERY, "auth.registration.timeout");
         }
 
         private void processRegistration(Player player, String password) {
