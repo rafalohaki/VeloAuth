@@ -781,10 +781,8 @@ public class DatabaseManager {
     }
 
     private void logMigrationComplete(ColumnMigrationResult result) {
-        if (!result.hasPremiumUuid || !result.hasTotpToken || !result.hasIssuedTime) {
-            if (logger.isInfoEnabled()) {
-                logger.info(DB_MARKER, "Migracja schematu AUTH dla limboauth zakończona");
-            }
+        if (logger.isInfoEnabled() && (!result.hasPremiumUuid || !result.hasTotpToken || !result.hasIssuedTime)) {
+            logger.info(DB_MARKER, "Migracja schematu AUTH dla limboauth zakończona");
         }
     }
 

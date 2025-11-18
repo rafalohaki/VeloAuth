@@ -538,7 +538,7 @@ public class CommandHandler {
 
             // Asynchroniczne usuwanie konta z Virtual Threads
             CommandHelper.runAsyncCommand(() -> processAdminUnregistration(source, nickname),
-                    messages, source, "error.database.query");
+                    messages, source, ERROR_DATABASE_QUERY);
         }
 
         private void processAdminUnregistration(CommandSource source, String nickname) {

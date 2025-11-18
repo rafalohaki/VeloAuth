@@ -1,7 +1,6 @@
 package net.rafalohaki.veloauth.listener;
 
 import com.velocitypowered.api.event.Subscribe;
-import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
@@ -140,7 +139,7 @@ public class AuthListener {
      * Premium resolution na cache miss blokuje, ale to ograniczenie API Velocity.
      * Dwa warstwy cache (AuthCache + PremiumResolverService) minimalizują impact.
      */
-    @Subscribe(priority = Short.MAX_VALUE, async = false, order = PostOrder.FIRST)
+    @Subscribe(priority = Short.MAX_VALUE, async = false)
     public void onPreLogin(PreLoginEvent event) {
         String username = event.getUsername();
         logger.info("\uD83D\uDD0D PreLogin: {}", username);
@@ -250,7 +249,7 @@ public class AuthListener {
      * KRYTYCZNE: Używamy async = false + maksymalny priorytet dla bezpieczeństwa
      * Zapobiega race conditions w procesie autoryzacji
      */
-    @Subscribe(priority = Short.MAX_VALUE, async = false, order = PostOrder.FIRST)
+    @Subscribe(priority = Short.MAX_VALUE, async = false)
     public void onLogin(LoginEvent event) {
         Player player = event.getPlayer();
         String playerName = player.getUsername();
@@ -414,7 +413,7 @@ public class AuthListener {
      * KRYTYCZNE: Używamy async = false + maksymalny priorytet dla bezpieczeństwa
      * Zapobiega obejściu autoryzacji przez race conditions
      */
-    @Subscribe(priority = Short.MAX_VALUE, async = false, order = PostOrder.FIRST)
+    @Subscribe(priority = Short.MAX_VALUE, async = false)
     public void onServerPreConnect(ServerPreConnectEvent event) {
         try {
             Player player = event.getPlayer();

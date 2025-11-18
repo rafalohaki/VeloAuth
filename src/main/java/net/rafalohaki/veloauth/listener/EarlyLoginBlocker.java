@@ -1,6 +1,5 @@
 package net.rafalohaki.veloauth.listener;
 
-import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
 import net.kyori.adventure.text.Component;
@@ -34,7 +33,7 @@ public class EarlyLoginBlocker {
      *
      * @param event PreLoginEvent to potentially block
      */
-    @Subscribe(priority = 100, order = PostOrder.FIRST)
+    @Subscribe(priority = 100)
     public void onPreLogin(PreLoginEvent event) {
         String username = event.getUsername();
         

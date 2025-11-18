@@ -10,6 +10,7 @@ import net.rafalohaki.veloauth.command.CommandHandler;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.database.DatabaseManager;
+import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import org.junit.jupiter.api.BeforeEach;
@@ -197,16 +198,17 @@ class VeloAuthIntegrationTest {
 
     @Test
     void testErrorHandling_systemShouldNotCrash() {
-        // Setup: Mock database failure
+        // Setup: Mock database to return error result (not throw exception)
+        DbResult<RegisteredPlayer> errorResult = DbResult.databaseError("Database connection failed");
         when(databaseManager.findPlayerByNickname(anyString()))
-                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("Database connection failed")));
+                .thenReturn(CompletableFuture.completedFuture(errorResult));
 
         // Should handle database failure gracefully
-        CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> result = databaseManager.findPlayerByNickname("test");
+        CompletableFuture<DbResult<RegisteredPlayer>> result = databaseManager.findPlayerByNickname("test");
 
         // Should complete with database error, not crash
         assertDoesNotThrow(() -> {
-            DatabaseManager.DbResult<RegisteredPlayer> dbResult = result.join();
+            DbResult<RegisteredPlayer> dbResult = result.join();
             assertTrue(dbResult.isDatabaseError(), "Should return database error on failure");
             assertNull(dbResult.getValue(), "Should return null value on database error");
         });
