@@ -200,18 +200,42 @@ public final class VeloAuthValidator {
      * @return true if suspicious patterns found
      */
     private static boolean hasSuspiciousPatterns(String username) {
-        // Check for common attack patterns
         String lowerUsername = username.toLowerCase();
-
-        return lowerUsername.contains("drop") || lowerUsername.contains("delete") ||
-                lowerUsername.contains("insert") || lowerUsername.contains("update") ||
-                lowerUsername.contains("select") || lowerUsername.contains("'") ||
-                lowerUsername.contains("\"") || lowerUsername.contains(";") ||
-                lowerUsername.contains("cmd") || lowerUsername.contains("powershell") ||
-                lowerUsername.contains("bash") || lowerUsername.contains("sh") ||
-                lowerUsername.contains("$") || lowerUsername.contains("`") ||
-                lowerUsername.contains("../") || lowerUsername.contains("..\\") ||
-                lowerUsername.contains("/") || lowerUsername.contains("\\");
+        
+        return hasSqlInjectionPatterns(lowerUsername) ||
+               hasShellCommandPatterns(lowerUsername) ||
+               hasPathTraversalPatterns(lowerUsername) ||
+               hasSpecialCharacters(lowerUsername);
+    }
+    
+    private static boolean hasSqlInjectionPatterns(String username) {
+        return username.contains("drop") ||
+               username.contains("delete") ||
+               username.contains("insert") ||
+               username.contains("update") ||
+               username.contains("select");
+    }
+    
+    private static boolean hasShellCommandPatterns(String username) {
+        return username.contains("cmd") ||
+               username.contains("powershell") ||
+               username.contains("bash") ||
+               username.contains("sh");
+    }
+    
+    private static boolean hasPathTraversalPatterns(String username) {
+        return username.contains("../") ||
+               username.contains("..\\");
+    }
+    
+    private static boolean hasSpecialCharacters(String username) {
+        return username.contains("'") ||
+               username.contains("\"") ||
+               username.contains(";") ||
+               username.contains("$") ||
+               username.contains("`") ||
+               username.contains("/") ||
+               username.contains("\\");
     }
 
     /**

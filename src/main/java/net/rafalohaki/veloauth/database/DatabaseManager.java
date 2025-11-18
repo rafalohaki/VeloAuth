@@ -247,7 +247,7 @@ public class DatabaseManager {
 
     private void validateConnectionSource() {
         if (connectionSource == null) {
-            throw new RuntimeException(DATABASE_NOT_CONNECTED);
+            throw new IllegalStateException(DATABASE_NOT_CONNECTED);
         }
     }
 
@@ -259,17 +259,17 @@ public class DatabaseManager {
             if (logger.isErrorEnabled()) {
                 logger.error(DB_MARKER, "Błąd SQL podczas transakcji", e);
             }
-            throw new RuntimeException("SQL transaction failed", e);
+            throw new DataAccessException("SQL transaction failed", e);
         } catch (IllegalStateException e) {
             if (logger.isErrorEnabled()) {
                 logger.error(DB_MARKER, "Błąd stanu w transakcji DB", e);
             }
-            throw new RuntimeException("Transaction state failed", e);
+            throw new DataAccessException("Transaction state failed", e);
         } catch (RuntimeException e) {
             if (logger.isErrorEnabled()) {
                 logger.error(DB_MARKER, "Błąd wykonania w transakcji DB", e);
             }
-            throw new RuntimeException("Transaction execution failed", e);
+            throw new DataAccessException("Transaction execution failed", e);
         }
     }
 

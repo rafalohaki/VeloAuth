@@ -536,27 +536,49 @@ public class Settings {
     }
 
     private void validateServerSettings() {
+        validateIpLimitSettings();
+        validatePicoLimboServerName();
+        validatePremiumResolverSettings();
+        
+        logger.debug("Walidacja konfiguracji zakończona pomyślnie");
+    }
+    
+    private void validateIpLimitSettings() {
         if (ipLimitRegistrations <= 0) {
             throw new IllegalArgumentException("IP limit registrations musi być > 0");
         }
-
+    }
+    
+    private void validatePicoLimboServerName() {
         if (picoLimboServerName == null || picoLimboServerName.trim().isEmpty()) {
             throw new IllegalArgumentException("PicoLimbo server name nie może być pusty");
         }
-
-        // Walidacja premium resolvera
+    }
+    
+    private void validatePremiumResolverSettings() {
         PremiumResolverSettings resolver = premiumSettings.getResolver();
+        
+        validateResolverSources(resolver);
+        validateResolverTimeout(resolver);
+        validateResolverTtl(resolver);
+    }
+    
+    private void validateResolverSources(PremiumResolverSettings resolver) {
         if (!resolver.isMojangEnabled() && !resolver.isAshconEnabled() && !resolver.isWpmeEnabled()) {
             throw new IllegalArgumentException("Premium resolver: co najmniej jedno źródło (mojang/ashcon/wpme) musi być włączone");
         }
+    }
+    
+    private void validateResolverTimeout(PremiumResolverSettings resolver) {
         if (resolver.getRequestTimeoutMs() <= 0) {
             throw new IllegalArgumentException("Premium resolver: request-timeout-ms musi być > 0");
         }
+    }
+    
+    private void validateResolverTtl(PremiumResolverSettings resolver) {
         if (resolver.getHitTtlMinutes() < 0 || resolver.getMissTtlMinutes() < 0) {
             throw new IllegalArgumentException("Premium resolver: TTL w minutach nie mogą być ujemne");
         }
-
-        logger.debug("Walidacja konfiguracji zakończona pomyślnie");
     }
 
     private void validateLanguageSettings() {

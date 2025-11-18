@@ -648,63 +648,69 @@ public class CommandHandler {
             String subcommand = args[0].toLowerCase();
 
             switch (subcommand) {
-                case "reload" -> {
-                    boolean success = plugin.reloadConfig();
-                    if (success) {
-                        source.sendMessage(ValidationUtils.createSuccessComponent(messages.get("admin.reload.success")));
-                    } else {
-                        source.sendMessage(ValidationUtils.createErrorComponent(messages.get("admin.reload.failed")));
-                    }
-                }
-                case "cache-reset" -> {
-                    if (args.length == 2) {
-                        String nickname = args[1];
-                        plugin.getServer().getPlayer(nickname).ifPresentOrElse(
-                                player -> {
-                                    authCache.removeAuthorizedPlayer(player.getUniqueId());
-                                    source.sendMessage(ValidationUtils.createSuccessComponent(messages.get("admin.cache_reset.player", nickname)));
-                                },
-                                () -> source.sendMessage(ValidationUtils.createErrorComponent(messages.get("admin.cache_reset.player_not_found", nickname)))
-                        );
-                    } else {
-                        authCache.clearAll();
-                        source.sendMessage(ValidationUtils.createSuccessComponent(messages.get("admin.cache_reset.success")));
-                    }
-                }
-                case "stats" -> {
-                    var totalF = databaseManager.getTotalRegisteredAccounts();
-                    var premiumF = databaseManager.getTotalPremiumAccounts();
-                    var nonPremiumF = databaseManager.getTotalNonPremiumAccounts();
-
-                    // Wait for all database operations to complete
-                    java.util.concurrent.CompletableFuture.allOf(totalF, premiumF, nonPremiumF).join();
-                    int total = totalF.join();
-                    int premium = premiumF.join();
-                    int nonPremium = nonPremiumF.join();
-                    double pct = total > 0 ? (premium * 100.0 / total) : 0.0;
-
-                    // Get cache stats AFTER database operations complete
-                    var cacheStats = authCache.getStats();
-                    int dbCacheSize = databaseManager.getCacheSize();
-                    String dbStatus = databaseManager.isConnected() ? messages.get("database.connected") : messages.get("database.disconnected");
-
-                    // Build complete stats message in fixed order
-                    StringBuilder statsMessage = new StringBuilder();
-                    statsMessage.append(messages.get("admin.stats.header")).append("\n");
-                    statsMessage.append(messages.get("admin.stats.premium_accounts", premium)).append("\n");
-                    statsMessage.append(messages.get("admin.stats.nonpremium_accounts", nonPremium)).append("\n");
-                    statsMessage.append(messages.get("admin.stats.total_accounts", total)).append("\n");
-                    statsMessage.append(messages.get("admin.stats.premium_percentage", pct)).append("\n");
-                    statsMessage.append(messages.get("admin.stats.authorized_players", cacheStats.authorizedPlayersCount())).append("\n");
-                    statsMessage.append(messages.get("admin.stats.premium_cache", cacheStats.premiumCacheCount())).append("\n");
-                    statsMessage.append(messages.get("admin.stats.database_cache", dbCacheSize)).append("\n");
-                    statsMessage.append(messages.get("admin.stats.database_status", (Object) dbStatus));
-
-                    // Send complete message as single component
-                    CommandHelper.sendWarning(source, statsMessage.toString());
-                }
+                case "reload" -> handleReloadCommand(source);
+                case "cache-reset" -> handleCacheResetCommand(source, args);
+                case "stats" -> handleStatsCommand(source);
                 default -> sendAdminHelp(source);
             }
+        }
+        
+        private void handleReloadCommand(CommandSource source) {
+            boolean success = plugin.reloadConfig();
+            if (success) {
+                source.sendMessage(ValidationUtils.createSuccessComponent(messages.get("admin.reload.success")));
+            } else {
+                source.sendMessage(ValidationUtils.createErrorComponent(messages.get("admin.reload.failed")));
+            }
+        }
+        
+        private void handleCacheResetCommand(CommandSource source, String[] args) {
+            if (args.length == 2) {
+                String nickname = args[1];
+                plugin.getServer().getPlayer(nickname).ifPresentOrElse(
+                        player -> {
+                            authCache.removeAuthorizedPlayer(player.getUniqueId());
+                            source.sendMessage(ValidationUtils.createSuccessComponent(messages.get("admin.cache_reset.player", nickname)));
+                        },
+                        () -> source.sendMessage(ValidationUtils.createErrorComponent(messages.get("admin.cache_reset.player_not_found", nickname)))
+                );
+            } else {
+                authCache.clearAll();
+                source.sendMessage(ValidationUtils.createSuccessComponent(messages.get("admin.cache_reset.success")));
+            }
+        }
+        
+        private void handleStatsCommand(CommandSource source) {
+            var totalF = databaseManager.getTotalRegisteredAccounts();
+            var premiumF = databaseManager.getTotalPremiumAccounts();
+            var nonPremiumF = databaseManager.getTotalNonPremiumAccounts();
+
+            // Wait for all database operations to complete
+            java.util.concurrent.CompletableFuture.allOf(totalF, premiumF, nonPremiumF).join();
+            int total = totalF.join();
+            int premium = premiumF.join();
+            int nonPremium = nonPremiumF.join();
+            double pct = total > 0 ? (premium * 100.0 / total) : 0.0;
+
+            // Get cache stats AFTER database operations complete
+            var cacheStats = authCache.getStats();
+            int dbCacheSize = databaseManager.getCacheSize();
+            String dbStatus = databaseManager.isConnected() ? messages.get("database.connected") : messages.get("database.disconnected");
+
+            // Build complete stats message in fixed order
+            StringBuilder statsMessage = new StringBuilder();
+            statsMessage.append(messages.get("admin.stats.header")).append("\n");
+            statsMessage.append(messages.get("admin.stats.premium_accounts", premium)).append("\n");
+            statsMessage.append(messages.get("admin.stats.nonpremium_accounts", nonPremium)).append("\n");
+            statsMessage.append(messages.get("admin.stats.total_accounts", total)).append("\n");
+            statsMessage.append(messages.get("admin.stats.premium_percentage", pct)).append("\n");
+            statsMessage.append(messages.get("admin.stats.authorized_players", cacheStats.authorizedPlayersCount())).append("\n");
+            statsMessage.append(messages.get("admin.stats.premium_cache", cacheStats.premiumCacheCount())).append("\n");
+            statsMessage.append(messages.get("admin.stats.database_cache", dbCacheSize)).append("\n");
+            statsMessage.append(messages.get("admin.stats.database_status", (Object) dbStatus));
+
+            // Send complete message as single component
+            CommandHelper.sendWarning(source, statsMessage.toString());
         }
 
         private void sendAdminHelp(CommandSource source) {

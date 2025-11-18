@@ -77,15 +77,7 @@ public class ConnectionManager {
     public CompletableFuture<Boolean> handlePlayerConnection(Player player) {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                // CRITICAL SECURITY: Block connections until plugin is fully initialized
-                if (!plugin.isInitialized()) {
-                    logger.warn("🔒 BLOKADA STARTU: Gracz {} próbował połączyć się przed pełną inicjalizacją VeloAuth - rozłączanie",
-                            player.getUsername());
-
-                    player.disconnect(Component.text(
-                            "VeloAuth się uruchamia. Spróbuj połączyć się ponownie za chwilę.",
-                            NamedTextColor.RED
-                    ));
+                if (!isPluginReady(player)) {
                     return false;
                 }
 
@@ -95,51 +87,78 @@ public class ConnectionManager {
                 logger.debug("Obsługa połączenia gracza {} z IP {}",
                         player.getUsername(), playerIp);
 
-                // Sprawdź brute force block
-                if (playerAddress != null && authCache.isBlocked(playerAddress)) {
-                    logger.warn("Gracz {} zablokowany za brute force z IP {}",
-                            player.getUsername(), playerIp);
-
-                    player.disconnect(Component.text(
-                            "Zbyt wiele nieudanych prób logowania. Spróbuj ponownie później.",
-                            NamedTextColor.RED
-                    ));
+                if (isPlayerBlocked(player, playerAddress, playerIp)) {
                     return false;
                 }
 
-                // Sprawdź cache autoryzacji
-                CachedAuthUser cachedUser = authCache.getAuthorizedPlayer(player.getUniqueId());
-
-                if (cachedUser != null && cachedUser.matchesIp(playerIp)) {
-                    // Cache HIT - gracz jest autoryzowany
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Cache HIT dla gracza {} - transfer na backend", player.getUsername());
-                    }
-
-                    // Weryfikuj z bazą danych dla bezpieczeństwa
-                    return verifyAndTransferToBackend(player, cachedUser);
-
-                } else {
-                    // Cache MISS - gracz musi się zalogować
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Cache MISS dla gracza {} - transfer na PicoLimbo", player.getUsername());
-                    }
-
-                    return transferToPicoLimbo(player);
-                }
+                return handleAuthCache(player, playerIp);
 
             } catch (Exception e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error("Błąd podczas obsługi połączenia gracza: {}", player.getUsername(), e);
-                }
-
-                player.disconnect(Component.text(
-                        "Wystąpił błąd podczas łączenia. Spróbuj ponownie.",
-                        NamedTextColor.RED
-                ));
-                return false;
+                return handleConnectionError(player, e);
             }
         });
+    }
+    
+    private boolean isPluginReady(Player player) {
+        if (!plugin.isInitialized()) {
+            logger.warn("🔒 BLOKADA STARTU: Gracz {} próbował połączyć się przed pełną inicjalizacją VeloAuth - rozłączanie",
+                    player.getUsername());
+
+            player.disconnect(Component.text(
+                    "VeloAuth się uruchamia. Spróbuj połączyć się ponownie za chwilę.",
+                    NamedTextColor.RED
+            ));
+            return false;
+        }
+        return true;
+    }
+    
+    private boolean isPlayerBlocked(Player player, InetAddress playerAddress, String playerIp) {
+        if (playerAddress != null && authCache.isBlocked(playerAddress)) {
+            logger.warn("Gracz {} zablokowany za brute force z IP {}",
+                    player.getUsername(), playerIp);
+
+            player.disconnect(Component.text(
+                    "Zbyt wiele nieudanych prób logowania. Spróbuj ponownie później.",
+                    NamedTextColor.RED
+            ));
+            return true;
+        }
+        return false;
+    }
+    
+    private boolean handleAuthCache(Player player, String playerIp) {
+        CachedAuthUser cachedUser = authCache.getAuthorizedPlayer(player.getUniqueId());
+
+        if (cachedUser != null && cachedUser.matchesIp(playerIp)) {
+            // Cache HIT - gracz jest autoryzowany
+            if (logger.isDebugEnabled()) {
+                logger.debug("Cache HIT dla gracza {} - transfer na backend", player.getUsername());
+            }
+
+            // Weryfikuj z bazą danych dla bezpieczeństwa
+            return verifyAndTransferToBackend(player, cachedUser);
+
+        } else {
+            // Cache MISS - gracz musi się zalogować
+            if (logger.isDebugEnabled()) {
+                logger.debug("Cache MISS dla gracza {} - transfer na PicoLimbo", player.getUsername());
+            }
+
+            return transferToPicoLimbo(player);
+        }
+    }
+    
+    private boolean handleConnectionError(Player player, Exception e) {
+        if (logger.isErrorEnabled()) {
+            logger.error("Błąd podczas obsługi połączenia gracza: {}", player.getUsername(), e);
+        }
+
+        player.disconnect(Component.text(
+                "Wystąpił błąd podczas łączenia. Spróbuj ponownie.",
+                NamedTextColor.RED
+        ));
+        return false;
     }
 
     /**

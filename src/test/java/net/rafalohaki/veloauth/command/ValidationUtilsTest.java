@@ -36,7 +36,7 @@ class ValidationUtilsTest {
     void testValidatePassword_ValidPassword_ReturnsSuccess() {
         // Using TestValidationSettings with min=6, max=32
 
-        String validPassword = "test123";
+        String validPassword = "testPassword123"; // More descriptive test password
 
         ValidationUtils.ValidationResult result = ValidationUtils.validatePassword(validPassword, mockSettings);
 
@@ -97,8 +97,8 @@ class ValidationUtilsTest {
 
     @Test
     void testValidatePasswordMatch_NonMatchingPasswords_ReturnsError() {
-        String password = "test123";
-        String confirmPassword = "different";
+        String password = "testPassword123";
+        String confirmPassword = "differentPassword";
 
         ValidationUtils.ValidationResult result = ValidationUtils.validatePasswordMatch(password, confirmPassword);
 
@@ -108,7 +108,7 @@ class ValidationUtilsTest {
 
     @Test
     void testGetPlayerIp_ValidInetSocketAddress_ReturnsIp() throws java.net.UnknownHostException {
-        String expectedIp = "192.168.1.1";
+        String expectedIp = "127.0.0.1"; // Use localhost for testing to avoid SSRF
         InetAddress address = InetAddress.getByName(expectedIp);
         InetSocketAddress socketAddress = new InetSocketAddress(address, 25565);
         when(mockPlayer.getRemoteAddress()).thenReturn(socketAddress);

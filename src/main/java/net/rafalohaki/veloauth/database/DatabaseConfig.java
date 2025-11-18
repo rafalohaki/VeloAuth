@@ -62,11 +62,11 @@ public final class DatabaseConfig {
     private final String jdbcUrl;
 
     /**
-     * Tworzy nową konfigurację bazy danych.
+     * Konstruktor podstawowy.
      *
      * @param storageType        Typ bazy danych
-     * @param hostname           Hostname serwera
-     * @param port               Port serwera
+     * @param hostname           Hostname
+     * @param port               Port
      * @param database           Nazwa bazy danych
      * @param user               Użytkownik
      * @param password           Hasło
@@ -76,33 +76,11 @@ public final class DatabaseConfig {
                           String database, String user, String password,
                           int connectionPoolSize) {
 
-        // Walidacja parametrów
-        if (storageType == null || storageType.isEmpty()) {
-            throw new IllegalArgumentException("StorageType nie może być pusty");
-        }
-        if (database == null || database.isEmpty()) {
-            throw new IllegalArgumentException("Database nie może być pusty");
-        }
-        if (connectionPoolSize <= 0) {
-            throw new IllegalArgumentException("ConnectionPoolSize musi być > 0");
-        }
-
-        // Walidacja typu bazy danych
-        DatabaseType dbType = DatabaseType.fromName(storageType);
-        if (dbType == null) {
-            throw new IllegalArgumentException("Nieobsługiwany typ bazy danych: " + storageType);
-        }
-
-        // Walidacja hostname i port dla zdalnych baz
-        if (dbType.isRemoteDatabase()) {
-            if (hostname == null || hostname.isEmpty()) {
-                throw new IllegalArgumentException("Hostname nie może być pusty dla " + storageType);
-            }
-            if (port <= 0 || port > 65535) {
-                throw new IllegalArgumentException("Port musi być w zakresie 1-65535");
-            }
-        }
-
+        validateBasicParameters(storageType, database, connectionPoolSize);
+        DatabaseType dbType = validateDatabaseType(storageType);
+        validateRemoteDatabaseParameters(dbType, hostname, port, storageType);
+        
+        // Assign final fields directly in constructor
         this.storageType = dbType.getName();
         this.hostname = hostname;
         this.port = port;
@@ -112,6 +90,37 @@ public final class DatabaseConfig {
         this.connectionPoolSize = connectionPoolSize;
         this.dataSource = null; // Brak HikariCP w tym konstruktorze
         this.jdbcUrl = buildJdbcUrl(dbType, hostname, port, database, null, null);
+    }
+
+    private void validateBasicParameters(String storageType, String database, int connectionPoolSize) {
+        if (storageType == null || storageType.isEmpty()) {
+            throw new IllegalArgumentException("StorageType nie może być pusty");
+        }
+        if (database == null || database.isEmpty()) {
+            throw new IllegalArgumentException("Database nie może być pusty");
+        }
+        if (connectionPoolSize <= 0) {
+            throw new IllegalArgumentException("ConnectionPoolSize musi być > 0");
+        }
+    }
+
+    private DatabaseType validateDatabaseType(String storageType) {
+        DatabaseType dbType = DatabaseType.fromName(storageType);
+        if (dbType == null) {
+            throw new IllegalArgumentException("Nieobsługiwany typ bazy danych: " + storageType);
+        }
+        return dbType;
+    }
+
+    private void validateRemoteDatabaseParameters(DatabaseType dbType, String hostname, int port, String storageType) {
+        if (dbType.isRemoteDatabase()) {
+            if (hostname == null || hostname.isEmpty()) {
+                throw new IllegalArgumentException("Hostname nie może być pusty dla " + storageType);
+            }
+            if (port <= 0 || port > 65535) {
+                throw new IllegalArgumentException("Port musi być w zakresie 1-65535");
+            }
+        }
     }
 
     /**
