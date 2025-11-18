@@ -70,7 +70,7 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
             }
 
             UUID uuid = parseUuid(uuidStr);
-            if (uuid == null) {
+            if (uuid == null || (uuid.getMostSignificantBits() == 0L && uuid.getLeastSignificantBits() == 0L)) {
                 logger.debug("[{}] Invalid uuid {} for {}", getClass().getSimpleName(), uuidStr, username);
                 return PremiumResolution.unknown(id(), "uuid parse error");
             }

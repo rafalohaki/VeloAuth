@@ -43,6 +43,14 @@ public final class ValidationUtils {
             );
         }
 
+        int byteLength = password.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        if (byteLength > 72) {
+            return ValidationResult.error(
+                    "Hasło jest zbyt długie w UTF-8 (" + byteLength + 
+                    ") bajtów, limit BCrypt to 72 bajty. Użyj krótszego hasła lub mniej znaków Unicode."
+            );
+        }
+
         return ValidationResult.success();
     }
 

@@ -184,9 +184,9 @@ public class PremiumResolverService {
                 if (resolution.uuid() == null) {
                     return PremiumResolution.unknown(source, "missing uuid");
                 }
-                if (resolverSettings.isCaseSensitive() && !canonical.equals(requestName)) {
-                    logger.debug("[PremiumResolver] case mismatch {} vs {} from {}", canonical, requestName, source);
-                    return PremiumResolution.offline(requestName, source, "case mismatch with canonical name");
+                if (!canonical.equalsIgnoreCase(requestName)) {
+                    logger.debug("[PremiumResolver] username mismatch {} vs {} from {}", canonical, requestName, source);
+                    return PremiumResolution.offline(requestName, source, "username mismatch with canonical name");
                 }
                 return PremiumResolution.premium(resolution.uuid(), canonical, source);
             }

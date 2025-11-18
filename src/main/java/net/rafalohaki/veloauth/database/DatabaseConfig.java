@@ -220,20 +220,20 @@ public final class DatabaseConfig {
         hikariConfig.setUsername(user);
         hikariConfig.setPassword(password);
         hikariConfig.setMaximumPoolSize(connectionPoolSize);
-        hikariConfig.setMinimumIdle(Math.max(5, connectionPoolSize / 4)); // 25% jako minimum idle
-        hikariConfig.setMaxLifetime(maxLifetime);
-        hikariConfig.setConnectionTimeout(30000); // 30 sekund dla lepszej kompatybilności z wolnymi sieciami
-        hikariConfig.setIdleTimeout(600000); // 10 minut
+        hikariConfig.setMinimumIdle(5);
+        hikariConfig.setMaxLifetime(900000);
+        hikariConfig.setConnectionTimeout(5000);
+        hikariConfig.setIdleTimeout(300000);
         hikariConfig.setAutoCommit(true);
         hikariConfig.setPoolName("VeloAuth-HikariCP");
 
-        // Dodatkowe ustawienia dla Supabase/zewnętrznych usług
-        hikariConfig.addDataSourceProperty("socketTimeout", "30");
-        hikariConfig.addDataSourceProperty("connectTimeout", "15");
+        // Timeouts for database drivers
+        hikariConfig.addDataSourceProperty("loginTimeout", "3");
+        hikariConfig.addDataSourceProperty("socketTimeout", "3000");
 
-        // Timeout i leak detection
-        hikariConfig.setValidationTimeout(10000);
-        hikariConfig.setLeakDetectionThreshold(60000); // 1 minuta
+        // Validation and leak detection
+        hikariConfig.setValidationTimeout(5000);
+        hikariConfig.setLeakDetectionThreshold(10000);
     }
 
     private static void configureDatabaseOptimizations(HikariConfig hikariConfig, DatabaseType dbType,

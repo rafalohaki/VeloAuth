@@ -222,27 +222,13 @@ public class AuthCache {
             throw new IllegalArgumentException("UUID i user nie mogą być null");
         }
 
-        try {
-            cacheLock.lock();
-            try {
-                // Sprawdź limit rozmiaru cache
-                if (authorizedPlayers.size() >= maxSize && !authorizedPlayers.containsKey(uuid)) {
-                    // Usuń najstarszy wpis
-                    removeOldestAuthorizedPlayer();
-                }
+        if (authorizedPlayers.size() >= maxSize && !authorizedPlayers.containsKey(uuid)) {
+            evictOldestAuthorizedEntryAtomic();
+        }
 
-                authorizedPlayers.put(uuid, user);
-                if (logger.isDebugEnabled()) {
-                    logger.debug(messages.get("cache.debug.auth.added"),
-                            user.getNickname(), uuid);
-                }
-
-            } finally {
-                cacheLock.unlock();
-            }
-
-        } catch (IllegalStateException e) {
-            logger.error(messages.get("cache.error.state.add_player") + uuid, e);
+        authorizedPlayers.put(uuid, user);
+        if (logger.isDebugEnabled()) {
+            logger.debug(messages.get("cache.debug.auth.added"), user.getNickname(), uuid);
         }
     }
 
@@ -352,29 +338,16 @@ public class AuthCache {
             return;
         }
 
-        try {
-            cacheLock.lock();
-            try {
-                // Sprawdź limit rozmiaru premium cache
-                if (premiumCache.size() >= maxPremiumCache && !premiumCache.containsKey(nickname.toLowerCase())) {
-                    // Usuń najstarszy wpis premium
-                    removeOldestPremiumEntry();
-                }
+        String key = nickname.toLowerCase();
+        if (premiumCache.size() >= maxPremiumCache && !premiumCache.containsKey(key)) {
+            evictOldestPremiumEntryAtomic();
+        }
 
-                PremiumCacheEntry entry = new PremiumCacheEntry(premiumUuid != null, premiumUuid);
-                premiumCache.put(nickname.toLowerCase(), entry);
+        PremiumCacheEntry entry = new PremiumCacheEntry(premiumUuid != null, premiumUuid);
+        premiumCache.put(key, entry);
 
-                if (logger.isDebugEnabled()) {
-                    logger.debug(messages.get("cache.debug.premium.added"),
-                            nickname, premiumUuid != null);
-                }
-
-            } finally {
-                cacheLock.unlock();
-            }
-
-        } catch (IllegalStateException e) {
-            logger.error(messages.get("cache.error.state.add_premium") + nickname, e);
+        if (logger.isDebugEnabled()) {
+            logger.debug(messages.get("cache.debug.premium.added"), nickname, premiumUuid != null);
         }
     }
 
@@ -708,29 +681,12 @@ public class AuthCache {
      * Czyści wygasłe wpisy z cache.
      * Usuwa najstarszy wpis autoryzacji.
      */
-    private void removeOldestAuthorizedPlayer() {
-        if (authorizedPlayers.isEmpty()) {
-            return;
-        }
-
-        // Znajdź najstarszy wpis
-        UUID oldestUuid = null;
-        long oldestTime = Long.MAX_VALUE;
-
-        for (Map.Entry<UUID, CachedAuthUser> entry : authorizedPlayers.entrySet()) {
-            long cacheTime = entry.getValue().getCacheTime();
-            if (cacheTime < oldestTime) {
-                oldestTime = cacheTime;
-                oldestUuid = entry.getKey();
-            }
-        }
-
-        if (oldestUuid != null) {
-            CachedAuthUser removed = authorizedPlayers.remove(oldestUuid);
-            if (removed != null) {
-                logger.debug("Usunięto najstarszy wpis cache: {} (UUID: {})",
-                        removed.getNickname(), oldestUuid);
-            }
+    private void evictOldestAuthorizedEntryAtomic() {
+        var oldest = authorizedPlayers.entrySet().stream()
+                .min(java.util.Comparator.comparingLong(e -> e.getValue().getCacheTime()))
+                .orElse(null);
+        if (oldest != null) {
+            authorizedPlayers.remove(oldest.getKey(), oldest.getValue());
         }
     }
 
@@ -766,28 +722,12 @@ public class AuthCache {
     /**
      * Usuwa najstarszy wpis premium cache przy przekroczeniu limitu.
      */
-    private void removeOldestPremiumEntry() {
-        if (premiumCache.isEmpty()) {
-            return;
-        }
-
-        // Znajdź najstarszy wpis premium
-        String oldestNickname = null;
-        long oldestTime = Long.MAX_VALUE;
-
-        for (Map.Entry<String, PremiumCacheEntry> entry : premiumCache.entrySet()) {
-            long cacheTime = entry.getValue().getCacheTime();
-            if (cacheTime < oldestTime) {
-                oldestTime = cacheTime;
-                oldestNickname = entry.getKey();
-            }
-        }
-
-        if (oldestNickname != null) {
-            PremiumCacheEntry removed = premiumCache.remove(oldestNickname);
-            if (removed != null) {
-                logger.debug("Usunięto najstarszy wpis premium cache: {}", oldestNickname);
-            }
+    private void evictOldestPremiumEntryAtomic() {
+        var oldest = premiumCache.entrySet().stream()
+                .min(java.util.Comparator.comparingLong(e -> e.getValue().getCacheTime()))
+                .orElse(null);
+        if (oldest != null) {
+            premiumCache.remove(oldest.getKey(), oldest.getValue());
         }
     }
 
