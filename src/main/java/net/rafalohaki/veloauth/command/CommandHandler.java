@@ -586,13 +586,13 @@ public class CommandHandler {
                             source instanceof Player ? ((Player) source).getUsername() : "CONSOLE", nickname);
 
                 } else {
-                    CommandHelper.sendError(source, messages, "error.database.query");
+                    CommandHelper.sendError(source, messages, ERROR_DATABASE_QUERY);
                     logger.error(DB_MARKER, "Nie udało się usunąć konta gracza {} przez admina", nickname);
                 }
 
             } catch (Exception e) {
                 logger.error(DB_MARKER, "Błąd podczas admin-usuwania konta gracza: {}", nickname, e);
-                CommandHelper.sendError(source, messages, "error.database.query");
+                CommandHelper.sendError(source, messages, ERROR_DATABASE_QUERY);
             }
         }
 
@@ -600,7 +600,7 @@ public class CommandHandler {
             if (result.isDatabaseError()) {
                 logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} {}: {}",
                         operation, nickname, result.getErrorMessage());
-                CommandHelper.sendError(source, messages, "error.database.query");
+                CommandHelper.sendError(source, messages, ERROR_DATABASE_QUERY);
                 return true;
             }
             return false;

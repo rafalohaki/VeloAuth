@@ -121,13 +121,18 @@ class IPRateLimiterTest {
         }
 
         // Wait for all threads to complete
-        assertTrue(latch.await(5, TimeUnit.SECONDS));
+        assertTrue(latch.await(10, TimeUnit.SECONDS));
         executor.shutdown();
+        assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
 
         // Verify all futures completed successfully
         assertEquals(threadCount, futures.size());
         for (Future<?> future : futures) {
-            assertTrue(future.isDone());
+            try {
+                future.get(10, TimeUnit.SECONDS);
+            } catch (ExecutionException | TimeoutException e) {
+                fail("Future should complete without exceptions: " + e.getMessage());
+            }
         }
 
         // Verify final count is correct

@@ -125,13 +125,19 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <version>5.8.0</version>
+            <version>5.12.0</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
-            <version>5.8.0</version>
+            <version>5.12.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>2.0.12</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -175,6 +181,7 @@
                 <version>3.1.2</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
+                    <argLine>--add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED -Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading</argLine>
                 </configuration>
             </plugin>
 

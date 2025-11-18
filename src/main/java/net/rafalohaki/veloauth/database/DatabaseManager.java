@@ -731,8 +731,9 @@ public class DatabaseManager {
      */
     private void migrateAuthTableForLimboauth() throws SQLException {
         try {
-            java.sql.Connection connection = connectionSource.getReadWriteConnection(null).getUnderlyingConnection();
+            DatabaseConnection dbConnection = connectionSource.getReadWriteConnection(null);
             try {
+                java.sql.Connection connection = dbConnection.getUnderlyingConnection();
                 ColumnMigrationResult migrationResult = checkExistingColumns(connection);
                 DatabaseType dbType = DatabaseType.fromName(config.getStorageType());
                 String quote = dbType == DatabaseType.POSTGRESQL ? "\"" : "`";
@@ -741,7 +742,7 @@ public class DatabaseManager {
                 logMigrationComplete(migrationResult);
 
             } finally {
-                // Nie zamykaj połączenia - jest zarządzane przez ConnectionSource
+                connectionSource.releaseConnection(dbConnection);
             }
         } catch (SQLException e) {
             if (logger.isErrorEnabled()) {

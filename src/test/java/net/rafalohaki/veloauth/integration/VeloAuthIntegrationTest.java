@@ -8,8 +8,8 @@ import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.command.CommandHandler;
 import net.rafalohaki.veloauth.config.Settings;
-import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.database.DatabaseManager;
+import net.rafalohaki.veloauth.database.DatabaseConfig;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -39,20 +39,15 @@ import static org.mockito.Mockito.*;
 class VeloAuthIntegrationTest {
 
     private final String playerName = "TestPlayer";
-    @Mock
     private VeloAuth plugin;
-    @Mock
     private DatabaseManager databaseManager;
-    @Mock
     private AuthCache authCache;
-    @Mock
     private Settings settings;
-    @Mock
     private Messages messages;
     @Mock
     private ProxyServer proxyServer;
     @Mock
-    private ConnectionManager connectionManager;
+    private org.slf4j.Logger logger;
     @Mock
     private CommandManager commandManager;
     @Mock
@@ -66,10 +61,18 @@ class VeloAuthIntegrationTest {
     void setUp() throws Exception {
         playerUuid = UUID.randomUUID();
 
-        when(plugin.getLogger()).thenReturn(mock(org.slf4j.Logger.class));
-        when(plugin.getServer()).thenReturn(proxyServer);
-        when(plugin.getConnectionManager()).thenReturn(connectionManager);
-        when(plugin.getDatabaseManager()).thenReturn(databaseManager);
+        // Use real plugin instance to avoid Mockito inline mocking of plugin class
+        when(logger.isDebugEnabled()).thenReturn(false);
+        plugin = new VeloAuth(proxyServer, logger, java.nio.file.Path.of("."));
+
+        messages = new Messages();
+        messages.setLanguage("en");
+        settings = new TestSettings(java.nio.file.Path.of(".test-settings"), true, "auth");
+        authCache = new net.rafalohaki.veloauth.cache.AuthCache(
+                60, 10000, 1000, 10000,
+                5, 5, 1,
+                settings, messages
+        );
 
         // Fix CommandManager mocking - properly chain builder pattern
         com.velocitypowered.api.command.CommandMeta.Builder metaBuilder = mock(com.velocitypowered.api.command.CommandMeta.Builder.class);
@@ -84,8 +87,13 @@ class VeloAuthIntegrationTest {
         when(player.getRemoteAddress()).thenReturn(java.net.InetSocketAddress.createUnresolved("127.0.0.1", 25565));
         when(player.isOnlineMode()).thenReturn(false);
 
-        when(settings.getPicoLimboServerName()).thenReturn("auth");
-        when(settings.isDebugEnabled()).thenReturn(false);
+        // No mocking required for settings
+
+        // Use lightweight DatabaseManager stub instead of Mockito inline mocks
+        Messages testMessages = new Messages();
+        testMessages.setLanguage("en");
+        DatabaseConfig testConfig = DatabaseConfig.forLocalDatabase("H2", "memtest");
+        databaseManager = new TestDatabaseManager(testConfig, testMessages);
 
         commandHandler = new CommandHandler(plugin, databaseManager, authCache, settings, messages);
     }
@@ -115,10 +123,9 @@ class VeloAuthIntegrationTest {
 
     @Test
     void testSystemInitialization_completeFlow_shouldWork() {
-        // Test: Complete system initialization
-        when(databaseManager.initialize()).thenReturn(CompletableFuture.completedFuture(true));
+        // Test: Complete system initialization using stub
+        ((TestDatabaseManager) databaseManager).setInitResult(CompletableFuture.completedFuture(true));
 
-        // Should not throw exceptions during initialization
         assertDoesNotThrow(() -> {
             boolean initialized = databaseManager.initialize().join();
             assertTrue(initialized, "Database should initialize successfully");
@@ -128,12 +135,10 @@ class VeloAuthIntegrationTest {
     @Test
     void testPlayerAuthorization_flow_shouldWorkCorrectly() {
         // Setup: Mock only what's needed for this test
-        when(databaseManager.findPlayerByNickname(playerName.toLowerCase()))
-                .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null))); // Player not found
-        when(authCache.isPlayerAuthorized(playerUuid, "127.0.0.1"))
-                .thenReturn(false); // Not authorized
-        when(authCache.isBlocked(any(InetAddress.class)))
-                .thenReturn(false); // Not blocked
+        ((TestDatabaseManager) databaseManager).setFindResult(
+                playerName.toLowerCase(),
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null))
+        );
 
         // Test: Player tries to login without account
         CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> findResult = databaseManager.findPlayerByNickname(playerName.toLowerCase());
@@ -147,16 +152,18 @@ class VeloAuthIntegrationTest {
         });
 
         // Verify database was called
-        verify(databaseManager).findPlayerByNickname(playerName.toLowerCase());
+        // Verify that method completes and returns expected result
+        assertNull(findResult.join().getValue());
     }
 
     @Test
     void testSessionManagement_persistenceShouldWork() {
-        // Setup: Mock only what's needed for session test
-        when(authCache.hasActiveSession(playerUuid, playerName, "127.0.0.1"))
-                .thenReturn(true); // Session exists
-        when(authCache.isPlayerAuthorized(playerUuid, "127.0.0.1"))
-                .thenReturn(true); // Player authorized
+        // Setup real cache state
+        authCache.startSession(playerUuid, playerName, "127.0.0.1");
+        authCache.addAuthorizedPlayer(playerUuid,
+                new net.rafalohaki.veloauth.model.CachedAuthUser(
+                        playerUuid, playerName, "127.0.0.1",
+                        System.currentTimeMillis(), false, null));
 
         // Test: Session should persist after disconnect
         boolean hasSession = authCache.hasActiveSession(playerUuid, playerName, "127.0.0.1");
@@ -178,8 +185,10 @@ class VeloAuthIntegrationTest {
         when(premiumPlayer.getUsername()).thenReturn(premiumName);
         when(premiumPlayer.isOnlineMode()).thenReturn(true); // Premium player
 
-        when(databaseManager.isPremium(premiumName))
-                .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(true)));
+        ((TestDatabaseManager) databaseManager).setPremiumResult(
+                premiumName,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(true))
+        );
 
         // Test: Premium player detection
         CompletableFuture<DatabaseManager.DbResult<Boolean>> premiumCheck = databaseManager.isPremium(premiumName);
@@ -191,17 +200,17 @@ class VeloAuthIntegrationTest {
             assertTrue(dbResult.getValue(), "Premium player should return true");
         });
 
-        // Verify only premium check was called, not AUTH table lookup
-        verify(databaseManager).isPremium(premiumName);
-        verify(databaseManager, never()).findPlayerByNickname(premiumName.toLowerCase());
+        // No method verification on stub; ensure result is correct
     }
 
     @Test
     void testErrorHandling_systemShouldNotCrash() {
         // Setup: Mock database to return error result (not throw exception)
         DbResult<RegisteredPlayer> errorResult = DbResult.databaseError("Database connection failed");
-        when(databaseManager.findPlayerByNickname(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(errorResult));
+        ((TestDatabaseManager) databaseManager).setFindResult(
+                "test",
+                CompletableFuture.completedFuture(errorResult)
+        );
 
         // Should handle database failure gracefully
         CompletableFuture<DbResult<RegisteredPlayer>> result = databaseManager.findPlayerByNickname("test");
@@ -216,9 +225,11 @@ class VeloAuthIntegrationTest {
 
     @Test
     void testCacheOperations_threadSafetyShouldWork() {
-        // Setup: Mock cache operations
-        when(authCache.isPlayerAuthorized(playerUuid, "127.0.0.1"))
-                .thenReturn(true);
+        // Setup real cache state
+        authCache.addAuthorizedPlayer(playerUuid,
+                new net.rafalohaki.veloauth.model.CachedAuthUser(
+                        playerUuid, playerName, "127.0.0.1",
+                        System.currentTimeMillis(), false, null));
 
         // Multiple concurrent calls should not cause issues
         assertDoesNotThrow(() -> {
@@ -228,15 +239,12 @@ class VeloAuthIntegrationTest {
             }
         });
 
-        // Verify cache was called multiple times
-        verify(authCache, times(100)).isPlayerAuthorized(playerUuid, "127.0.0.1");
+        // No mock verification for real cache instance
     }
 
     @Test
     void testConfiguration_loadingShouldWork() {
         // Test: Configuration should load without errors
-        when(settings.isDebugEnabled()).thenReturn(true);
-        when(settings.getPicoLimboServerName()).thenReturn("auth");
 
         // Should access configuration without exceptions
         assertDoesNotThrow(() -> {

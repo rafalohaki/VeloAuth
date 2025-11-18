@@ -25,18 +25,16 @@ class ValidationUtilsTest {
     @Mock
     private Player mockPlayer;
 
-    @Mock
     private Settings mockSettings;
 
     @BeforeEach
     void setUp() {
-        // Only setup mocks that are actually used
+        mockSettings = new TestValidationSettings(java.nio.file.Path.of(".test-validation"), 6, 32);
     }
 
     @Test
     void testValidatePassword_ValidPassword_ReturnsSuccess() {
-        when(mockSettings.getMinPasswordLength()).thenReturn(6);
-        when(mockSettings.getMaxPasswordLength()).thenReturn(32);
+        // Using TestValidationSettings with min=6, max=32
 
         String validPassword = "test123";
 
@@ -64,7 +62,7 @@ class ValidationUtilsTest {
 
     @Test
     void testValidatePassword_TooShort_ReturnsError() {
-        when(mockSettings.getMinPasswordLength()).thenReturn(6);
+        // Using TestValidationSettings with min=6
 
         String shortPassword = "test";
 
@@ -76,7 +74,7 @@ class ValidationUtilsTest {
 
     @Test
     void testValidatePassword_TooLong_ReturnsError() {
-        when(mockSettings.getMaxPasswordLength()).thenReturn(32);
+        // Using TestValidationSettings with max=32
 
         String longPassword = "a".repeat(33);
 
@@ -109,11 +107,10 @@ class ValidationUtilsTest {
     }
 
     @Test
-    void testGetPlayerIp_ValidInetSocketAddress_ReturnsIp() {
+    void testGetPlayerIp_ValidInetSocketAddress_ReturnsIp() throws java.net.UnknownHostException {
         String expectedIp = "192.168.1.1";
-        InetAddress mockAddress = mock(InetAddress.class);
-        when(mockAddress.getHostAddress()).thenReturn(expectedIp);
-        InetSocketAddress socketAddress = new InetSocketAddress(mockAddress, 25565);
+        InetAddress address = InetAddress.getByName(expectedIp);
+        InetSocketAddress socketAddress = new InetSocketAddress(address, 25565);
         when(mockPlayer.getRemoteAddress()).thenReturn(socketAddress);
 
         String result = ValidationUtils.getPlayerIp(mockPlayer);
@@ -122,14 +119,14 @@ class ValidationUtilsTest {
     }
 
     @Test
-    void testGetPlayerAddress_ValidInetSocketAddress_ReturnsInetAddress() {
-        InetAddress mockAddress = mock(InetAddress.class);
-        InetSocketAddress socketAddress = new InetSocketAddress(mockAddress, 25565);
+    void testGetPlayerAddress_ValidInetSocketAddress_ReturnsInetAddress() throws java.net.UnknownHostException {
+        InetAddress address = InetAddress.getByName("192.168.1.2");
+        InetSocketAddress socketAddress = new InetSocketAddress(address, 25565);
         when(mockPlayer.getRemoteAddress()).thenReturn(socketAddress);
 
         InetAddress result = ValidationUtils.getPlayerAddress(mockPlayer);
 
-        assertEquals(mockAddress, result);
+        assertEquals(address, result);
     }
 
     @Test

@@ -47,16 +47,13 @@ jobs:
       with:
         java-version: '21'
         distribution: 'temurin'
+        cache: 'maven'
         
-    - name: Cache Maven dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.m2
-        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-        restore-keys: ${{ runner.os }}-m2
+    - name: Setup mvnd
+      uses: eclipse-mvnd/setup-mvnd@v1
         
-    - name: Build with Maven
-      run: mvn clean package -B -V
+    - name: Build with mvnd
+      run: mvnd -q -B -V clean package -DskipTests=false
       
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
