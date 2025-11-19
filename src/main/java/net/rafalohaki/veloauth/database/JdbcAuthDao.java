@@ -200,30 +200,27 @@ public final class JdbcAuthDao {
 
     private void bindInsert(PreparedStatement statement, RegisteredPlayer player) throws SQLException {
         statement.setString(1, player.getLowercaseNickname());
-        statement.setString(2, player.getNickname());
-        statement.setString(3, player.getHash());
-        statement.setString(4, player.getIp());
-        statement.setString(5, player.getLoginIp());
-        statement.setString(6, player.getUuid());
-        statement.setLong(7, player.getRegDate());
-        statement.setLong(8, player.getLoginDate());
-        statement.setString(9, player.getPremiumUuid());
-        statement.setString(10, player.getTotpToken());
-        statement.setLong(11, player.getIssuedTime());
+        bindCorePlayerFields(statement, player, 2);
     }
 
     private void bindUpdate(PreparedStatement statement, RegisteredPlayer player) throws SQLException {
-        statement.setString(1, player.getNickname());
-        statement.setString(2, player.getHash());
-        statement.setString(3, player.getIp());
-        statement.setString(4, player.getLoginIp());
-        statement.setString(5, player.getUuid());
-        statement.setLong(6, player.getRegDate());
-        statement.setLong(7, player.getLoginDate());
-        statement.setString(8, player.getPremiumUuid());
-        statement.setString(9, player.getTotpToken());
-        statement.setLong(10, player.getIssuedTime());
-        statement.setString(11, player.getLowercaseNickname());
+        int nextIndex = bindCorePlayerFields(statement, player, 1);
+        statement.setString(nextIndex, player.getLowercaseNickname());
+    }
+
+    private int bindCorePlayerFields(PreparedStatement statement, RegisteredPlayer player, int startIndex) throws SQLException {
+        int idx = startIndex;
+        statement.setString(idx++, player.getNickname());
+        statement.setString(idx++, player.getHash());
+        statement.setString(idx++, player.getIp());
+        statement.setString(idx++, player.getLoginIp());
+        statement.setString(idx++, player.getUuid());
+        statement.setLong(idx++, player.getRegDate());
+        statement.setLong(idx++, player.getLoginDate());
+        statement.setString(idx++, player.getPremiumUuid());
+        statement.setString(idx++, player.getTotpToken());
+        statement.setLong(idx++, player.getIssuedTime());
+        return idx;
     }
 
     private RegisteredPlayer mapPlayer(ResultSet resultSet) throws SQLException {
