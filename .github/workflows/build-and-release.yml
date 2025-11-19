@@ -74,6 +74,7 @@ jobs:
       RELEASE_BODY: ""
       RELEASE_PRERELEASE: "false"
       RELEASE_MAKE_LATEST: "false"
+      RELEASE_NOTES: ""
     
     steps:
     - name: Checkout code
@@ -87,6 +88,19 @@ jobs:
       with:
         name: veloauth-jar
         path: ./
+
+    - name: Generate release notes
+      run: |
+        git fetch --tags --prune
+        git log -n 10 --pretty=format:'- %h %s (%an)' > release_notes.txt || true
+        if [ ! -s release_notes.txt ]; then
+          echo "- No recent commits found." > release_notes.txt
+        fi
+        {
+          echo "RELEASE_NOTES<<'EOF'"
+          cat release_notes.txt
+          echo "EOF"
+        } >> $GITHUB_ENV
         
     
         
@@ -117,14 +131,29 @@ jobs:
         
     - name: Prepare release metadata
       run: |
+        recent_notes="$(cat release_notes.txt)"
         if [ "$VERSION" = "latest" ]; then
           echo "RELEASE_NAME=Rolling Latest Build" >> $GITHUB_ENV
-          echo "RELEASE_BODY=Automated rolling release updated on $(date -u '+%Y-%m-%d %H:%M UTC')." >> $GITHUB_ENV
+          {
+            echo "RELEASE_BODY<<'EOF'"
+            echo "Rolling release updated on $(date -u '+%Y-%m-%d %H:%M UTC')."
+            echo
+            echo "Recent changes:"
+            echo "$recent_notes"
+            echo "EOF"
+          } >> $GITHUB_ENV
           echo "RELEASE_PRERELEASE=false" >> $GITHUB_ENV
           echo "RELEASE_MAKE_LATEST=true" >> $GITHUB_ENV
         else
           echo "RELEASE_NAME=${VERSION}" >> $GITHUB_ENV
-          echo "RELEASE_BODY=Automated release for tag ${VERSION}." >> $GITHUB_ENV
+          {
+            echo "RELEASE_BODY<<'EOF'"
+            echo "Release for tag ${VERSION}."
+            echo
+            echo "Recent changes:"
+            echo "$recent_notes"
+            echo "EOF"
+          } >> $GITHUB_ENV
           echo "RELEASE_PRERELEASE=false" >> $GITHUB_ENV
           echo "RELEASE_MAKE_LATEST=true" >> $GITHUB_ENV
         fi
