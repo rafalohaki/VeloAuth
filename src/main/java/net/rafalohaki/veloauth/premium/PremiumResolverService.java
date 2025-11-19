@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
 /**
@@ -30,7 +31,8 @@ public class PremiumResolverService {
     private final long premiumTtlMillis;
     private final long missTtlMillis;
     private final int maxCacheSize;
-    private final Object cacheSizeLock = new Object();
+    // ReentrantLock prevents virtual thread pinning (Java 21 synchronized issue)
+    private final ReentrantLock cacheSizeLock = new ReentrantLock();
 
     public PremiumResolverService(Logger logger, Settings settings, PremiumUuidDao premiumUuidDao) {
         this.logger = Objects.requireNonNull(logger, "logger");
@@ -222,7 +224,9 @@ public class PremiumResolverService {
         }
 
         // Check cache size and implement LRU eviction if needed
-        synchronized (cacheSizeLock) {
+        // Using ReentrantLock prevents virtual thread pinning (Java 21)
+        cacheSizeLock.lock();
+        try {
             if (cache.size() >= maxCacheSize) {
                 // Remove oldest entries (simple LRU - remove first 10% of entries)
                 int entriesToRemove = Math.max(1, maxCacheSize / 10);
@@ -236,6 +240,8 @@ public class PremiumResolverService {
             }
 
             cache.put(key, new CachedEntry(resolution, System.currentTimeMillis()));
+        } finally {
+            cacheSizeLock.unlock();
         }
     }
 
