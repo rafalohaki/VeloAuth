@@ -25,19 +25,6 @@ public final class JdbcAuthDao {
     private final DatabaseConfig config;
     private final boolean postgres;
 
-    private final String authTable;
-    private final String nicknameColumn;
-    private final String lowercaseNicknameColumn;
-    private final String hashColumn;
-    private final String ipColumn;
-    private final String loginIpColumn;
-    private final String uuidColumn;
-    private final String regDateColumn;
-    private final String loginDateColumn;
-    private final String premiumUuidColumn;
-    private final String totpTokenColumn;
-    private final String issuedTimeColumn;
-
     private final String selectPlayerSql;
     private final String insertPlayerSql;
     private final String updatePlayerSql;
@@ -47,18 +34,18 @@ public final class JdbcAuthDao {
         this.config = Objects.requireNonNull(config, "config nie może być null");
         this.postgres = DatabaseType.POSTGRESQL.getName().equalsIgnoreCase(config.getStorageType());
 
-        this.authTable = table("AUTH");
-        this.nicknameColumn = column("NICKNAME");
-        this.lowercaseNicknameColumn = column("LOWERCASENICKNAME");
-        this.hashColumn = column("HASH");
-        this.ipColumn = column("IP");
-        this.loginIpColumn = column("LOGINIP");
-        this.uuidColumn = column("UUID");
-        this.regDateColumn = column("REGDATE");
-        this.loginDateColumn = column("LOGINDATE");
-        this.premiumUuidColumn = column("PREMIUMUUID");
-        this.totpTokenColumn = column("TOTPTOKEN");
-        this.issuedTimeColumn = column("ISSUEDTIME");
+        String authTable = table("AUTH");
+        String nicknameColumn = column("NICKNAME");
+        String lowercaseNicknameColumn = column("LOWERCASENICKNAME");
+        String hashColumn = column("HASH");
+        String ipColumn = column("IP");
+        String loginIpColumn = column("LOGINIP");
+        String uuidColumn = column("UUID");
+        String regDateColumn = column("REGDATE");
+        String loginDateColumn = column("LOGINDATE");
+        String premiumUuidColumn = column("PREMIUMUUID");
+        String totpTokenColumn = column("TOTPTOKEN");
+        String issuedTimeColumn = column("ISSUEDTIME");
 
         this.selectPlayerSql = "SELECT " + joinColumns(
                 nicknameColumn,

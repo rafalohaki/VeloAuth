@@ -163,16 +163,14 @@ public class CommandHandler {
      * @return DbResult<Boolean> with premium status, or error result
      */
     private DatabaseManager.DbResult<Boolean> checkPremiumStatus(Player player, String operation) {
-        var premiumResult = databaseManager.isPremium(player.getUsername()).join();
-
-        if (premiumResult.isDatabaseError()) {
+        var result = databaseManager.isPremium(player.getUsername()).join();
+        if (result.isDatabaseError()) {
             if (logger.isErrorEnabled()) {
-                logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}", operation, player.getUsername(), premiumResult.getErrorMessage());
+                logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}", operation, player.getUsername(), result.getErrorMessage());
             }
             player.sendMessage(sm.errorDatabase());
         }
-
-        return premiumResult;
+        return result;
     }
 
     /**
@@ -465,65 +463,79 @@ public class CommandHandler {
         }
 
         private void processPasswordChange(Player player, String oldPassword, String newPassword) {
-            // Use template method for common checks
-            AuthenticationContext authContext = validateAndAuthenticatePlayer(player, "password change");
-            if (authContext == null) {
+            AuthenticationContext ctx = preparePasswordChange(player);
+            if (ctx == null) {
                 return;
             }
 
-            // Player must exist for password change
-            if (authContext.registeredPlayer == null) {
-                authContext.player.sendMessage(ValidationUtils.createErrorComponent(messages.get("auth.login.not_registered")));
+            if (!checkOldPassword(ctx, oldPassword)) {
                 return;
             }
 
-            // Verify old password
-            BCrypt.Result result = BCrypt.verifyer().verify(oldPassword.toCharArray(), authContext.registeredPlayer.getHash());
+            if (!updatePassword(ctx, newPassword)) {
+                return;
+            }
+
+            finalizePasswordChange(ctx);
+        }
+
+        private AuthenticationContext preparePasswordChange(Player player) {
+            AuthenticationContext ctx = validateAndAuthenticatePlayer(player, "password change");
+            if (ctx == null) {
+                return null;
+            }
+            if (ctx.registeredPlayer == null) {
+                ctx.player.sendMessage(ValidationUtils.createErrorComponent(messages.get("auth.login.not_registered")));
+                return null;
+            }
+            return ctx;
+        }
+
+        private boolean checkOldPassword(AuthenticationContext ctx, String oldPassword) {
+            BCrypt.Result result = BCrypt.verifyer().verify(oldPassword.toCharArray(), ctx.registeredPlayer.getHash());
             if (!result.verified) {
-                authContext.player.sendMessage(ValidationUtils.createErrorComponent(messages.get("auth.changepassword.incorrect_old_password")));
-                return;
+                ctx.player.sendMessage(ValidationUtils.createErrorComponent(messages.get("auth.changepassword.incorrect_old_password")));
+                return false;
             }
+            return true;
+        }
 
-            // Hash and update password
+        private boolean updatePassword(AuthenticationContext ctx, String newPassword) {
             String newHashedPassword = BCrypt.with(BCrypt.Version.VERSION_2Y)
                     .hashToString(settings.getBcryptCost(), newPassword.toCharArray());
-
-            authContext.registeredPlayer.setHash(newHashedPassword);
-            var saveResult = databaseManager.savePlayer(authContext.registeredPlayer).join();
-
-            if (handleDatabaseError(saveResult, authContext.player, "Password change save failed for")) {
-                return;
+            ctx.registeredPlayer.setHash(newHashedPassword);
+            var saveResult = databaseManager.savePlayer(ctx.registeredPlayer).join();
+            if (handleDatabaseError(saveResult, ctx.player, "Password change save failed for")) {
+                return false;
             }
-
             boolean saved = Boolean.TRUE.equals(saveResult.getValue());
             if (!saved) {
-                authContext.player.sendMessage(ValidationUtils.createErrorComponent(messages.get(ERROR_DATABASE_QUERY)));
-                return;
+                ctx.player.sendMessage(ValidationUtils.createErrorComponent(messages.get(ERROR_DATABASE_QUERY)));
+                return false;
             }
+            return true;
+        }
 
-            // Handle premium status and session cleanup
-            var premiumResult = checkPremiumStatus(authContext.player, "Premium check during password change");
+        private void finalizePasswordChange(AuthenticationContext ctx) {
+            var premiumResult = checkPremiumStatus(ctx.player, "Premium check during password change");
             if (!premiumResult.isDatabaseError() && Boolean.TRUE.equals(premiumResult.getValue())) {
-                authCache.removePremiumPlayer(authContext.username);
+                authCache.removePremiumPlayer(ctx.username);
             }
-
-            // End current session and disconnect duplicates
-            authCache.endSession(authContext.player.getUniqueId());
+            authCache.endSession(ctx.player.getUniqueId());
             plugin.getServer().getAllPlayers().stream()
-                    .filter(p -> !p.equals(authContext.player))
-                    .filter(p -> p.getUsername().equalsIgnoreCase(authContext.username))
+                    .filter(p -> !p.equals(ctx.player))
+                    .filter(p -> p.getUsername().equalsIgnoreCase(ctx.username))
                     .forEach(p -> {
                         p.disconnect(ValidationUtils.createWarningComponent(messages.get("general.kick.message")));
                         if (logger.isWarnEnabled()) {
                             logger.warn("Rozłączono duplikat gracza {} - zmiana hasła z IP {}",
-                                    authContext.username, ValidationUtils.getPlayerIp(authContext.player));
+                                    ctx.username, ValidationUtils.getPlayerIp(ctx.player));
                         }
                     });
-
-            authContext.player.sendMessage(ValidationUtils.createSuccessComponent(messages.get("auth.changepassword.success")));
+            ctx.player.sendMessage(ValidationUtils.createSuccessComponent(messages.get("auth.changepassword.success")));
             if (logger.isInfoEnabled()) {
                 logger.info(AUTH_MARKER, "Gracz {} zmienił hasło z IP {}",
-                        authContext.username, ValidationUtils.getPlayerIp(authContext.player));
+                        ctx.username, ValidationUtils.getPlayerIp(ctx.player));
             }
         }
     }

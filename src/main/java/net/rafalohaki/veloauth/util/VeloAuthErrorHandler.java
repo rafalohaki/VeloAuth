@@ -162,18 +162,12 @@ public final class VeloAuthErrorHandler {
      * @param errorCode The SQL error code
      * @return true if this is a connection-related error code
      */
+    private static final java.util.Set<Integer> CONNECTION_ERROR_CODES = new java.util.HashSet<>(java.util.Arrays.asList(
+            0, 8001, 8003, 8006, 8007, 17002, 17410, 12514, 12541, 12560
+    ));
+
     private static boolean isConnectionErrorCode(int errorCode) {
-        // Common connection error codes for various databases
-        return errorCode == 0 || // Connection failure
-                errorCode == 8001 || // Network error
-                errorCode == 8003 || // Cannot connect
-                errorCode == 8006 || // Connection refused
-                errorCode == 8007 || // Connection timeout
-                errorCode == 17002 || // IO Exception: The Network Adapter could not establish the connection
-                errorCode == 17410 || // No more data to read from socket
-                errorCode == 12514 || // TNS:listener does not currently know of service requested
-                errorCode == 12541 || // TNS:no listener
-                errorCode == 12560; // TNS:protocol adapter error
+        return CONNECTION_ERROR_CODES.contains(errorCode);
     }
 
     /**

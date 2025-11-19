@@ -35,7 +35,6 @@ import java.net.InetSocketAddress;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Listener eventów autoryzacji VeloAuth.
@@ -226,45 +225,39 @@ public class AuthListener {
             return new PremiumResolutionResult(cachedStatus.isPremium(), cachedStatus.getPremiumUuid());
         }
 
-        // Cache miss - resolve via service with timeout to prevent blocking
-        PremiumResolution resolution;
+        PremiumResolution resolution = resolveViaServiceWithTimeout(username);
+        return cacheFromResolution(username, resolution);
+    }
+
+    private PremiumResolution resolveViaServiceWithTimeout(String username) {
         try {
-            // Use CompletableFuture with timeout to prevent blocking PreLoginEvent
-            resolution = CompletableFuture.supplyAsync(() -> premiumResolverService.resolve(username))
-                    .orTimeout(3, TimeUnit.SECONDS) // 3 second timeout for premium resolution
-                    .exceptionally(throwable -> {
-                        if (logger.isWarnEnabled()) {
-                            logger.warn("Premium resolution timeout for {}, treating as offline: {}", username, throwable.getMessage());
-                        }
-                        return PremiumResolution.offline(username, "VeloAuth-Timeout", "Timeout - fallback to offline");
-                    })
+            return java.util.concurrent.CompletableFuture.supplyAsync(() -> premiumResolverService.resolve(username))
+                    .orTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                    .exceptionally(throwable -> PremiumResolution.offline(username, "VeloAuth-Timeout", "Timeout - fallback to offline"))
                     .join();
         } catch (Exception e) {
-            if (logger.isWarnEnabled()) {
-                logger.warn("Premium resolution failed for {}, treating as offline: {}", username, e.getMessage());
-            }
-            resolution = PremiumResolution.offline(username, "VeloAuth-Error", "Error - fallback to offline");
+            return PremiumResolution.offline(username, "VeloAuth-Error", "Error - fallback to offline");
         }
-        boolean premium = false;
-        UUID premiumUuid = null;
+    }
 
+    private PremiumResolutionResult cacheFromResolution(String username, PremiumResolution resolution) {
         if (resolution.isPremium()) {
-            premium = true;
-            premiumUuid = resolution.uuid();
+            UUID premiumUuid = resolution.uuid();
             String canonical = resolution.canonicalUsername() != null ? resolution.canonicalUsername() : username;
             authCache.addPremiumPlayer(canonical, premiumUuid);
             if (logger.isInfoEnabled()) {
                 logger.info(messages.get("player.premium.confirmed"), username, resolution.source(), premiumUuid);
             }
-        } else if (resolution.isOffline()) {
+            return new PremiumResolutionResult(true, premiumUuid);
+        }
+        if (resolution.isOffline()) {
             authCache.addPremiumPlayer(username, null);
             logger.debug("{} nie jest premium (resolver: {}, info: {})", username, resolution.source(), resolution.message());
-        } else {
-            logger.warn("⚠️ Nie udało się jednoznacznie potwierdzić statusu premium dla {} (resolver: {}, info: {})",
-                    username, resolution.source(), resolution.message());
+            return new PremiumResolutionResult(false, null);
         }
-
-        return new PremiumResolutionResult(premium, premiumUuid);
+        logger.warn("⚠️ Nie udało się jednoznacznie potwierdzić statusu premium dla {} (resolver: {}, info: {})",
+                username, resolution.source(), resolution.message());
+        return new PremiumResolutionResult(false, null);
     }
 
     /**

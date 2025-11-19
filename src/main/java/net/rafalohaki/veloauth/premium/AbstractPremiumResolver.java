@@ -38,45 +38,13 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
 
     @Override
     public PremiumResolution resolve(String username) {
-        if (!enabled) {
-            return PremiumResolution.unknown(id(), "disabled");
+        PremiumResolution pre = preResolve(username);
+        if (pre != null) {
+            return pre;
         }
-
-        // Rate limiting check
-        if (isRateLimited()) {
-            logger.debug("[{}] Rate limited for {}", getClass().getSimpleName(), username);
-            return PremiumResolution.unknown(id(), "rate limited");
-        }
-
         try {
             HttpJsonClient.HttpJsonResponse response = HttpJsonClient.get(getEndpoint(), username, timeoutMs);
-            int code = response.statusCode();
-
-            if (isNotFoundResponse(code)) {
-                return PremiumResolution.offline(username, id(), "not found");
-            }
-            if (code != HttpURLConnection.HTTP_OK) {
-                logger.debug("[{}] HTTP {} for {}", getClass().getSimpleName(), code, username);
-                return PremiumResolution.unknown(id(), "http " + code);
-            }
-
-            String body = response.body();
-            String uuidStr = extractUuidField(body);
-            String canonical = extractUsernameField(body);
-
-            if (uuidStr == null || canonical == null) {
-                logger.debug("[{}] Missing fields for {}", getClass().getSimpleName(), username);
-                return PremiumResolution.unknown(id(), "missing fields");
-            }
-
-            UUID uuid = parseUuid(uuidStr);
-            if (uuid == null || (uuid.getMostSignificantBits() == 0L && uuid.getLeastSignificantBits() == 0L)) {
-                logger.debug("[{}] Invalid uuid {} for {}", getClass().getSimpleName(), uuidStr, username);
-                return PremiumResolution.unknown(id(), "uuid parse error");
-            }
-
-            return PremiumResolution.premium(uuid, canonical, id());
-
+            return resolveFromResponse(response, username);
         } catch (IOException ex) {
             logger.debug("[{}] IO error for {}: {}", getClass().getSimpleName(), username, ex.getMessage());
             return PremiumResolution.unknown(id(), "io error");
@@ -149,5 +117,40 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
 
         // Check if rate limit exceeded
         return count.incrementAndGet() > REQUESTS_PER_MINUTE;
+    }
+
+    private PremiumResolution preResolve(String username) {
+        if (!enabled) {
+            return PremiumResolution.unknown(id(), "disabled");
+        }
+        if (isRateLimited()) {
+            logger.debug("[{}] Rate limited for {}", getClass().getSimpleName(), username);
+            return PremiumResolution.unknown(id(), "rate limited");
+        }
+        return null;
+    }
+
+    private PremiumResolution resolveFromResponse(HttpJsonClient.HttpJsonResponse response, String username) {
+        int code = response.statusCode();
+        if (isNotFoundResponse(code)) {
+            return PremiumResolution.offline(username, id(), "not found");
+        }
+        if (code != HttpURLConnection.HTTP_OK) {
+            logger.debug("[{}] HTTP {} for {}", getClass().getSimpleName(), code, username);
+            return PremiumResolution.unknown(id(), "http " + code);
+        }
+        String body = response.body();
+        String uuidStr = extractUuidField(body);
+        String canonical = extractUsernameField(body);
+        if (uuidStr == null || canonical == null) {
+            logger.debug("[{}] Missing fields for {}", getClass().getSimpleName(), username);
+            return PremiumResolution.unknown(id(), "missing fields");
+        }
+        UUID uuid = parseUuid(uuidStr);
+        if (uuid == null || (uuid.getMostSignificantBits() == 0L && uuid.getLeastSignificantBits() == 0L)) {
+            logger.debug("[{}] Invalid uuid {} for {}", getClass().getSimpleName(), uuidStr, username);
+            return PremiumResolution.unknown(id(), "uuid parse error");
+        }
+        return PremiumResolution.premium(uuid, canonical, id());
     }
 }

@@ -135,23 +135,10 @@ public class AuthCache {
                      int maxLoginAttempts, int bruteForceTimeoutMinutes, int cleanupIntervalMinutes,
                      Settings settings, Messages messages) {
 
-        if (ttlMinutes < 0) {
-            throw new IllegalArgumentException(messages.get("validation.ttl.negative"));
-        }
-        if (maxSize <= 0) {
-            throw new IllegalArgumentException(messages.get("validation.maxsize.gt_zero"));
-        }
-        if (maxSessions <= 0) {
-            throw new IllegalArgumentException(messages.get("validation.maxsessions.gt_zero"));
-        }
-        if (maxPremiumCache <= 0) {
-            throw new IllegalArgumentException(messages.get("validation.maxpremiumcache.gt_zero"));
-        }
-        if (maxLoginAttempts <= 0) {
-            throw new IllegalArgumentException(messages.get("validation.maxloginattempts.gt_zero"));
-        }
-        if (bruteForceTimeoutMinutes <= 0) {
-            throw new IllegalArgumentException(messages.get("validation.bruteforcetimeout.gt_zero"));
+        String error = validateParams(ttlMinutes, maxSize, maxSessions, maxPremiumCache,
+                maxLoginAttempts, bruteForceTimeoutMinutes, messages);
+        if (error != null) {
+            throw new IllegalArgumentException(error);
         }
 
         this.ttlMinutes = ttlMinutes;
@@ -208,6 +195,33 @@ public class AuthCache {
             logger.info(messages.get("cache.auth.created"),
                     ttlMinutes, maxSize, maxLoginAttempts, bruteForceTimeoutMinutes);
         }
+    }
+
+    private static final class ParamCheck {
+        final boolean invalid;
+        final String message;
+        ParamCheck(boolean invalid, String message) {
+            this.invalid = invalid;
+            this.message = message;
+        }
+    }
+
+    private static String validateParams(int ttlMinutes, int maxSize, int maxSessions, int maxPremiumCache,
+                                         int maxLoginAttempts, int bruteForceTimeoutMinutes, Messages messages) {
+        ParamCheck[] checks = new ParamCheck[] {
+                new ParamCheck(ttlMinutes < 0, messages.get("validation.ttl.negative")),
+                new ParamCheck(maxSize <= 0, messages.get("validation.maxsize.gt_zero")),
+                new ParamCheck(maxSessions <= 0, messages.get("validation.maxsessions.gt_zero")),
+                new ParamCheck(maxPremiumCache <= 0, messages.get("validation.maxpremiumcache.gt_zero")),
+                new ParamCheck(maxLoginAttempts <= 0, messages.get("validation.maxloginattempts.gt_zero")),
+                new ParamCheck(bruteForceTimeoutMinutes <= 0, messages.get("validation.bruteforcetimeout.gt_zero"))
+        };
+        for (ParamCheck c : checks) {
+            if (c.invalid) {
+                return c.message;
+            }
+        }
+        return null;
     }
 
     /**
@@ -530,40 +544,46 @@ public class AuthCache {
      * Zapobiega session hijacking przez zmianę nicku lub IP.
      */
     public boolean hasActiveSession(UUID uuid, String nickname, String currentIp) {
-        if (uuid == null || nickname == null || currentIp == null) {
+        if (invalidSessionParams(uuid, nickname, currentIp)) {
             return false;
         }
-
         ActiveSession session = activeSessions.get(uuid);
         if (session == null) {
-            return false; // Brak sesji
-        }
-
-        // KLUCZOWE: Sprawdź czy nickname się zgadza
-        if (!session.getNickname().equalsIgnoreCase(nickname)) {
-            if (logger.isWarnEnabled()) {
-                logger.warn(SECURITY_MARKER,
-                        messages.get("security.session.hijack"),
-                        uuid, session.getNickname(), nickname);
-            }
-
-            // Usuń podejrzaną sesję
-            activeSessions.remove(uuid);
             return false;
         }
-
-        // NOWE: Sprawdź czy IP się zgadza
-        if (!session.getIp().equals(currentIp)) {
-            if (logger.isWarnEnabled()) {
-                logger.warn(SECURITY_MARKER, messages.get("security.session.ip.mismatch"),
-                        uuid, session.getIp(), currentIp);
-            }
-            activeSessions.remove(uuid);
+        if (isNicknameMismatch(session, nickname, uuid)) {
             return false;
         }
-
-        // Sesja OK - aktualizuj aktywność
+        if (isIpMismatch(session, currentIp, uuid)) {
+            return false;
+        }
         session.updateActivity();
+        return true;
+    }
+
+    private boolean invalidSessionParams(UUID uuid, String nickname, String currentIp) {
+        return uuid == null || nickname == null || currentIp == null;
+    }
+
+    private boolean isNicknameMismatch(ActiveSession session, String nickname, UUID uuid) {
+        if (session.getNickname().equalsIgnoreCase(nickname)) {
+            return false;
+        }
+        if (logger.isWarnEnabled()) {
+            logger.warn(SECURITY_MARKER, messages.get("security.session.hijack"), uuid, session.getNickname(), nickname);
+        }
+        activeSessions.remove(uuid);
+        return true;
+    }
+
+    private boolean isIpMismatch(ActiveSession session, String currentIp, UUID uuid) {
+        if (session.getIp().equals(currentIp)) {
+            return false;
+        }
+        if (logger.isWarnEnabled()) {
+            logger.warn(SECURITY_MARKER, messages.get("security.session.ip.mismatch"), uuid, session.getIp(), currentIp);
+        }
+        activeSessions.remove(uuid);
         return true;
     }
 

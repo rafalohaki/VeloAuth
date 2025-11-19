@@ -19,7 +19,6 @@ public class PremiumResolverService {
     private static final String RESOLVER_SERVICE = "resolver-service";
 
     private final Logger logger;
-    private final PremiumResolverSettings resolverSettings;
     private final PremiumUuidDao dao; // Renamed to avoid conflict with class name
     private final List<PremiumResolver> resolvers;
     private final ConcurrentHashMap<String, CachedEntry> cache = new ConcurrentHashMap<>();
@@ -30,25 +29,24 @@ public class PremiumResolverService {
 
     public PremiumResolverService(Logger logger, Settings settings, PremiumUuidDao premiumUuidDao) {
         this.logger = Objects.requireNonNull(logger, "logger");
-        this.resolverSettings = Objects.requireNonNull(settings, "settings").getPremiumResolverSettings();
+        PremiumResolverSettings rs = Objects.requireNonNull(settings, "settings").getPremiumResolverSettings();
         this.dao = Objects.requireNonNull(premiumUuidDao, "premiumUuidDao");
 
-        // Debug logging to check actual resolver settings
         logger.info("[PremiumResolver] Config - Mojang: {}, Ashcon: {}, Wpme: {}",
-                resolverSettings.isMojangEnabled(),
-                resolverSettings.isAshconEnabled(),
-                resolverSettings.isWpmeEnabled());
+                rs.isMojangEnabled(),
+                rs.isAshconEnabled(),
+                rs.isWpmeEnabled());
 
-        int timeoutMs = Math.max(100, resolverSettings.getRequestTimeoutMs());
+        int timeoutMs = Math.max(100, rs.getRequestTimeoutMs());
         List<PremiumResolver> resolverList = new ArrayList<>();
-        resolverList.add(new ConfigurablePremiumResolver(logger, resolverSettings.isMojangEnabled(), timeoutMs, ResolverConfig.MOJANG));
-        resolverList.add(new ConfigurablePremiumResolver(logger, resolverSettings.isAshconEnabled(), timeoutMs, ResolverConfig.ASHCON));
-        resolverList.add(new ConfigurablePremiumResolver(logger, resolverSettings.isWpmeEnabled(), timeoutMs, ResolverConfig.WPME));
+        resolverList.add(new ConfigurablePremiumResolver(logger, rs.isMojangEnabled(), timeoutMs, ResolverConfig.MOJANG));
+        resolverList.add(new ConfigurablePremiumResolver(logger, rs.isAshconEnabled(), timeoutMs, ResolverConfig.ASHCON));
+        resolverList.add(new ConfigurablePremiumResolver(logger, rs.isWpmeEnabled(), timeoutMs, ResolverConfig.WPME));
         this.resolvers = Collections.unmodifiableList(resolverList);
 
-        this.premiumTtlMillis = Math.max(0L, resolverSettings.getHitTtlMinutes()) * 60_000L;
-        this.missTtlMillis = Math.max(0L, resolverSettings.getMissTtlMinutes()) * 60_000L;
-        this.maxCacheSize = 10000; // Maximum 10k cached premium resolutions
+        this.premiumTtlMillis = Math.max(0L, rs.getHitTtlMinutes()) * 60_000L;
+        this.missTtlMillis = Math.max(0L, rs.getMissTtlMinutes()) * 60_000L;
+        this.maxCacheSize = 10000;
     }
 
     /**
