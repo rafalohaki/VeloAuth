@@ -264,6 +264,44 @@
                     </execution>
                 </executions>
             </plugin>
+
+            <!-- PMD for static code analysis and CPD for duplicate detection -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-pmd-plugin</artifactId>
+                <version>3.25.0</version>
+                <configuration>
+                    <!-- PMD analysis configuration -->
+                    <rulesets>
+                        <ruleset>${project.basedir}/pmd-ruleset.xml</ruleset>
+                    </rulesets>
+                    <targetJdk>21</targetJdk>
+                    <printFailingErrors>true</printFailingErrors>
+                    <linkXRef>false</linkXRef>
+                    <includeTests>true</includeTests>
+                    <failOnViolation>false</failOnViolation>
+                    
+                    <!-- CPD (Copy-Paste Detector) configuration -->
+                    <minimumTokens>50</minimumTokens> <!-- Minimum size for duplicate detection (50 tokens = ~5-10 lines) -->
+                    <skipEmptyReport>false</skipEmptyReport>
+                    <excludeRoots>
+                        <excludeRoot>target/generated-sources</excludeRoot>
+                    </excludeRoots>
+                    <excludes>
+                        <exclude>**/*Test.java</exclude> <!-- Optionally exclude test files from CPD -->
+                    </excludes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>pmd-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                            <goal>cpd-check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>

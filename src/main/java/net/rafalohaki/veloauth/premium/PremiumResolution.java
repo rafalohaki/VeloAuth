@@ -38,6 +38,10 @@ public record PremiumResolution(
         return status == PremiumStatus.OFFLINE;
     }
 
+    public boolean isUnknown() {
+        return status == PremiumStatus.UNKNOWN;
+    }
+
     public enum PremiumStatus {
         PREMIUM,
         OFFLINE,

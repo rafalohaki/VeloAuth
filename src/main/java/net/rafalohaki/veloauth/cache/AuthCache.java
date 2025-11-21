@@ -278,6 +278,24 @@ public class AuthCache {
     }
 
     /**
+     * Logs cache metrics (hit/miss rate) to avoid code duplication.
+     * PMD CPD fix - extracted from getAuthorizedPlayer.
+     *
+     * @param messageKey Message key for logging
+     * @param args Arguments for log message (UUID, etc.)
+     */
+    private void logCacheMetrics(String messageKey, Object... args) {
+        double rate = (double) cacheHits.get() / Math.max(1, cacheHits.get() + cacheMisses.get()) * 100;
+        String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
+        if (logger.isDebugEnabled()) {
+            Object[] logArgs = new Object[args.length + 1];
+            System.arraycopy(args, 0, logArgs, 0, args.length);
+            logArgs[args.length] = rateStr;
+            logger.debug(messages.get(messageKey), logArgs);
+        }
+    }
+
+    /**
      * Pobiera autoryzowanego gracza z cache.
      *
      * @param uuid UUID gracza
@@ -292,12 +310,7 @@ public class AuthCache {
         CachedAuthUser user = authorizedPlayers.get(uuid);
         if (user == null) {
             cacheMisses.incrementAndGet();
-            double rate = (double) cacheHits.get() / Math.max(1, cacheHits.get() + cacheMisses.get()) * 100;
-            String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
-            if (logger.isDebugEnabled()) {
-                logger.debug(messages.get("cache.debug.uuid.miss"),
-                        uuid, rateStr);
-            }
+            logCacheMetrics("cache.debug.uuid.miss", uuid);
             return null;
         }
 
@@ -305,21 +318,12 @@ public class AuthCache {
         if (!user.isValid(ttlMinutes)) {
             removeAuthorizedPlayer(uuid);
             cacheMisses.incrementAndGet();
-            double rate = (double) cacheHits.get() / Math.max(1, cacheHits.get() + cacheMisses.get()) * 100;
-            String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
-            if (logger.isDebugEnabled()) {
-                logger.debug(messages.get("cache.debug.uuid.expired"),
-                        uuid, rateStr);
-            }
+            logCacheMetrics("cache.debug.uuid.expired", uuid);
             return null;
         }
 
         cacheHits.incrementAndGet();
-        double rate = (double) cacheHits.get() / Math.max(1, cacheHits.get() + cacheMisses.get()) * 100;
-        String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
-        if (logger.isDebugEnabled()) {
-            logger.debug(messages.get("cache.debug.hit.rate"), rateStr);
-        }
+        logCacheMetrics("cache.debug.hit.rate");
         return user;
     }
 

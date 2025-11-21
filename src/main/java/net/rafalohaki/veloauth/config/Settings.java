@@ -28,6 +28,7 @@ public class Settings {
     private final PostgreSQLSettings postgreSQLSettings = new PostgreSQLSettings();
     // Premium settings
     private final PremiumSettings premiumSettings = new PremiumSettings();
+    private final AlertSettings alertSettings = new AlertSettings();
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
     
     // Database settings
@@ -106,6 +107,7 @@ public class Settings {
             loadPicoLimboSettings(config);
             loadSecuritySettings(config);
             loadPremiumSettings(config);
+            loadAlertSettings(config);
             loadDebugSettings(config);
             loadLanguageSettings(config);
 
@@ -209,10 +211,24 @@ public class Settings {
                     mojang-enabled: true # Query Mojang API
                     ashcon-enabled: true # Query Ashcon API
                     wpme-enabled: false # Query WPME API
-                    request-timeout-ms: 400 # Per-request timeout in milliseconds
+                    request-timeout-ms: 2000 # Per-request timeout in milliseconds (2 seconds)
                     hit-ttl-minutes: 10 # Cache TTL for positive hits
                     miss-ttl-minutes: 3 # Cache TTL for misses
                     case-sensitive: true # Preserve username case in resolver cache
+                
+                # Alert system configuration (optional - Discord webhook notifications)
+                alerts:
+                  enabled: false # Enable/disable alert system
+                  failure-rate-threshold: 0.5 # Alert when failure rate exceeds 50%
+                  min-requests-for-alert: 10 # Minimum requests before sending alert
+                  check-interval-minutes: 5 # Check metrics every 5 minutes
+                  alert-cooldown-minutes: 30 # Cooldown between alerts (prevent spam)
+                  
+                  # Discord webhook configuration (optional)
+                  discord:
+                    enabled: false # Enable Discord webhook notifications
+                    webhook-url: "" # Discord webhook URL (get from Discord server settings)
+                    # Example: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
                 """;
 
         Files.writeString(configFile, defaultConfig);
@@ -468,6 +484,31 @@ public class Settings {
     }
 
     /**
+     * Ładuje ustawienia alertów (Discord webhooks).
+     */
+    private void loadAlertSettings(Map<String, Object> config) {
+        Object alertSection = config.get("alerts");
+        if (alertSection instanceof Map<?, ?>) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> alerts = (Map<String, Object>) alertSection;
+            alertSettings.setEnabled(getBoolean(alerts, "enabled", alertSettings.isEnabled()));
+            alertSettings.setFailureRateThreshold(getDouble(alerts, "failure-rate-threshold", alertSettings.getFailureRateThreshold()));
+            alertSettings.setMinRequestsForAlert(getInt(alerts, "min-requests-for-alert", alertSettings.getMinRequestsForAlert()));
+            alertSettings.setCheckIntervalMinutes(getInt(alerts, "check-interval-minutes", alertSettings.getCheckIntervalMinutes()));
+            alertSettings.setAlertCooldownMinutes(getInt(alerts, "alert-cooldown-minutes", alertSettings.getAlertCooldownMinutes()));
+
+            // Discord webhook settings
+            Object discordSection = alerts.get("discord");
+            if (discordSection instanceof Map<?, ?>) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> discord = (Map<String, Object>) discordSection;
+                alertSettings.setDiscordEnabled(getBoolean(discord, "enabled", alertSettings.isDiscordEnabled()));
+                alertSettings.setDiscordWebhookUrl(getString(discord, "webhook-url", alertSettings.getDiscordWebhookUrl()));
+            }
+        }
+    }
+
+    /**
      * Waliduje ustawienia konfiguracji.
      */
     private void validateSettings() {
@@ -479,6 +520,7 @@ public class Settings {
         validatePicoLimboSettings();
         validateServerSettings();
         validateLanguageSettings();
+        validatePremiumResolverSettings();
     }
 
     private void validateDatabaseType() {
@@ -850,7 +892,7 @@ public class Settings {
         private boolean mojangEnabled = true;
         private boolean ashconEnabled = true;
         private boolean wpmeEnabled = false;
-        private int requestTimeoutMs = 400;
+        private int requestTimeoutMs = 2000;
         private int hitTtlMinutes = 10;
         private int missTtlMinutes = 3;
         private boolean caseSensitive = true;
@@ -1000,5 +1042,78 @@ public class Settings {
         public PremiumResolverSettings getResolver() {
             return resolver;
         }
+    }
+
+    /**
+     * Alert system configuration for Discord webhooks.
+     */
+    public static class AlertSettings {
+        private boolean enabled = false;
+        private boolean discordEnabled = false;
+        private String discordWebhookUrl = "";
+        private double failureRateThreshold = 0.5; // 50% failure rate
+        private int minRequestsForAlert = 10; // Minimum requests before alerting
+        private int checkIntervalMinutes = 5; // Check every 5 minutes
+        private int alertCooldownMinutes = 30; // Don't spam alerts (30 min cooldown)
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        void setEnabled(boolean value) {
+            this.enabled = value;
+        }
+
+        public boolean isDiscordEnabled() {
+            return discordEnabled;
+        }
+
+        void setDiscordEnabled(boolean value) {
+            this.discordEnabled = value;
+        }
+
+        public String getDiscordWebhookUrl() {
+            return discordWebhookUrl;
+        }
+
+        void setDiscordWebhookUrl(String value) {
+            this.discordWebhookUrl = value;
+        }
+
+        public double getFailureRateThreshold() {
+            return failureRateThreshold;
+        }
+
+        void setFailureRateThreshold(double value) {
+            this.failureRateThreshold = value;
+        }
+
+        public int getMinRequestsForAlert() {
+            return minRequestsForAlert;
+        }
+
+        void setMinRequestsForAlert(int value) {
+            this.minRequestsForAlert = value;
+        }
+
+        public int getCheckIntervalMinutes() {
+            return checkIntervalMinutes;
+        }
+
+        void setCheckIntervalMinutes(int value) {
+            this.checkIntervalMinutes = value;
+        }
+
+        public int getAlertCooldownMinutes() {
+            return alertCooldownMinutes;
+        }
+
+        void setAlertCooldownMinutes(int value) {
+            this.alertCooldownMinutes = value;
+        }
+    }
+
+    public AlertSettings getAlertSettings() {
+        return alertSettings;
     }
 }

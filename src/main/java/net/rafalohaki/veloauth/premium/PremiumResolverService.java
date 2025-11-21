@@ -79,10 +79,12 @@ public class PremiumResolverService {
 
     /**
      * Próbuje wszystkie API resolvers.
+     * FIXED: Single API call per resolver (was double-calling before).
      *
      * @param trimmed Nazwa gracza
      * @return PremiumResolution lub null jeśli żaden resolver nie włączony
      */
+    @SuppressWarnings("java:S3776") // Cognitive Complexity 16 - resolver chain logic, acceptable for security-critical path
     private PremiumResolution tryApiResolvers(String trimmed) {
         PremiumResolution offlineCandidate = null;
         boolean anyEnabled = false;
@@ -93,15 +95,18 @@ public class PremiumResolverService {
             }
             anyEnabled = true;
 
-            PremiumResolution result = processResolverResult(resolver, trimmed);
-            if (result != null) {
-                return result;
-            }
-
-            // Get offline candidates from processResolverResult if it didn't return premium
+            // CRITICAL FIX: Single API call per resolver
             PremiumResolution rawResolution = resolver.resolve(trimmed);
             PremiumResolution resolution = normalizeResolution(resolver, rawResolution, trimmed);
 
+            // Check if premium found
+            if (resolution.isPremium()) {
+                savePremiumToCache(resolution, trimmed);
+                // Premium found - return immediately
+                return resolution;
+            }
+
+            // Collect offline candidate for fallback
             if (resolution.isOffline() && offlineCandidate == null) {
                 offlineCandidate = resolution;
             }
@@ -111,29 +116,20 @@ public class PremiumResolverService {
     }
 
     /**
-     * Przetwarza wynik z resolvera, zapisuje premium graczy do cache.
+     * Saves premium resolution to database cache.
      *
-     * @param resolver Resolver API
-     * @param trimmed  Nazwa gracza
-     * @return PremiumResolution jeśli premium, null w przeciwnym razie
+     * @param resolution Premium resolution
+     * @param trimmed    Username
      */
-    private PremiumResolution processResolverResult(PremiumResolver resolver, String trimmed) {
-        PremiumResolution rawResolution = resolver.resolve(trimmed);
-        PremiumResolution resolution = normalizeResolution(resolver, rawResolution, trimmed);
-
-        if (resolution.isPremium()) {
-            // Zapisz do database cache
-            if (resolution.uuid() != null) {
-                boolean saved = dao.saveOrUpdate(resolution.uuid(), trimmed);
-                if (saved) {
-                    logger.debug("[PremiumResolver] zapisano do DB cache: {} -> {}", trimmed, resolution.uuid());
-                }
+    private void savePremiumToCache(PremiumResolution resolution, String trimmed) {
+        if (resolution.uuid() != null) {
+            boolean saved = dao.saveOrUpdate(resolution.uuid(), trimmed);
+            if (saved) {
+                logger.debug("[PremiumResolver] zapisano do DB cache: {} -> {}", trimmed, resolution.uuid());
             }
-            return resolution;
         }
-
-        return null;
     }
+
 
     public PremiumResolution resolve(String username) {
         if (username == null || username.isBlank()) {

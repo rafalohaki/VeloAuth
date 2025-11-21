@@ -13,8 +13,8 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class CommandHelper {
 
-    private static final String MSG_SERVER_SHUTTING_DOWN = "Serwer się wyłącza. Spróbuj ponownie później.";
-    private static final String MSG_SERVER_OVERLOADED = "Serwer jest przeciążony. Spróbuj ponownie za chwilę.";
+    private static final String MSG_SERVER_SHUTTING_DOWN = "⚠ Serwer jest wyłączany, nie można wykonać komendy";
+    private static final String MSG_SERVER_OVERLOADED = "⚠ Serwer jest przeciążony, spróbuj ponownie za chwilę";
 
     private CommandHelper() {
         // Utility class - prevent instantiation
@@ -103,6 +103,23 @@ public final class CommandHelper {
     }
 
     /**
+     * Handles async command exceptions (PMD CPD fix - extracted duplicate error handling).
+     *
+     * @param throwable Exception that occurred
+     * @param source    Command source for error messages
+     * @param messages  Messages for error reporting
+     * @param errorKey  Message key for database errors
+     */
+    private static void handleAsyncCommandException(Throwable throwable, CommandSource source, 
+                                                     Messages messages, String errorKey) {
+        if (throwable instanceof java.util.concurrent.RejectedExecutionException) {
+            source.sendMessage(ValidationUtils.createErrorComponent(MSG_SERVER_OVERLOADED));
+        } else {
+            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(errorKey)));
+        }
+    }
+
+    /**
      * Executes a command asynchronously with standard exception handling.
      *
      * @param task     Command task to execute
@@ -122,11 +139,7 @@ public final class CommandHelper {
             // skipcq: JAVA-W1087 - Future handled with exceptionally, fire-and-forget operation
             CompletableFuture.runAsync(task, VirtualThreadExecutorProvider.getVirtualExecutor())
                     .exceptionally(throwable -> {
-                        if (throwable instanceof java.util.concurrent.RejectedExecutionException) {
-                            source.sendMessage(ValidationUtils.createErrorComponent(MSG_SERVER_OVERLOADED));
-                        } else {
-                            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(errorKey)));
-                        }
+                        handleAsyncCommandException(throwable, source, messages, errorKey);
                         return null;
                     });
         } catch (java.util.concurrent.RejectedExecutionException e) {
@@ -158,10 +171,8 @@ public final class CommandHelper {
                     .exceptionally(throwable -> {
                         if (throwable instanceof java.util.concurrent.TimeoutException) {
                             source.sendMessage(ValidationUtils.createErrorComponent(messages.get(timeoutKey)));
-                        } else if (throwable instanceof java.util.concurrent.RejectedExecutionException) {
-                            source.sendMessage(ValidationUtils.createErrorComponent(MSG_SERVER_OVERLOADED));
                         } else {
-                            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(errorKey)));
+                            handleAsyncCommandException(throwable, source, messages, errorKey);
                         }
                         return null;
                     });

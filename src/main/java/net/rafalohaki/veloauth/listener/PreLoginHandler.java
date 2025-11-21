@@ -153,6 +153,22 @@ public class PreLoginHandler {
     }
 
     /**
+     * Marks player as having nickname conflict (PMD CPD fix - extracted common logic).
+     *
+     * @param existingPlayer Existing player to mark
+     * @param username Username for logging
+     */
+    private void markAsConflicted(RegisteredPlayer existingPlayer, String username) {
+        if (!existingPlayer.getConflictMode()) {
+            existingPlayer.setConflictMode(true);
+            existingPlayer.setConflictTimestamp(System.currentTimeMillis());
+            existingPlayer.setOriginalNickname(existingPlayer.getNickname());
+            databaseManager.savePlayer(existingPlayer).join();
+            logger.info("[NICKNAME CONFLICT] Premium player {} detected conflict with offline account", username);
+        }
+    }
+
+    /**
      * Handles nickname conflict by forcing offline mode and tracking conflict.
      *
      * @param event          PreLoginEvent
@@ -164,17 +180,7 @@ public class PreLoginHandler {
 
         if (isPremium && existingPlayer.getPremiumUuid() == null) {
             // Premium player trying to use offline nickname
-            if (!existingPlayer.getConflictMode()) {
-                // Mark conflict for the first time
-                existingPlayer.setConflictMode(true);
-                existingPlayer.setConflictTimestamp(System.currentTimeMillis());
-                existingPlayer.setOriginalNickname(existingPlayer.getNickname());
-
-                // Update existing player to mark conflict
-                databaseManager.savePlayer(existingPlayer).join();
-
-                logger.info("[NICKNAME CONFLICT] Premium player {} detected conflict with offline account", username);
-            }
+            markAsConflicted(existingPlayer, username);
 
             // Force offline mode for premium player
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
@@ -189,13 +195,7 @@ public class PreLoginHandler {
 
     public void handleNicknameConflictNoEvent(String username, RegisteredPlayer existingPlayer, boolean isPremium) {
         if (isPremium && existingPlayer.getPremiumUuid() == null) {
-            if (!existingPlayer.getConflictMode()) {
-                existingPlayer.setConflictMode(true);
-                existingPlayer.setConflictTimestamp(System.currentTimeMillis());
-                existingPlayer.setOriginalNickname(existingPlayer.getNickname());
-                databaseManager.savePlayer(existingPlayer).join();
-                logger.info("[NICKNAME CONFLICT] Premium player {} detected conflict with offline account", username);
-            }
+            markAsConflicted(existingPlayer, username);
         } else if (!isPremium && existingPlayer.getConflictMode()) {
             logger.debug("[NICKNAME CONFLICT] Offline player {} accessing conflicted account", username);
         }

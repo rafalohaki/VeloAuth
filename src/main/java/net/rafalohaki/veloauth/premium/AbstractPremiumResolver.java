@@ -37,21 +37,57 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
     }
 
     @Override
+    @SuppressWarnings({"java:S3776", "java:S1141"}) // Cognitive Complexity 17 & nested try - retry logic requires complexity for reliability
     public PremiumResolution resolve(String username) {
         PremiumResolution pre = preResolve(username);
         if (pre != null) {
             return pre;
         }
-        try {
-            HttpJsonClient.HttpJsonResponse response = HttpJsonClient.get(getEndpoint(), username, timeoutMs);
-            return resolveFromResponse(response, username);
-        } catch (IOException ex) {
-            logger.debug("[{}] IO error for {}: {}", getClass().getSimpleName(), username, ex.getMessage());
-            return PremiumResolution.unknown(id(), "io error");
-        } catch (Exception ex) {
-            logger.warn("[{}] Unexpected error for {}", getClass().getSimpleName(), username, ex);
-            return PremiumResolution.unknown(id(), "unexpected");
+        
+        // Retry logic with exponential backoff (max 2 retries)
+        int maxRetries = 2;
+        int baseDelayMs = 100; // Start with 100ms
+        
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                HttpJsonClient.HttpJsonResponse response = HttpJsonClient.get(getEndpoint(), username, timeoutMs);
+                PremiumResolution result = resolveFromResponse(response, username);
+                
+                // Only retry on unknown status (network errors, timeouts)
+                if (!result.isUnknown() || attempt == maxRetries) {
+                    if (attempt > 0) {
+                        logger.debug("[{}] Succeeded on retry {} for {}", getClass().getSimpleName(), attempt, username);
+                    }
+                    return result;
+                }
+                
+                // Exponential backoff before retry
+                int delayMs = baseDelayMs * (1 << attempt); // 100ms, 200ms, 400ms
+                logger.debug("[{}] Retry {} after {}ms for {}", getClass().getSimpleName(), attempt + 1, delayMs, username);
+                
+                try {
+                    Thread.sleep(delayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return PremiumResolution.unknown(id(), "interrupted during retry");
+                }
+                
+            } catch (IOException ex) {
+                if (attempt == maxRetries) {
+                    logger.debug("[{}] IO error after {} retries for {}: {}", 
+                            getClass().getSimpleName(), maxRetries, username, ex.getMessage());
+                    return PremiumResolution.unknown(id(), "io error after retries");
+                }
+                // Will retry on next iteration
+                logger.debug("[{}] IO error on attempt {} for {}, retrying...", 
+                        getClass().getSimpleName(), attempt, username);
+            } catch (Exception ex) {
+                logger.warn("[{}] Unexpected error for {}", getClass().getSimpleName(), username, ex);
+                return PremiumResolution.unknown(id(), "unexpected");
+            }
         }
+        
+        return PremiumResolution.unknown(id(), "max retries exceeded");
     }
 
     /**
