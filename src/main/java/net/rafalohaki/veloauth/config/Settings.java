@@ -152,7 +152,7 @@ public class Settings {
                   port: 3306 # Default ports: MYSQL=3306, POSTGRESQL=5432
                   database: veloauth # Database/schema name
                   user: veloauth # Database user
-                  password: password # Strong password recommended
+                  password: "" # Strong password recommended
                   connection-pool-size: 20 # Maximum pooled connections
                   max-lifetime-millis: 1800000 # Connection max lifetime in milliseconds (30 minutes)
                   # Optional: Full database connection URL

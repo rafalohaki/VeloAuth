@@ -62,7 +62,7 @@ database:
   port: 3306
   database: veloauth
   user: veloauth
-  password: password
+  password: ""
   connection-pool-size: 20
   max-lifetime-millis: 1800000
 
