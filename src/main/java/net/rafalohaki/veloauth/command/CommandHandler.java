@@ -91,7 +91,7 @@ public class CommandHandler {
 
         // Rejestracja komend gracza
         commandManager.register(commandManager.metaBuilder(COMMAND_LOGIN).aliases("log", "l").build(), new LoginCommand());
-        commandManager.register(commandManager.metaBuilder(COMMAND_REGISTER).aliases("reg", "r").build(), new RegisterCommand());
+        commandManager.register(commandManager.metaBuilder(COMMAND_REGISTER).aliases("reg").build(), new RegisterCommand());
         commandManager.register(commandManager.metaBuilder(COMMAND_CHANGE_PASSWORD).build(), new ChangePasswordCommand());
 
         // Rejestracja komend administratora
