@@ -110,11 +110,43 @@ public class Messages {
     public void reload() throws IOException {
         if (!useExternalFiles) {
             logger.warn("Cannot reload - not using external files");
+            // Clear legacy cache anyway
+            clearCache();
             return;
         }
         
+        // Clear the static message cache to ensure fresh loading
+        clearCache();
+        
+        // Force re-initialization of language files (copies new keys if any)
+        languageFileManager.initializeLanguageFiles();
+        
         this.bundle = languageFileManager.loadLanguageBundle(currentLanguage);
-        logger.info("Loaded language: {}", currentLanguage);
+        logger.info("Reloaded language files for: {} (external files enabled)", currentLanguage);
+    }
+    
+    /**
+     * Reloads language files with a new language setting.
+     * This should be called after config reload to pick up language changes.
+     *
+     * @param newLanguage The new language code from config
+     * @throws IOException if language file loading fails
+     */
+    public void reloadWithLanguage(String newLanguage) throws IOException {
+        String oldLanguage = this.currentLanguage;
+        
+        // Update language if provided and valid
+        if (newLanguage != null && !newLanguage.trim().isEmpty()) {
+            this.currentLanguage = newLanguage.toLowerCase(java.util.Locale.ROOT);
+        }
+        
+        // Log language change if it occurred
+        if (!oldLanguage.equals(this.currentLanguage)) {
+            logger.info("Language changed from '{}' to '{}'", oldLanguage, currentLanguage);
+        }
+        
+        // Perform full reload
+        reload();
     }
 
     /**
@@ -254,10 +286,14 @@ public class Messages {
 
     /**
      * Clears the message cache.
+     * This should be called during reload to ensure fresh messages are loaded.
      */
     public void clearCache() {
+        int sizeBefore = messageCache.size();
         messageCache.clear();
-        logger.info("Message cache cleared");
+        if (sizeBefore > 0) {
+            logger.info("Message cache cleared ({} entries removed)", sizeBefore);
+        }
     }
 
     /**

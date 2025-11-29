@@ -148,6 +148,10 @@ public final class LanguageFileManager {
         String filename = MESSAGES_PREFIX + language + PROPERTIES_SUFFIX;
         Path languageFile = langDirectory.resolve(filename);
         
+        logger.debug("Loading language: {}", language);
+        logger.debug("Looking for external file: {}", languageFile.toAbsolutePath());
+        logger.debug("External file exists: {}", Files.exists(languageFile));
+        
         if (!Files.exists(languageFile)) {
             logger.warn("Language file not found: {}, falling back to English", filename);
             languageFile = langDirectory.resolve(ENGLISH_FILE);
@@ -164,7 +168,9 @@ public final class LanguageFileManager {
         
         try (InputStream is = Files.newInputStream(languageFile);
              InputStreamReader reader = new InputStreamReader(is, StandardCharsets.UTF_8)) {
-            return new PropertyResourceBundle(reader);
+            PropertyResourceBundle bundle = new PropertyResourceBundle(reader);
+            logger.info("Loaded EXTERNAL language file: {} ({} keys)", languageFile.toAbsolutePath(), bundle.keySet().size());
+            return bundle;
         }
     }
     

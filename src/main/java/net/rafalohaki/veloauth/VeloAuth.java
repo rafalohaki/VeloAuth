@@ -105,8 +105,12 @@ public class VeloAuth {
     
     private boolean reloadLanguageFiles() {
         try {
-            messages.reload();
-            logger.info("Language files reloaded successfully");
+            // Get new language from reloaded config
+            String newLanguage = settings.getLanguage();
+            
+            // Reload with potentially new language setting
+            messages.reloadWithLanguage(newLanguage);
+            logger.info("Language files reloaded successfully (language: {})", newLanguage);
             return true;
         } catch (Exception e) {
             logger.error("Failed to reload language files", e);
