@@ -127,7 +127,7 @@
         <dependency>
             <groupId>org.bstats</groupId>
             <artifactId>bstats-velocity</artifactId>
-            <version>3.0.2</version>
+            <version>3.1.0</version>
             <scope>compile</scope>
         </dependency>
 
@@ -252,8 +252,7 @@
                                 </relocation>
                             </relocations>
                             <transformers>
-                                <transformer
-                                        implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
                                     <resource>META-INF/services/java.sql.Driver</resource>
                                 </transformer>
                             </transformers>
