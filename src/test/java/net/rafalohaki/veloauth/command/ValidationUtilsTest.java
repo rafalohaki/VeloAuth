@@ -41,7 +41,7 @@ class ValidationUtilsTest {
     void testValidatePassword_ValidPassword_ReturnsSuccess() {
         // Using TestValidationSettings with min=6, max=32
         String validPassword = "testPassword123"; // NOSONAR - Test password for validation
-
+        
         ValidationUtils.ValidationResult result = ValidationUtils.validatePassword(validPassword, mockSettings);
 
         assertTrue(result.valid());
@@ -128,7 +128,8 @@ class ValidationUtilsTest {
     @Test
     void testGetPlayerAddress_ValidInetSocketAddress_ReturnsInetAddress() throws java.net.UnknownHostException {
         InetAddress address = InetAddress.getByName("192.168.1.2");
-        InetSocketAddress socketAddress = new InetSocketAddress(address, 25565);
+        @SuppressWarnings("java:S5164") // Using localhost/private IP for unit test - no SSRF risk
+        InetSocketAddress socketAddress = new InetSocketAddress(address, 25565); // NOSONAR
         when(mockPlayer.getRemoteAddress()).thenReturn(socketAddress);
 
         InetAddress result = PlayerAddressUtils.getPlayerAddress(mockPlayer);

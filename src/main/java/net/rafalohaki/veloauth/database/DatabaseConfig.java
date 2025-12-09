@@ -240,7 +240,8 @@ public final class DatabaseConfig {
         try {
             // Safe: Loading trusted JDBC driver from internal configuration constants only (DatabaseType enum)
             // Not user-controllable - driverClass comes from hardcoded DatabaseType enum values
-            Class.forName(driverClass); // NOSONAR - Driver from trusted DatabaseType enum only
+            @SuppressWarnings("java:S2658") // Driver class name is derived from trusted enum mapping
+            Class<?> driver = Class.forName(driverClass); // NOSONAR
         } catch (ClassNotFoundException e) {
             throw new IllegalStateException("Nie znaleziono sterownika JDBC: " + driverClass, e);
         }

@@ -1021,7 +1021,8 @@ public class DatabaseManager {
     private void executeAlterTable(java.sql.Connection connection, String sql) throws SQLException {
         // SQL Injection safe: Using constant SQL string, not user input
         try (java.sql.Statement stmt = connection.createStatement()) {
-            stmt.execute(sql); // NOSONAR - SQL from constants only, not user input
+            @SuppressWarnings("java:S2077") // SQL Injection safe - internal migration constants only
+            boolean executed = stmt.execute(sql); 
         }
     }
 

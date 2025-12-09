@@ -963,9 +963,9 @@ public class Settings {
         private String sslCert = "";
         private String sslKey = "";
         private String sslRootCert = "";
-        @SuppressWarnings("java:S2068") // Not a hardcoded password - SSL configuration placeholder
+        @SuppressWarnings("java:S2068") // Not a hardcoded password - SSL configuration placeholder for runtime value
         private String sslPassword = ""; // NOSONAR - SSL config placeholder
-
+        
         public boolean isSslEnabled() {
             return sslEnabled;
         }
