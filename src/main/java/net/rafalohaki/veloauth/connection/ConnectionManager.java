@@ -316,6 +316,14 @@ public class ConnectionManager {
      */
     private boolean executePicoLimboTransfer(Player player, RegisteredServer targetServer) {
         try {
+            // FIX: Add small delay to prevent race conditions during initial connection
+            // PicoLimbo might not be ready to accept connections immediately
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+
             var result = player.createConnectionRequest(targetServer)
                     .connect()
                     .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
