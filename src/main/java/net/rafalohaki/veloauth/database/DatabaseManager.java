@@ -167,14 +167,7 @@ public class DatabaseManager {
         // Wyłącz verbose ORMLite logging używając SLF4J (Logback jest internal)
         // Zakładamy, że SLF4J jest skonfigurowane w Velocity
         // Jeśli nie mamy dostępu do klas Logback, polegamy na konfiguracji zewnętrznej (logback.xml)
-        // lub ignorujemy błąd kompilacji usuwając zależność od Logback w kodzie
-        /*
-        Logger ormliteLogger = LoggerFactory.getLogger("com.j256.ormlite");
-        if (ormliteLogger instanceof ch.qos.logback.classic.Logger logbackLogger) {
-            logbackLogger.setLevel(ch.qos.logback.classic.Level.WARN);
-        }
-        */
-
+        
         if (logger.isDebugEnabled()) {
             logger.debug(DB_MARKER, messages.get("database.manager.created"), config.getStorageType());
         }

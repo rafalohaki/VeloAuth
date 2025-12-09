@@ -134,8 +134,10 @@ public class PremiumResolverAlertService implements AutoCloseable {
      */
     private void sendFailureAlert(int total, int failed, double failureRate) {
         if (discordClient == null) {
-            logger.warn("⚠️ Premium resolver failure rate: {}/{} ({:.1f}%)",
-                    failed, total, failureRate * 100);
+            if (logger.isWarnEnabled()) {
+                logger.warn("⚠️ Premium resolver failure rate: {}/{} ({}%)",
+                        failed, total, String.format("%.1f", failureRate * 100));
+            }
             return;
         }
 
@@ -175,8 +177,10 @@ public class PremiumResolverAlertService implements AutoCloseable {
 
             boolean sent = discordClient.sendEmbed(embed);
             if (sent) {
-                logger.warn("⚠️ Premium resolver alert sent to Discord: {}/{} ({:.1f}%)",
-                        failed, total, failureRate * 100);
+                if (logger.isWarnEnabled()) {
+                    logger.warn("⚠️ Premium resolver alert sent to Discord: {}/{} ({}%)",
+                            failed, total, String.format("%.1f", failureRate * 100));
+                }
             } else {
                 logger.error("Failed to send Discord alert (check webhook URL)");
             }
@@ -212,10 +216,10 @@ public class PremiumResolverAlertService implements AutoCloseable {
         failuresByResolver.clear();
         lastResetTime.set(System.currentTimeMillis());
 
-        if (previousTotal > 0) {
+        if (previousTotal > 0 && logger.isDebugEnabled()) {
             double failureRate = (double) previousFailed / previousTotal;
-            logger.debug("Metrics reset: {}/{} requests failed ({:.1f}%)",
-                    previousFailed, previousTotal, failureRate * 100);
+            logger.debug("Metrics reset: {}/{} requests failed ({}%)",
+                    previousFailed, previousTotal, String.format("%.1f", failureRate * 100));
         }
     }
 
