@@ -54,7 +54,7 @@ auth = "127.0.0.1:25566"  # PicoLimbo (auth server)
 lobby = "127.0.0.1:25565"  # Backend server
 survival = "127.0.0.1:25565"
 
-try = ["lobby", "survival"]  # Order matters for lobby redirect
+try = ["lobby", "survival"]  # Order matters for auth redirect
 ```
 
 **Important:** The `try` configuration controls where authenticated players are redirected. VeloAuth automatically skips the PicoLimbo server and selects the first available backend server.
