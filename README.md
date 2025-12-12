@@ -50,8 +50,9 @@ Configure your `velocity.toml` with PicoLimbo and backend servers:
 
 ```
 [servers]
-lobby = "127.0.0.1:25566"  # PicoLimbo (auth server)
-survival = "127.0.0.1:25565"  # Backend server
+auth = "127.0.0.1:25566"  # PicoLimbo (auth server)
+lobby = "127.0.0.1:25565"  # Backend server
+survival = "127.0.0.1:25565"
 
 try = ["lobby", "survival"]  # Order matters for lobby redirect
 ```
