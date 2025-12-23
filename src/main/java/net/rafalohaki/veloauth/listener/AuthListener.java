@@ -321,9 +321,16 @@ public class AuthListener {
 
         try {
             // 🔥 USE_OFFLINE: Check for conflict resolution messages - delegate to PostLoginHandler
-            if (postLoginHandler.shouldShowConflictMessage(player)) {
-                postLoginHandler.showConflictResolutionMessage(player);
-            }
+            // ASYNC: Run in separate task to avoid blocking event loop with DB operations
+            plugin.getServer().getScheduler().buildTask(plugin, () -> {
+                try {
+                    if (postLoginHandler.shouldShowConflictMessage(player)) {
+                        postLoginHandler.showConflictResolutionMessage(player);
+                    }
+                } catch (Exception e) {
+                    logger.error("Error checking conflict message for {}", player.getUsername(), e);
+                }
+            }).schedule();
 
             // Delegate to PostLoginHandler based on player mode
             if (player.isOnlineMode()) {

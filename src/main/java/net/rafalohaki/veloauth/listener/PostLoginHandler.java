@@ -82,6 +82,24 @@ public class PostLoginHandler {
 
         authCache.addAuthorizedPlayer(playerUuid, cachedUser);
         authCache.startSession(playerUuid, player.getUsername(), playerIp);
+
+        // Auto-transfer premium player to backend
+        transferToBackendAsync(player);
+    }
+
+    /**
+     * Schedules async backend transfer for premium player.
+     *
+     * @param player The player to transfer
+     */
+    private void transferToBackendAsync(Player player) {
+        plugin.getServer().getScheduler().buildTask(plugin, () -> {
+            try {
+                connectionManager.transferToBackend(player);
+            } catch (Exception e) {
+                logger.error("Error transferring premium player {} to backend", player.getUsername(), e);
+            }
+        }).schedule();
     }
 
     /**
