@@ -21,7 +21,6 @@ import java.util.UUID;
  */
 public class PostLoginHandler {
 
-    private final VeloAuth plugin;
     private final AuthCache authCache;
     private final DatabaseManager databaseManager;
     private final Messages messages;
@@ -30,18 +29,15 @@ public class PostLoginHandler {
     /**
      * Creates a new PostLoginHandler.
      *
-     * @param plugin            VeloAuth plugin instance
      * @param authCache         Cache for authorization and sessions
      * @param databaseManager   Manager for database operations
      * @param messages          i18n message system
      * @param logger            Logger instance
      */
-    public PostLoginHandler(VeloAuth plugin,
-                           AuthCache authCache,
+    public PostLoginHandler(AuthCache authCache,
                            DatabaseManager databaseManager,
                            Messages messages,
                            Logger logger) {
-        this.plugin = plugin;
         this.authCache = authCache;
         this.databaseManager = databaseManager;
         this.messages = messages;

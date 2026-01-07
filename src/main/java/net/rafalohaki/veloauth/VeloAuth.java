@@ -407,7 +407,7 @@ public class VeloAuth {
         logger.debug("PreLoginHandler created successfully");
         
         PostLoginHandler postLoginHandler = new PostLoginHandler(
-            this, authCache, databaseManager,
+            authCache, databaseManager,
             messages, logger);
         logger.debug("PostLoginHandler created successfully");
         

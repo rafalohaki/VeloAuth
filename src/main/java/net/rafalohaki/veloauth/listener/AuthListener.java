@@ -153,6 +153,20 @@ public class AuthListener {
             logger.debug("\uD83D\uDD0D PreLogin: {}", username);
         }
 
+        if (!validatePreLoginConditions(event, username)) {
+            return;
+        }
+
+        if (!settings.isPremiumCheckEnabled()) {
+            logger.debug("Premium check wyłączony w konfiguracji - wymuszam offline mode dla {}", username);
+            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+            return;
+        }
+
+        handlePremiumDetection(event, username);
+    }
+
+    private boolean validatePreLoginConditions(PreLoginEvent event, String username) {
         // CRITICAL: Block connections until plugin is fully initialized
         if (!plugin.isInitialized()) {
             logger.warn(
@@ -162,7 +176,7 @@ public class AuthListener {
             String msg = messages != null ? messages.get("system.starting") : "VeloAuth is starting. Please wait.";
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
                     Component.text(msg, NamedTextColor.RED)));
-            return;
+            return false;
         }
         
         // DEFENSE-IN-DEPTH: Verify handlers are initialized
@@ -171,7 +185,7 @@ public class AuthListener {
             String msg = messages != null ? messages.get("system.init_error") : "System initialization error.";
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
                     Component.text(msg, NamedTextColor.RED)));
-            return;
+            return false;
         }
 
         // WALIDACJA USERNAME - delegate to PreLoginHandler
@@ -179,7 +193,7 @@ public class AuthListener {
             logger.warn(SECURITY_MARKER, "[USERNAME VALIDATION FAILED] {} - invalid format", username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
                     Component.text(messages.get("validation.username.invalid"), NamedTextColor.RED)));
-            return;
+            return false;
         }
 
         // Check brute force at IP level BEFORE any processing
@@ -190,15 +204,12 @@ public class AuthListener {
             }
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
                     Component.text(messages.get("security.brute_force.blocked"), NamedTextColor.RED)));
-            return;
+            return false;
         }
+        return true;
+    }
 
-        if (!settings.isPremiumCheckEnabled()) {
-            logger.debug("Premium check wyłączony w konfiguracji - wymuszam offline mode dla {}", username);
-            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-            return;
-        }
-
+    private void handlePremiumDetection(PreLoginEvent event, String username) {
         // Delegate premium resolution to PreLoginHandler
         PreLoginHandler.PremiumResolutionResult result = preLoginHandler.resolvePremiumStatus(username);
         boolean premium = result.premium();
@@ -371,105 +382,125 @@ public class AuthListener {
      * - Po połączeniu z PicoLimbo, onServerConnected uruchomi auto-transfer
      */
     @Subscribe(priority = Short.MAX_VALUE)
-    @SuppressWarnings("java:S3776") // Complex security checks - cyclomatic complexity 9
     public void onServerPreConnect(ServerPreConnectEvent event) {
         try {
             Player player = event.getPlayer();
             // NAPRAWIONE: Używamy getOriginalServer() zamiast getTarget()
             // getOriginalServer() to INPUT field (dokąd gracz chce iść)
             String targetServerName = event.getOriginalServer().getServerInfo().getName();
-            String playerIp = PlayerAddressUtils.getPlayerIp(player);
 
             logger.debug("ServerPreConnectEvent dla gracza {} -> serwer {}",
                     player.getUsername(), targetServerName);
 
-            // ✅ PIERWSZE POŁĄCZENIE: Gracz nie ma jeszcze currentServer
-            // Velocity próbuje go wysłać na pierwszy serwer z try (np. 2b2t)
-            // My MUSIMY przekierować na PicoLimbo dla ViaVersion compatibility
-            if (player.getCurrentServer().isEmpty()) {
-                String picoLimboName = settings.getPicoLimboServerName();
-                
-                // Jeśli cel to już PicoLimbo - pozwól
-                if (targetServerName.equals(picoLimboName)) {
-                    logger.debug("Pierwsze połączenie {} -> PicoLimbo - pozwalam", player.getUsername());
-                    return;
-                }
-                
-                // Przekieruj na PicoLimbo zamiast backend
-                Optional<RegisteredServer> picoLimbo = plugin.getServer().getServer(picoLimboName);
-                if (picoLimbo.isPresent()) {
-                    logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na PicoLimbo", 
-                            player.getUsername(), targetServerName);
-                    event.setResult(ServerPreConnectEvent.ServerResult.allowed(picoLimbo.get()));
-                    return;
-                } else {
-                    logger.error("PicoLimbo server '{}' nie znaleziony! Gracz {} nie może się połączyć.", 
-                            picoLimboName, player.getUsername());
-                    event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                    return;
-                }
+            if (handleFirstConnection(event, player, targetServerName)) {
+                return;
             }
 
             // ✅ JEŚLI TO PICOLIMBO - SPRAWDŹ DODATKOWO AUTORYZACJĘ
-            if (targetServerName.equals(settings.getPicoLimboServerName())) {
-                // DODATKOWA WERYFIKACJA - sprawdź czy gracz nie jest już autoryzowany
-                // Jeśli jest autoryzowany, nie powinien iść na PicoLimbo
-                boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
-                if (isAuthorized) {
-                    // AUTORYZOWANY GRACZ NA PICOLIMBO - przekieruj na backend
-                    logger.debug("Autoryzowany gracz {} próbuje iść na PicoLimbo - przekierowuję na backend",
-                            player.getUsername());
-                    event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                    // Velocity automatycznie przekieruje na inny serwer
-                    return;
-                }
-                logger.debug("PicoLimbo - pozwól (gracz nie jest autoryzowany)");
+            if (handlePicoLimboConnection(event, player, targetServerName)) {
                 return;
             }
 
             // ✅ JEŚLI TO BACKEND - SPRAWDŹ AUTORYZACJĘ + SESJĘ + CACHE
-            boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
-
-            // DODATKOWA WERYFIKACJA - sprawdź aktywną sesję z walidacją IP
-            boolean hasActiveSession = authCache.hasActiveSession(player.getUniqueId(), player.getUsername(),
-                    PlayerAddressUtils.getPlayerIp(player));
-
-            // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa
-            boolean uuidMatches = verifyPlayerUuid(player);
-
-            if (!isAuthorized || !hasActiveSession || !uuidMatches) {
-                // ❌ NIE AUTORYZOWANY LUB BRAK SESJI LUB UUID MISMATCH
-                String reason = resolveBlockReason(isAuthorized, hasActiveSession);
-
-                if (logger.isDebugEnabled()) {
-                    logger.debug(messages.get("player.blocked.unauthorized", player.getUsername(), targetServerName, reason, playerIp));
-                }
-
-                event.setResult(ServerPreConnectEvent.ServerResult.denied());
-
-                player.sendMessage(Component.text()
-                        .content("❌ ")
-                        .color(NamedTextColor.RED)
-                        .append(Component.text(messages.get("auth.must_login"))
-                                .color(NamedTextColor.RED))
-                        .build());
-
-                // Jeśli UUID mismatch - usuń z cache dla bezpieczeństwa
-                if (!uuidMatches) {
-                    authCache.removeAuthorizedPlayer(player.getUniqueId());
-                    authCache.endSession(player.getUniqueId());
-                }
-
-                return;
-            }
-
-            // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
-            logger.debug("\u2705 Autoryzowany gracz {} idzie na {} (sesja: OK, UUID: OK)",
-                    player.getUsername(), targetServerName);
+            verifyBackendConnection(event, player, targetServerName);
 
         } catch (Exception e) {
             logger.error("Błąd w ServerPreConnect", e);
             event.setResult(ServerPreConnectEvent.ServerResult.denied());
+        }
+    }
+
+    private boolean handleFirstConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
+        // ✅ PIERWSZE POŁĄCZENIE: Gracz nie ma jeszcze currentServer
+        // Velocity próbuje go wysłać na pierwszy serwer z try (np. 2b2t)
+        // My MUSIMY przekierować na PicoLimbo dla ViaVersion compatibility
+        if (player.getCurrentServer().isEmpty()) {
+            String picoLimboName = settings.getPicoLimboServerName();
+            
+            // Jeśli cel to już PicoLimbo - pozwól
+            if (targetServerName.equals(picoLimboName)) {
+                logger.debug("Pierwsze połączenie {} -> PicoLimbo - pozwalam", player.getUsername());
+                return true;
+            }
+            
+            // Przekieruj na PicoLimbo zamiast backend
+            Optional<RegisteredServer> picoLimbo = plugin.getServer().getServer(picoLimboName);
+            if (picoLimbo.isPresent()) {
+                logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na PicoLimbo", 
+                        player.getUsername(), targetServerName);
+                event.setResult(ServerPreConnectEvent.ServerResult.allowed(picoLimbo.get()));
+            } else {
+                logger.error("PicoLimbo server '{}' nie znaleziony! Gracz {} nie może się połączyć.", 
+                        picoLimboName, player.getUsername());
+                event.setResult(ServerPreConnectEvent.ServerResult.denied());
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private boolean handlePicoLimboConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
+        if (targetServerName.equals(settings.getPicoLimboServerName())) {
+            // DODATKOWA WERYFIKACJA - sprawdź czy gracz nie jest już autoryzowany
+            // Jeśli jest autoryzowany, nie powinien iść na PicoLimbo
+            String playerIp = PlayerAddressUtils.getPlayerIp(player);
+            boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
+            if (isAuthorized) {
+                // AUTORYZOWANY GRACZ NA PICOLIMBO - przekieruj na backend
+                logger.debug("Autoryzowany gracz {} próbuje iść na PicoLimbo - przekierowuję na backend",
+                        player.getUsername());
+                event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                // Velocity automatycznie przekieruje na inny serwer
+            } else {
+                logger.debug("PicoLimbo - pozwól (gracz nie jest autoryzowany)");
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void verifyBackendConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
+        String playerIp = PlayerAddressUtils.getPlayerIp(player);
+        boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
+
+        // DODATKOWA WERYFIKACJA - sprawdź aktywną sesję z walidacją IP
+        boolean hasActiveSession = authCache.hasActiveSession(player.getUniqueId(), player.getUsername(),
+                playerIp);
+
+        // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa
+        boolean uuidMatches = verifyPlayerUuid(player);
+
+        if (!isAuthorized || !hasActiveSession || !uuidMatches) {
+            handleUnauthorizedConnection(event, player, targetServerName, isAuthorized, hasActiveSession, uuidMatches, playerIp);
+        } else {
+            // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
+            logger.debug("\u2705 Autoryzowany gracz {} idzie na {} (sesja: OK, UUID: OK)",
+                    player.getUsername(), targetServerName);
+        }
+    }
+
+    private void handleUnauthorizedConnection(ServerPreConnectEvent event, Player player, String targetServerName,
+                                            boolean isAuthorized, boolean hasActiveSession, boolean uuidMatches, String playerIp) {
+        // ❌ NIE AUTORYZOWANY LUB BRAK SESJI LUB UUID MISMATCH
+        String reason = resolveBlockReason(isAuthorized, hasActiveSession);
+
+        if (logger.isDebugEnabled()) {
+            logger.debug(messages.get("player.blocked.unauthorized", player.getUsername(), targetServerName, reason, playerIp));
+        }
+
+        event.setResult(ServerPreConnectEvent.ServerResult.denied());
+
+        player.sendMessage(Component.text()
+                .content("❌ ")
+                .color(NamedTextColor.RED)
+                .append(Component.text(messages.get("auth.must_login"))
+                        .color(NamedTextColor.RED))
+                .build());
+
+        // Jeśli UUID mismatch - usuń z cache dla bezpieczeństwa
+        if (!uuidMatches) {
+            authCache.removeAuthorizedPlayer(player.getUniqueId());
+            authCache.endSession(player.getUniqueId());
         }
     }
 

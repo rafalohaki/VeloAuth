@@ -446,26 +446,28 @@ public class DatabaseManager {
 
         String normalizedNickname = nickname.toLowerCase();
 
-        return CompletableFuture.supplyAsync(() -> {
-            DbResult<RegisteredPlayer> cacheResult = checkCacheSafe(normalizedNickname);
-            if (cacheResult.isDatabaseError() || cacheResult.getValue() != null) {
-                if (runtimeDetection && cacheResult.getValue() != null && logger.isDebugEnabled()) {
-                    logger.debug(CACHE_MARKER, "Runtime detection - cache HIT: {}", normalizedNickname);
-                }
-                return cacheResult;
-            }
+        return CompletableFuture.supplyAsync(() -> performPlayerLookup(normalizedNickname, nickname, runtimeDetection), dbExecutor);
+    }
 
-            if (runtimeDetection && logger.isDebugEnabled()) {
-                logger.debug(CACHE_MARKER, "Runtime detection - cache MISS: {}", normalizedNickname);
+    private DbResult<RegisteredPlayer> performPlayerLookup(String normalizedNickname, String originalNickname, boolean runtimeDetection) {
+        DbResult<RegisteredPlayer> cacheResult = checkCacheSafe(normalizedNickname);
+        if (cacheResult.isDatabaseError() || cacheResult.getValue() != null) {
+            if (runtimeDetection && cacheResult.getValue() != null && logger.isDebugEnabled()) {
+                logger.debug(CACHE_MARKER, "Runtime detection - cache HIT: {}", normalizedNickname);
             }
+            return cacheResult;
+        }
 
-            DbResult<Void> connectionResult = validateDatabaseConnection();
-            if (connectionResult.isDatabaseError()) {
-                return DbResult.databaseError(connectionResult.getErrorMessage());
-            }
+        if (runtimeDetection && logger.isDebugEnabled()) {
+            logger.debug(CACHE_MARKER, "Runtime detection - cache MISS: {}", normalizedNickname);
+        }
 
-            return queryAndCachePlayer(normalizedNickname, nickname, runtimeDetection);
-        }, dbExecutor);
+        DbResult<Void> connectionResult = validateDatabaseConnection();
+        if (connectionResult.isDatabaseError()) {
+            return DbResult.databaseError(connectionResult.getErrorMessage());
+        }
+
+        return queryAndCachePlayer(normalizedNickname, originalNickname, runtimeDetection);
     }
 
     private DbResult<RegisteredPlayer> queryAndCachePlayer(String normalizedNickname, String originalNickname, boolean runtimeDetection) {

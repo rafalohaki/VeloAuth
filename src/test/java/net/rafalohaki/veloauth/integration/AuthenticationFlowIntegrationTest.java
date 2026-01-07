@@ -124,7 +124,6 @@ class AuthenticationFlowIntegrationTest {
         );
 
         postLoginHandler = new PostLoginHandler(
-                plugin,
                 authCache,
                 databaseManager,
                 messages,
