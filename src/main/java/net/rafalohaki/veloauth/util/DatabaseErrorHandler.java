@@ -24,6 +24,8 @@ public final class DatabaseErrorHandler {
         // Utility class - prevent instantiation
     }
 
+    private static final String DEFAULT_ERROR_KEY = "error.database.query";
+
     /**
      * Handles database errors for Player commands with standardized logging and messaging.
      *
@@ -36,16 +38,7 @@ public final class DatabaseErrorHandler {
      */
     public static boolean handleError(DbResult<?> result, Player player, String operation,
                                      Logger logger, Messages messages) {
-        if (result.isDatabaseError()) {
-            if (logger.isErrorEnabled()) {
-                logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}",
-                        operation, player.getUsername(), result.getErrorMessage());
-            }
-            SimpleMessages sm = new SimpleMessages(messages);
-            player.sendMessage(sm.errorDatabase());
-            return true;
-        }
-        return false;
+        return handleErrorWithKey(result, player, operation, logger, messages, DEFAULT_ERROR_KEY);
     }
 
     /**
@@ -61,15 +54,8 @@ public final class DatabaseErrorHandler {
      */
     public static boolean handleError(DbResult<?> result, CommandSource source, String identifier,
                                      String operation, Logger logger, Messages messages) {
-        if (result.isDatabaseError()) {
-            if (logger.isErrorEnabled()) {
-                logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} {}: {}",
-                        operation, identifier, result.getErrorMessage());
-            }
-            source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
-            return true;
-        }
-        return false;
+        return handleErrorCore(result, identifier, operation, logger, messages, DEFAULT_ERROR_KEY,
+                msg -> source.sendMessage(ValidationUtils.createErrorComponent(msg)));
     }
 
     /**
@@ -85,14 +71,31 @@ public final class DatabaseErrorHandler {
      */
     public static boolean handleErrorWithKey(DbResult<?> result, Player player, String operation,
                                             Logger logger, Messages messages, String errorKey) {
-        if (result.isDatabaseError()) {
-            if (logger.isErrorEnabled()) {
-                logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}",
-                        operation, player.getUsername(), result.getErrorMessage());
-            }
-            player.sendMessage(ValidationUtils.createErrorComponent(messages.get(errorKey)));
-            return true;
+        return handleErrorCore(result, player.getUsername(), operation, logger, messages, errorKey,
+                msg -> player.sendMessage(ValidationUtils.createErrorComponent(msg)));
+    }
+
+    /**
+     * Core error handling logic shared by all handleError variants.
+     */
+    private static boolean handleErrorCore(DbResult<?> result, String identifier, String operation,
+                                          Logger logger, Messages messages, String errorKey,
+                                          java.util.function.Consumer<String> messageSender) {
+        if (!result.isDatabaseError()) {
+            return false;
         }
-        return false;
+        logDatabaseError(logger, operation, identifier, result.getErrorMessage());
+        messageSender.accept(messages.get(errorKey));
+        return true;
+    }
+
+    /**
+     * Logs database error with standardized format.
+     */
+    private static void logDatabaseError(Logger logger, String operation, String identifier, String errorMessage) {
+        if (logger.isErrorEnabled()) {
+            logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}",
+                    operation, identifier, errorMessage);
+        }
     }
 }

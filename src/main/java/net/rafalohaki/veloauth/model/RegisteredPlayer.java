@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.model;
 
 import com.j256.ormlite.field.DatabaseField;
 import com.j256.ormlite.table.DatabaseTable;
+import net.rafalohaki.veloauth.util.UuidUtils;
 
 import java.util.Objects;
 import java.util.UUID;
@@ -403,14 +404,7 @@ public class RegisteredPlayer {
      * @return UUID object lub null jeśli UUID jest nieprawidłowy
      */
     public UUID getUuidAsUUID() {
-        if (uuid == null || uuid.isEmpty()) {
-            return null;
-        }
-        try {
-            return UUID.fromString(uuid);
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
+        return UuidUtils.parseUuidSafely(uuid);
     }
 
 

@@ -32,23 +32,12 @@ public final class PlayerAddressUtils {
      */
     @javax.annotation.Nonnull
     public static String getPlayerIp(@javax.annotation.Nullable Player player) {
-        if (player == null) {
-            return StringConstants.UNKNOWN;
-        }
-        
-        InetSocketAddress address = player.getRemoteAddress();
+        InetAddress address = getPlayerAddress(player);
         if (address == null) {
-            if (LOGGER.isWarnEnabled()) {
-                LOGGER.warn("Player {} has null remote address", player.getUsername());
-            }
             return StringConstants.UNKNOWN;
         }
-        
-        if (address instanceof InetSocketAddress inetAddress) {
-            String hostAddress = inetAddress.getAddress().getHostAddress();
-            return hostAddress != null ? hostAddress : StringConstants.UNKNOWN;
-        }
-        return StringConstants.UNKNOWN;
+        String hostAddress = address.getHostAddress();
+        return hostAddress != null ? hostAddress : StringConstants.UNKNOWN;
     }
 
     /**
@@ -63,19 +52,28 @@ public final class PlayerAddressUtils {
         if (player == null) {
             return null;
         }
-        
-        InetSocketAddress address = player.getRemoteAddress();
+        return extractAddressFromRemote(player.getRemoteAddress(), player.getUsername());
+    }
+
+    /**
+     * Extracts InetAddress from remote socket address with logging.
+     * Shared logic for both Player and PreLoginEvent address extraction.
+     *
+     * @param address   Remote socket address
+     * @param identifier Identifier for logging (username)
+     * @return InetAddress or null if unavailable
+     */
+    @javax.annotation.Nullable
+    private static InetAddress extractAddressFromRemote(
+            @javax.annotation.Nullable InetSocketAddress address,
+            String identifier) {
         if (address == null) {
             if (LOGGER.isWarnEnabled()) {
-                LOGGER.warn("Player {} has null remote address", player.getUsername());
+                LOGGER.warn("Player {} has null remote address", identifier);
             }
             return null;
         }
-        
-        if (address instanceof InetSocketAddress inetAddress) {
-            return inetAddress.getAddress();
-        }
-        return null;
+        return address.getAddress();
     }
 
     /**
@@ -93,30 +91,34 @@ public final class PlayerAddressUtils {
         }
         
         try {
-            com.velocitypowered.api.proxy.InboundConnection connection = event.getConnection();
-            if (connection == null) {
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("PreLoginEvent has null connection");
-                }
-                return null;
-            }
-            
-            java.net.SocketAddress address = connection.getRemoteAddress();
-            if (address == null) {
-                if (LOGGER.isWarnEnabled()) {
-                    LOGGER.warn("PreLoginEvent connection has null remote address for user: {}", 
-                            event.getUsername());
-                }
-                return null;
-            }
-            
-            if (address instanceof InetSocketAddress inetAddress) {
-                return inetAddress.getAddress();
-            }
+            return extractAddressFromConnection(event);
         } catch (Exception e) { // NOSONAR - defensive catch for connection edge cases
             if (LOGGER.isErrorEnabled()) {
                 LOGGER.error("Error extracting address from PreLoginEvent", e);
             }
+            return null;
+        }
+    }
+
+    /**
+     * Extracts InetAddress from event connection.
+     *
+     * @param event PreLoginEvent with connection data
+     * @return InetAddress or null if unavailable
+     */
+    @javax.annotation.Nullable
+    private static InetAddress extractAddressFromConnection(PreLoginEvent event) {
+        com.velocitypowered.api.proxy.InboundConnection connection = event.getConnection();
+        if (connection == null) {
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("PreLoginEvent has null connection");
+            }
+            return null;
+        }
+        
+        java.net.SocketAddress socketAddress = connection.getRemoteAddress();
+        if (socketAddress instanceof InetSocketAddress inetSocketAddress) {
+            return extractAddressFromRemote(inetSocketAddress, event.getUsername());
         }
         return null;
     }

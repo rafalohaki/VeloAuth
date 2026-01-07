@@ -7,6 +7,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -48,11 +49,7 @@ class SettingsValidationTest {
         Path configFile = tempDir.resolve("config.yml");
         
         // When: Loading config with all resolvers disabled
-        try {
-            Files.writeString(configFile, invalidConfig);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        writeConfigFile(configFile, invalidConfig);
 
         // Then: Should throw IllegalArgumentException
         IllegalArgumentException exception = assertThrows(
@@ -92,11 +89,7 @@ class SettingsValidationTest {
         Path configFile = tempDir.resolve("config.yml");
 
         // When: Loading config
-        try {
-            Files.writeString(configFile, validConfig);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        writeConfigFile(configFile, validConfig);
 
         // Then: Should load successfully
         assertDoesNotThrow(
@@ -123,11 +116,7 @@ class SettingsValidationTest {
         Path configFile = tempDir.resolve("config.yml");
 
         // When: Loading config with invalid timeout
-        try {
-            Files.writeString(configFile, invalidConfig);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        writeConfigFile(configFile, invalidConfig);
 
         // Then: Should throw IllegalArgumentException
         IllegalArgumentException exception = assertThrows(
@@ -161,11 +150,7 @@ class SettingsValidationTest {
         Path configFile = tempDir.resolve("config.yml");
 
         // When: Loading config with invalid TTL
-        try {
-            Files.writeString(configFile, invalidConfig);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        writeConfigFile(configFile, invalidConfig);
 
         // Then: Should throw IllegalArgumentException
         IllegalArgumentException exception = assertThrows(
@@ -191,5 +176,16 @@ class SettingsValidationTest {
         // Then: Should create default config and load successfully
         assertTrue(loaded, "Should load with default configuration");
         assertTrue(Files.exists(tempDir.resolve("config.yml")), "Should create default config file");
+    }
+
+    /**
+     * Helper method to write config file, wrapping IOException in UncheckedIOException.
+     */
+    private void writeConfigFile(Path configFile, String content) {
+        try {
+            Files.writeString(configFile, content);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to write test config file", e);
+        }
     }
 }

@@ -18,13 +18,14 @@ import org.slf4j.MarkerFactory;
 
 import com.velocitypowered.api.scheduler.ScheduledTask;
 
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
@@ -48,6 +49,9 @@ public class ConnectionManager {
     
     /** Retry attempt counter per player to prevent infinite fallback loops */
     private final Map<UUID, Integer> retryAttempts = new ConcurrentHashMap<>();
+    
+    /** One-shot timeout retry flag per player to avoid repeated scheduling */
+    private final Map<UUID, Boolean> timeoutRetryScheduled = new ConcurrentHashMap<>();
     
     /** Pending transfer tasks per player - allows cancellation on disconnect to prevent race conditions */
     private final Map<UUID, ScheduledTask> pendingTransfers = new ConcurrentHashMap<>();
@@ -294,6 +298,7 @@ public class ConnectionManager {
             if (result.isSuccessful()) {
                 // Reset retry counter on success
                 retryAttempts.remove(player.getUniqueId());
+                timeoutRetryScheduled.remove(player.getUniqueId());
                 if (logger.isDebugEnabled()) {
                     logger.debug(messages.get("player.transfer.backend.success", player.getUsername(), serverName));
                 }
@@ -360,6 +365,22 @@ public class ConnectionManager {
                 ));
                 return false;
             }
+        } catch (CompletionException e) {
+            // Handle timeout specially - schedule single async retry with friendly message
+            if (e.getCause() instanceof TimeoutException) {
+                if (handleTimeoutRetry(player, targetServer, serverName, attempts)) {
+                    return true; // retry scheduled
+                }
+            }
+            
+            logger.error("Error transferring player {} to server {}: {}",
+                    player.getUsername(), serverName, e.getMessage());
+
+            player.sendMessage(Component.text(
+                    messages.get(CONNECTION_ERROR_GAME_SERVER),
+                    NamedTextColor.RED
+            ));
+            return false;
         } catch (Exception e) {
             if (logger.isErrorEnabled()) {
                 logger.error("Error transferring player {} to server {}: {}",
@@ -372,6 +393,78 @@ public class ConnectionManager {
             ));
             return false;
         }
+    }
+
+    /**
+     * Handles connection timeout by scheduling a single async retry with a short delay.
+     * Shows friendly message to player instead of error stack trace.
+     */
+    private boolean handleTimeoutRetry(Player player, RegisteredServer targetServer, String serverName, int attempts) {
+        if (!player.isActive()) {
+            return false;
+        }
+
+        // Prevent multiple concurrent retries for same player
+        if (timeoutRetryScheduled.putIfAbsent(player.getUniqueId(), Boolean.TRUE) != null) {
+            return false;
+        }
+
+        if (attempts >= MAX_RETRY_ATTEMPTS) {
+            timeoutRetryScheduled.remove(player.getUniqueId());
+            return false;
+        }
+
+        retryAttempts.put(player.getUniqueId(), attempts + 1);
+
+        // Friendly message instead of error
+        player.sendMessage(Component.text(
+                messages.get("connection.retry"),
+                NamedTextColor.YELLOW
+        ));
+
+        plugin.getServer().getScheduler().buildTask(plugin, () -> {
+            try {
+                player.createConnectionRequest(targetServer)
+                        .connect()
+                        .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        .whenComplete((result, ex) -> {
+                            timeoutRetryScheduled.remove(player.getUniqueId());
+
+                            if (ex != null) {
+                                logger.warn("Retry after timeout failed for {} -> {}: {}",
+                                        player.getUsername(), serverName, ex.getMessage());
+                                player.sendMessage(Component.text(
+                                        messages.get(CONNECTION_ERROR_GAME_SERVER),
+                                        NamedTextColor.RED
+                                ));
+                                return;
+                            }
+
+                            if (result != null && result.isSuccessful()) {
+                                retryAttempts.remove(player.getUniqueId());
+                                if (logger.isDebugEnabled()) {
+                                    logger.debug("Retry after timeout succeeded for {} -> {}", 
+                                            player.getUsername(), serverName);
+                                }
+                            } else {
+                                logger.warn("Retry after timeout not successful for {} -> {}: {}",
+                                        player.getUsername(), serverName,
+                                        result != null ? result.getReasonComponent()
+                                                .orElse(createUnknownErrorComponent()) : createUnknownErrorComponent());
+                                player.sendMessage(Component.text(
+                                        messages.get(CONNECTION_ERROR_GAME_SERVER),
+                                        NamedTextColor.RED
+                                ));
+                            }
+                        });
+            } catch (Exception retryEx) {
+                timeoutRetryScheduled.remove(player.getUniqueId());
+                logger.error("Error scheduling retry after timeout for {}: {}", 
+                        player.getUsername(), retryEx.getMessage());
+            }
+        }).delay(400, TimeUnit.MILLISECONDS).schedule();
+
+        return true;
     }
 
     /**
@@ -390,24 +483,25 @@ public class ConnectionManager {
             logger.debug("Velocity try servers: {}", tryServers);
         }
         
-    // Iteruj przez try servers w kolejności z konfiguracji Velocity
-    for (String serverName : tryServers) {
-        // Pomiń PicoLimbo - to jest serwer auth, nie docelowy
-        if (!serverName.equals(picoLimboName)) {
-            Optional<RegisteredServer> server = plugin.getServer().getServer(serverName);
-            if (server.isPresent()) {
-                RegisteredServer registeredServer = server.get();
-                // Sprawdź czy serwer jest dostępny (ping)
-                if (isServerAvailable(registeredServer, serverName)) {
-                    return Optional.of(registeredServer);
-                }
-            } else {
-                logger.debug("Serwer {} z try nie jest zarejestrowany", serverName);
+        // Iteruj przez try servers w kolejności z konfiguracji Velocity
+        for (String serverName : tryServers) {
+            // Pomiń PicoLimbo - to jest serwer auth, nie docelowy
+            if (serverName.equals(picoLimboName)) {
+                logger.debug("Pomijam PicoLimbo server: {}", serverName);
+                continue;
             }
-        } else {
-            logger.debug("Pomijam PicoLimbo server: {}", serverName);
+            
+            Optional<RegisteredServer> server = plugin.getServer().getServer(serverName);
+            if (server.isEmpty()) {
+                logger.debug("Serwer {} z try nie jest zarejestrowany", serverName);
+                continue;
+            }
+            
+            RegisteredServer registeredServer = server.get();
+            if (isServerAvailable(registeredServer, serverName)) {
+                return Optional.of(registeredServer);
+            }
         }
-    }
         
         // Fallback: jeśli żaden try server nie jest dostępny, spróbuj dowolny inny
         logger.warn("Żaden serwer z try nie jest dostępny, próbuję fallback...");
@@ -452,6 +546,9 @@ public class ConnectionManager {
         try {
             // Usuń z cache
             authCache.removeAuthorizedPlayer(player.getUniqueId());
+            
+            // Clear timeout retry flag
+            timeoutRetryScheduled.remove(player.getUniqueId());
 
             // Transfer na PicoLimbo
             transferToPicoLimbo(player);
@@ -560,43 +657,23 @@ public class ConnectionManager {
      */
     public void clearRetryAttempts(UUID playerUuid) {
         retryAttempts.remove(playerUuid);
+        timeoutRetryScheduled.remove(playerUuid);
         cancelPendingTransfer(playerUuid);
     }
     
     /**
-     * Aktualizuje IP gracza w bazie danych i cache jeśli się zmienił.
-     * Wykonywane synchronicznie dla spójności przed transferem.
-     */
-    private void updatePlayerIpIfChanged(Player player, RegisteredPlayer dbPlayer, CachedAuthUser cachedUser) {
-        String currentIp = getPlayerIp(player);
-        if (currentIp.equals(dbPlayer.getLoginIp())) {
-            return; // IP się nie zmieniło
-        }
-        
-        dbPlayer.updateLoginData(currentIp);
-        try {
-            databaseManager.savePlayer(dbPlayer).join(); // synchronicznie
-            CachedAuthUser updatedUser = cachedUser.withUpdatedIp(currentIp);
-            authCache.addAuthorizedPlayer(player.getUniqueId(), updatedUser);
-            if (logger.isDebugEnabled()) {
-                logger.debug("Zaktualizowano IP gracza {} w bazie danych i cache: {}",
-                        player.getUsername(), currentIp);
-            }
-        } catch (Exception ex) {
-            logger.error("Błąd podczas zapisu danych gracza {} do bazy danych - cache nie zaktualizowany",
-                    player.getUsername(), ex);
-        }
-    }
-
-    /**
      * Zamyka ConnectionManager.
-     * Anuluje wszystkie pending transfers i czyści retry attempts.
+     * Anuluje wszystkie pending transfers i czyści wszystkie mapy stanu.
      */
     public void shutdown() {
         // Anuluj wszystkie pending transfers
         pendingTransfers.values().forEach(ScheduledTask::cancel);
         pendingTransfers.clear();
+        
+        // Wyczyść wszystkie mapy stanu
         retryAttempts.clear();
+        timeoutRetryScheduled.clear();
+        
         logger.info("ConnectionManager zamknięty");
     }
 
@@ -648,17 +725,6 @@ public class ConnectionManager {
             return inetAddress.getAddress().getHostAddress();
         }
         return StringConstants.UNKNOWN;
-    }
-
-    /**
-     * Pobiera InetAddress gracza.
-     */
-    private InetAddress getPlayerAddress(Player player) {
-        var address = player.getRemoteAddress();
-        if (address instanceof InetSocketAddress inetAddress) {
-            return inetAddress.getAddress();
-        }
-        return null;
     }
 
     // Helper methods for consistent messaging

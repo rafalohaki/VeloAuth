@@ -34,15 +34,23 @@ class MessagesExternalFilesTest {
         // Cleanup is handled by @TempDir
     }
 
+    /**
+     * Helper method to assert that a message was successfully loaded.
+     * Reduces code duplication in message loading tests.
+     */
+    private void assertMessageLoaded(String message, String description) {
+        assertNotNull(message, description + " should not be null");
+        assertFalse(message.isEmpty(), description + " should not be empty");
+        assertFalse(message.startsWith("Missing:"), description + " should be found");
+    }
+
     @Test
     void testExternalFiles_LoadsEnglish() {
         // When
         String message = messages.get("auth.login.success");
 
         // Then
-        assertNotNull(message, "Message should not be null");
-        assertFalse(message.isEmpty(), "Message should not be empty");
-        assertFalse(message.startsWith("Missing:"), "Message should be found");
+        assertMessageLoaded(message, "English message");
     }
 
     @Test
@@ -54,9 +62,7 @@ class MessagesExternalFilesTest {
         String message = messages.get("auth.login.success");
 
         // Then
-        assertNotNull(message, "Message should not be null");
-        assertFalse(message.isEmpty(), "Message should not be empty");
-        assertFalse(message.startsWith("Missing:"), "Message should be found");
+        assertMessageLoaded(message, "Polish message");
     }
 
     @Test

@@ -77,6 +77,7 @@ class SimpleMessagesKeysTest {
             "connection.error.game_server",
             "connection.error.no_servers",
             "connection.connecting",
+            "connection.retry",
             "connection.commands.registered",
             "connection.manager.initialized",
             "connection.listener.registered",
