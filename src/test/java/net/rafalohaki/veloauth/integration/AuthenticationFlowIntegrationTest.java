@@ -52,7 +52,6 @@ class AuthenticationFlowIntegrationTest {
     @Mock
     private org.slf4j.Logger logger;
     private net.rafalohaki.veloauth.VeloAuth plugin;
-    private net.rafalohaki.veloauth.connection.ConnectionManager connectionManager;
     @Mock
     private com.velocitypowered.api.proxy.ProxyServer proxyServer;
 
@@ -114,13 +113,6 @@ class AuthenticationFlowIntegrationTest {
         when(proxyServer.getScheduler().buildTask(any(), any(Runnable.class))).thenReturn(taskBuilder);
         when(taskBuilder.schedule()).thenReturn(mock(com.velocitypowered.api.scheduler.ScheduledTask.class));
         
-        connectionManager = new net.rafalohaki.veloauth.connection.ConnectionManager(
-                plugin,
-                authCache,
-                settings,
-                messages
-        );
-
         postLoginHandler = new PostLoginHandler(
                 authCache,
                 databaseManager,

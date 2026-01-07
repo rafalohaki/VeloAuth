@@ -18,6 +18,7 @@ final class HttpJsonClient {
         // Utility class
     }
 
+    @SuppressWarnings("java:S5144") // Safe: URL constructed from trusted internal endpoint enum and encoded username
     static HttpJsonResponse get(String endpoint, String username, int timeoutMs) throws IOException {
         // Encode username to prevent URL injection attacks
         String encodedUsername = URLEncoder.encode(username, StandardCharsets.UTF_8);

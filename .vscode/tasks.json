@@ -1,0 +1,14 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "maven-test-compile",
+			"type": "shell",
+			"command": "mvnd",
+			"args": [
+				"test-compile"
+			],
+			"group": "build"
+		}
+	]
+}

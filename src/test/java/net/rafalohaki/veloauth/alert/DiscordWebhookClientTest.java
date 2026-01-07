@@ -13,14 +13,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class DiscordWebhookClientTest {
 
+    private static final String VALID_WEBHOOK_URL_1 = "https://discord.com/api/webhooks/123456789/abcdefghijklmnopqrstuvwxyz";
+
     @Test
     void shouldAcceptValidDiscordWebhookUrl() {
         // Given: Valid Discord webhook URLs
-        String validUrl1 = "https://discord.com/api/webhooks/123456789/abcdefghijklmnopqrstuvwxyz";
         String validUrl2 = "https://discordapp.com/api/webhooks/987654321/zyxwvutsrqponmlkjihgfedcba";
 
         // When/Then: Should create client without exception
-        assertDoesNotThrow(() -> new DiscordWebhookClient(validUrl1));
+        assertDoesNotThrow(() -> new DiscordWebhookClient(VALID_WEBHOOK_URL_1));
         assertDoesNotThrow(() -> new DiscordWebhookClient(validUrl2));
     }
 
@@ -72,8 +73,7 @@ class DiscordWebhookClientTest {
     @Test
     void shouldHandleBlankContent() {
         // Given: Valid webhook client
-        String validUrl = "https://discord.com/api/webhooks/123456789/abcdefghijklmnopqrstuvwxyz";
-        DiscordWebhookClient client = new DiscordWebhookClient(validUrl);
+        DiscordWebhookClient client = new DiscordWebhookClient(VALID_WEBHOOK_URL_1);
 
         // When: Sending blank content
         boolean result1 = client.sendMessage(null);
@@ -89,8 +89,7 @@ class DiscordWebhookClientTest {
     @Test
     void shouldTruncateLongContent() {
         // Given: Valid webhook client and very long content
-        String validUrl = "https://discord.com/api/webhooks/123456789/abcdefghijklmnopqrstuvwxyz";
-        DiscordWebhookClient client = new DiscordWebhookClient(validUrl);
+        DiscordWebhookClient client = new DiscordWebhookClient(VALID_WEBHOOK_URL_1);
         
         String longContent = "A".repeat(3000); // 3000 chars (Discord limit is 2000)
 
@@ -102,8 +101,7 @@ class DiscordWebhookClientTest {
     @Test
     void shouldRejectNullEmbed() {
         // Given: Valid webhook client
-        String validUrl = "https://discord.com/api/webhooks/123456789/abcdefghijklmnopqrstuvwxyz";
-        DiscordWebhookClient client = new DiscordWebhookClient(validUrl);
+        DiscordWebhookClient client = new DiscordWebhookClient(VALID_WEBHOOK_URL_1);
 
         // When/Then: Should throw NullPointerException
         assertThrows(NullPointerException.class, 

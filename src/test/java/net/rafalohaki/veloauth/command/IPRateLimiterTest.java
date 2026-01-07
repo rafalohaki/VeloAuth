@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * Unit tests for IPRateLimiter.
  * Tests rate limiting behavior, thread safety, and cleanup logic.
  */
+@SuppressWarnings("java:S100")
 class IPRateLimiterTest {
 
     private IPRateLimiter rateLimiter;
@@ -177,12 +178,7 @@ class IPRateLimiterTest {
 
         // Wait for all futures to complete with timeout
         for (Future<?> future : futures) {
-            try {
-                future.get(5, TimeUnit.SECONDS); // This should complete without exception
-                assertTrue(true, "Future should complete within 5 seconds");
-            } catch (ExecutionException | TimeoutException e) {
-                fail("Future should complete without exceptions: " + e.getMessage());
-            }
+            assertDoesNotThrow(() -> future.get(5, TimeUnit.SECONDS), "Future should complete within 5 seconds");
         }
 
         executor.shutdown();

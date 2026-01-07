@@ -36,8 +36,7 @@ import java.util.concurrent.locks.LockSupport;
  */
 public class ConnectionManager {
 
-    /** Timeout for server connection attempts - increased from 10s to 15s for slow/remote servers */
-    private static final long CONNECT_TIMEOUT_SECONDS = 15;
+    /** Timeout for server connection attempts - configurable via Settings */
     private static final String CONNECTION_ERROR_GAME_SERVER = "connection.error.game_server";
     private static final int MAX_RETRY_ATTEMPTS = 3;
     
@@ -145,7 +144,7 @@ public class ConnectionManager {
 
             var result = player.createConnectionRequest(targetServer)
                     .connect()
-                    .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                     .join();  // Czekaj na zakończenie transferu
 
             if (result.isSuccessful()) {
@@ -294,7 +293,7 @@ public class ConnectionManager {
 
             var result = player.createConnectionRequest(targetServer)
                     .connect()
-                    .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                     .join();
 
             return handleTransferResult(player, targetServer, serverName, attempts, result);
@@ -360,7 +359,7 @@ public class ConnectionManager {
                                            RegisteredServer targetServer, String serverName) {
         player.createConnectionRequest(picoLimbo)
                 .connect()
-                .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                 .whenComplete((limboResult, ex) ->
                         handlePicoLimboFallbackResult(player, targetServer, serverName, limboResult, ex));
     }
@@ -398,7 +397,7 @@ public class ConnectionManager {
         try {
             var retry = player.createConnectionRequest(targetServer)
                     .connect()
-                    .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                     .join();
             if (!retry.isSuccessful()) {
                 logger.warn("Retry to connect {} to {} after PicoLimbo failed: {}",
@@ -473,7 +472,7 @@ public class ConnectionManager {
         try {
             player.createConnectionRequest(targetServer)
                     .connect()
-                    .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                     .whenComplete((result, ex) -> handleTimeoutRetryResult(player, serverName, result, ex));
         } catch (Exception retryEx) {
             timeoutRetryScheduled.remove(player.getUniqueId());

@@ -52,6 +52,8 @@ public class Settings {
     // PicoLimbo settings
     private String picoLimboServerName = "limbo";
     private int picoLimboTimeoutSeconds = 300;
+    // Connection settings
+    private int connectionTimeoutSeconds = 20;
     // Security settings
     private int bcryptCost = 10;
     private int bruteForceMaxAttempts = 5;
@@ -105,6 +107,7 @@ public class Settings {
             loadDatabaseSettings(config);
             loadCacheSettings(config);
             loadPicoLimboSettings(config);
+            loadConnectionSettings(config);
             loadSecuritySettings(config);
             loadPremiumSettings(config);
             loadAlertSettings(config);
@@ -193,6 +196,10 @@ public class Settings {
                 picolimbo:
                   server-name: limbo # Registered Velocity server name
                   timeout-seconds: 300 # Kick timeout for PicoLimbo
+                
+                # Connection settings
+                connection:
+                  timeout-seconds: 20 # Connection timeout in seconds. Increase if your backend servers are slow.
                 
                 # Security settings for password hashing and brute-force protection
                 security:
@@ -428,6 +435,17 @@ public class Settings {
     }
 
     /**
+     * Ładuje ustawienia połączeń.
+     */
+    @SuppressWarnings("unchecked")
+    private void loadConnectionSettings(Map<String, Object> config) {
+        Map<String, Object> connection = (Map<String, Object>) config.get("connection");
+        if (connection != null) {
+            connectionTimeoutSeconds = getInt(connection, "timeout-seconds", connectionTimeoutSeconds);
+        }
+    }
+
+    /**
      * Ładuje ustawienia bezpieczeństwa.
      */
     @SuppressWarnings("unchecked")
@@ -514,6 +532,7 @@ public class Settings {
     private void validateSettings() {
         validateDatabaseType();
         validateConnectionSettings();
+        validateTimeoutSettings();
         validateCacheSettings();
         validateSecuritySettings();
         validateConnectionPoolSettings();
@@ -581,6 +600,12 @@ public class Settings {
 
     private void adjustMaxPasswordLength() {
         maxPasswordLength = 72;
+    }
+
+    private void validateTimeoutSettings() {
+        if (connectionTimeoutSeconds <= 0) {
+            throw new IllegalArgumentException("Connection timeout musi być > 0");
+        }
     }
 
     private void validateConnectionPoolSettings() {
@@ -783,6 +808,10 @@ public class Settings {
 
     public String getDatabaseConnectionUrl() {
         return databaseConnectionUrl;
+    }
+
+    public int getConnectionTimeoutSeconds() {
+        return connectionTimeoutSeconds;
     }
 
     public String getDatabaseConnectionParameters() {

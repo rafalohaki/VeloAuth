@@ -14,6 +14,9 @@ import java.util.Properties;
 import java.util.ResourceBundle;
 import java.util.concurrent.ConcurrentHashMap;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /**
  * Internationalization manager for VeloAuth messages.
  * Thread-safe message loading and formatting with support for external language files.
@@ -35,7 +38,7 @@ public class Messages {
     private ResourceBundle bundle;
     
     // Compiled pattern for finding placeholders like {0} or {12}
-    private static final java.util.regex.Pattern MESSAGE_FORMAT_PATTERN = java.util.regex.Pattern.compile("\\{\\d+}");
+    private static final Pattern MESSAGE_FORMAT_PATTERN = Pattern.compile("\\{\\d+}");
     
     private final boolean useExternalFiles;
 

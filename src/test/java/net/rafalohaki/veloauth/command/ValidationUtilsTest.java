@@ -24,6 +24,7 @@ import static org.mockito.Mockito.when;
  * Tests validation logic, IP extraction, and component creation.
  */
 @ExtendWith(MockitoExtension.class)
+@SuppressWarnings({"java:S2068", "java:S100"}) // Test passwords are test data, not production credentials
 class ValidationUtilsTest {
 
     @Mock
