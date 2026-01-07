@@ -20,7 +20,6 @@ import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.i18n.Messages;
-import net.rafalohaki.veloauth.util.AuthenticationErrorHandler;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
@@ -72,6 +71,7 @@ public class AuthListener {
     private final PreLoginHandler preLoginHandler;
     private final PostLoginHandler postLoginHandler;
     private final ConnectionManager connectionManager;
+    private final UuidVerificationHandler uuidVerificationHandler;
 
     /**
      * Tworzy nowy AuthListener.
@@ -106,6 +106,7 @@ public class AuthListener {
             "PreLoginHandler cannot be null - initialization failed");
         this.postLoginHandler = java.util.Objects.requireNonNull(postLoginHandler, 
             "PostLoginHandler cannot be null - initialization failed");
+        this.uuidVerificationHandler = new UuidVerificationHandler(databaseManager, authCache, logger);
 
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("connection.listener.registered"));
@@ -114,7 +115,6 @@ public class AuthListener {
 
     /**
      * Resolves the block reason for unauthorized connections.
-     * Replaces nested ternary with clear if/else logic.
      *
      * @param isAuthorized     Whether player is authorized
      * @param hasActiveSession Whether player has active session
@@ -175,7 +175,7 @@ public class AuthListener {
         if (!validateUsername(event, username)) {
             return false;
         }
-        return !checkBruteForceBlocked(event, username);
+        return !checkBruteForceBlocked(event);
     }
 
     private boolean validatePluginInitialized(PreLoginEvent event, String username) {
@@ -208,7 +208,7 @@ public class AuthListener {
         return true;
     }
 
-    private boolean checkBruteForceBlocked(PreLoginEvent event, String username) {
+    private boolean checkBruteForceBlocked(PreLoginEvent event) {
         InetAddress playerAddress = PlayerAddressUtils.getAddressFromPreLogin(event);
         if (playerAddress != null && preLoginHandler.isBruteForceBlocked(playerAddress)) {
             if (logger.isWarnEnabled()) {
@@ -479,8 +479,8 @@ public class AuthListener {
         boolean hasActiveSession = authCache.hasActiveSession(player.getUniqueId(), player.getUsername(),
                 playerIp);
 
-        // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa
-        boolean uuidMatches = verifyPlayerUuid(player);
+        // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa - delegate to handler
+        boolean uuidMatches = uuidVerificationHandler.verifyPlayerUuid(player);
 
         if (!isAuthorized || !hasActiveSession || !uuidMatches) {
             handleUnauthorizedConnection(event, player, targetServerName, isAuthorized, hasActiveSession, uuidMatches, playerIp);
@@ -593,158 +593,6 @@ public class AuthListener {
         } else {
             player.sendMessage(Component.text(messages.get("auth.first_time"), NamedTextColor.AQUA));
         }
-    }
-
-
-    /**
-     * Weryfikuje UUID gracza z bazą danych.
-     * Dla graczy online mode (premium) pomija weryfikację,
-     * ponieważ nie muszą być zarejestrowani w bazie danych.
-     * <p>
-     * <b>UUID Verification Process:</b>
-     * <ol>
-     *   <li>Premium players (online mode) - verification skipped</li>
-     *   <li>Offline players - verify against database UUID and PREMIUMUUID</li>
-     *   <li>CONFLICT_MODE players - allow UUID mismatch for conflict resolution</li>
-     * </ol>
-     * <p>
-     * <b>Conflict Resolution Strategy:</b>
-     * When a player has CONFLICT_MODE enabled, UUID mismatches are allowed.
-     * This enables the USE_OFFLINE strategy where premium players who lose
-     * their account can continue playing with offline authentication.
-     * <p>
-     * Sprawdza zarówno UUID jak i PREMIUMUUID fields zgodnie z wymaganiem 8.4.
-     * Obsługuje CONFLICT_MODE zgodnie z wymaganiem 8.5.
-     * 
-     * @param player Player to verify
-     * @return true if UUID verification passes, false otherwise
-     */
-    private boolean verifyPlayerUuid(Player player) {
-        try {
-            if (player.isOnlineMode()) {
-                return handlePremiumPlayer(player);
-            }
-
-            return verifyCrackedPlayerUuid(player);
-        } catch (Exception e) {
-            return handleVerificationError(player, e);
-        }
-    }
-
-    private boolean handlePremiumPlayer(Player player) {
-        if (logger.isDebugEnabled()) {
-            logger.debug("Premium gracz {} - pomijam weryfikację UUID z bazą", player.getUsername());
-        }
-        return true;
-    }
-
-    /**
-     * Verifies cracked player UUID against database.
-     * Optimized: Removed double-join pattern for better performance on event threads.
-     */
-    private boolean verifyCrackedPlayerUuid(Player player) {
-        try {
-            // Direct synchronous call - no need for CompletableFuture wrapper when we join() anyway
-            var dbResult = databaseManager.findPlayerByNickname(player.getUsername()).join();
-
-            if (dbResult.isDatabaseError()) {
-                return handleDatabaseVerificationError(player, dbResult);
-            }
-
-            return performUuidVerification(player, dbResult.getValue());
-        } catch (Exception e) {
-            return handleAsyncVerificationError(player, e);
-        }
-    }
-
-    private boolean handleDatabaseVerificationError(Player player, DbResult<RegisteredPlayer> dbResult) {
-        logger.error(SECURITY_MARKER, "[DATABASE ERROR] UUID verification failed for {}: {}",
-                player.getUsername(), dbResult.getErrorMessage());
-        AuthenticationErrorHandler.handleVerificationFailure(player, player.getUniqueId(), authCache, logger);
-        return false;
-    }
-
-    /**
-     * Performs UUID verification checking both UUID and PREMIUMUUID fields.
-     * Handles CONFLICT_MODE for nickname conflict resolution.
-     * <p>
-     * <b>Verification Logic:</b>
-     * <ol>
-     *   <li>If CONFLICT_MODE is enabled - allow access (conflict resolution in progress)</li>
-     *   <li>Check if player UUID matches database UUID field</li>
-     *   <li>Check if player UUID matches database PREMIUMUUID field</li>
-     *   <li>If no match - log mismatch and invalidate cache</li>
-     * </ol>
-     * 
-     * Requirements: 8.1, 8.4, 8.5
-     */
-    private boolean performUuidVerification(Player player, RegisteredPlayer dbPlayer) {
-        if (dbPlayer == null) {
-            logMissingDbPlayer(player);
-            return false;
-        }
-
-        if (dbPlayer.getConflictMode()) {
-            logConflictModeActive(player, dbPlayer);
-            return true;
-        }
-
-        return verifyUuidMatch(player, dbPlayer);
-    }
-
-    private void logMissingDbPlayer(Player player) {
-        if (logger.isDebugEnabled()) {
-            logger.debug("Brak UUID w bazie dla gracza {}", player.getUsername());
-        }
-    }
-
-    private void logConflictModeActive(Player player, RegisteredPlayer dbPlayer) {
-        logger.info(SECURITY_MARKER,
-                "[CONFLICT_MODE ACTIVE] Player {} (UUID: {}) is in conflict resolution mode - " +
-                        "allowing access despite potential UUID mismatch. Conflict timestamp: {}",
-                player.getUsername(),
-                player.getUniqueId(),
-                dbPlayer.getConflictTimestamp() > 0 ?
-                        java.time.Instant.ofEpochMilli(dbPlayer.getConflictTimestamp()) : "not set");
-    }
-
-    private boolean verifyUuidMatch(Player player, RegisteredPlayer dbPlayer) {
-        UUID playerUuid = player.getUniqueId();
-        UUID storedUuid = net.rafalohaki.veloauth.util.UuidUtils.parseUuidSafely(dbPlayer.getUuid());
-        UUID storedPremiumUuid = net.rafalohaki.veloauth.util.UuidUtils.parseUuidSafely(dbPlayer.getPremiumUuid());
-
-        if (storedUuid != null && playerUuid.equals(storedUuid)) {
-            return true;
-        }
-
-        if (storedPremiumUuid != null && playerUuid.equals(storedPremiumUuid)) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("UUID matched against PREMIUMUUID for player {}", player.getUsername());
-            }
-            return true;
-        }
-
-        handleUuidMismatch(player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer);
-        return false;
-    }
-
-    /**
-     * Handles UUID mismatch with enhanced logging and cache invalidation.
-     * 
-     * Requirements: 8.2, 8.3
-     */
-    private void handleUuidMismatch(Player player, UUID playerUuid, UUID storedUuid, 
-                                   UUID storedPremiumUuid, RegisteredPlayer dbPlayer) {
-        AuthenticationErrorHandler.handleUuidMismatch(
-            player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer, authCache, logger);
-    }
-
-    private boolean handleAsyncVerificationError(Player player, Exception e) {
-        return AuthenticationErrorHandler.handleVerificationError(player, e, authCache, logger);
-    }
-
-    private boolean handleVerificationError(Player player, Exception e) {
-        return AuthenticationErrorHandler.handleVerificationError(player, e, authCache, logger);
     }
 
 
