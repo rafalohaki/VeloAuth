@@ -335,13 +335,15 @@ public class VeloAuth {
         long startTime = System.currentTimeMillis();
         
         authCache = new AuthCache(
-                settings.getCacheTtlMinutes(),
-                settings.getCacheMaxSize(),
-                settings.getCacheMaxSize(), // maxSessions - użyj tej samej wartości co maxSize
-                10000, // maxPremiumCache - set to 10000 as per requirement 6.5
-                settings.getBruteForceMaxAttempts(),
-                settings.getBruteForceTimeoutMinutes(),
-                settings.getCacheCleanupIntervalMinutes(),
+                new AuthCache.AuthCacheConfig(
+                    settings.getCacheTtlMinutes(),
+                    settings.getCacheMaxSize(),
+                    settings.getCacheMaxSize(), // maxSessions - użyj tej samej wartości co maxSize
+                    10000, // maxPremiumCache - set to 10000 as per requirement 6.5
+                    settings.getBruteForceMaxAttempts(),
+                    settings.getBruteForceTimeoutMinutes(),
+                    settings.getCacheCleanupIntervalMinutes()
+                ),
                 settings,
                 messages
         );

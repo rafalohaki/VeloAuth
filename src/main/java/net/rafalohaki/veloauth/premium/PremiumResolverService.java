@@ -275,26 +275,26 @@ public class PremiumResolverService {
         source = resolution.source() != null ? resolution.source() : source;
         String canonical = resolution.canonicalUsername() != null ? resolution.canonicalUsername() : requestName;
 
-        switch (resolution.status()) {
-            case PREMIUM -> {
-                if (resolution.uuid() == null) {
-                    return PremiumResolution.unknown(source, "missing uuid");
-                }
-                if (!canonical.equalsIgnoreCase(requestName)) {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("[PremiumResolver] username mismatch {} vs {} from {}", canonical, requestName, source);
-                    }
-                    return PremiumResolution.offline(requestName, source, "username mismatch with canonical name");
-                }
-                return PremiumResolution.premium(resolution.uuid(), canonical, source);
-            }
-            case OFFLINE -> {
-                return PremiumResolution.offline(requestName, source, resolution.message());
-            }
-            default -> {
-                return PremiumResolution.unknown(source, resolution.message());
-            }
+        if (resolution.status() == PremiumResolution.PremiumStatus.PREMIUM) {
+            return validatePremiumResolution(resolution, source, canonical, requestName);
+        } else if (resolution.status() == PremiumResolution.PremiumStatus.OFFLINE) {
+            return PremiumResolution.offline(requestName, source, resolution.message());
+        } else {
+            return PremiumResolution.unknown(source, resolution.message());
         }
+    }
+
+    private PremiumResolution validatePremiumResolution(PremiumResolution resolution, String source, String canonical, String requestName) {
+        if (resolution.uuid() == null) {
+            return PremiumResolution.unknown(source, "missing uuid");
+        }
+        if (!canonical.equalsIgnoreCase(requestName)) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("[PremiumResolver] username mismatch {} vs {} from {}", canonical, requestName, source);
+            }
+            return PremiumResolution.offline(requestName, source, "username mismatch with canonical name");
+        }
+        return PremiumResolution.premium(resolution.uuid(), canonical, source);
     }
 
     private PremiumResolution getFromCache(String key) {

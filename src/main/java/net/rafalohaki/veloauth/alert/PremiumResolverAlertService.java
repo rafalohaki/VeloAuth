@@ -134,53 +134,16 @@ public class PremiumResolverAlertService implements AutoCloseable {
      */
     private void sendFailureAlert(int total, int failed, double failureRate) {
         if (discordClient == null) {
-            if (logger.isWarnEnabled()) {
-                logger.warn("⚠️ Premium resolver failure rate: {}/{} ({}%)",
-                        failed, total, String.format("%.1f", failureRate * 100));
-            }
+            logLocalAlert(total, failed, failureRate);
             return;
         }
 
         try {
-            DiscordWebhookClient.DiscordEmbed embed = new DiscordWebhookClient.DiscordEmbed()
-                    .title("⚠️ VeloAuth Premium Resolver Alert")
-                    .description("High failure rate detected in premium resolver service")
-                    .color(0xFFA500) // Orange
-                    .timestamp(Instant.now().toString())
-                    .fields(java.util.List.of(
-                            new DiscordWebhookClient.EmbedField(
-                                    "Failure Rate",
-                                    String.format("%.1f%% (%d/%d)", failureRate * 100, failed, total),
-                                    true
-                            ),
-                            new DiscordWebhookClient.EmbedField(
-                                    "Threshold",
-                                    String.format("%.1f%%", alertSettings.getFailureRateThreshold() * 100),
-                                    true
-                            ),
-                            new DiscordWebhookClient.EmbedField(
-                                    "Time Window",
-                                    String.format("%d minutes", alertSettings.getCheckIntervalMinutes()),
-                                    true
-                            ),
-                            new DiscordWebhookClient.EmbedField(
-                                    "Failures by Resolver",
-                                    buildFailureBreakdown(),
-                                    false
-                            ),
-                            new DiscordWebhookClient.EmbedField(
-                                    "Recommendation",
-                                    "Check resolver API status and network connectivity",
-                                    false
-                            )
-                    ));
+            DiscordWebhookClient.DiscordEmbed embed = createFailureAlertEmbed(total, failed, failureRate);
 
             boolean sent = discordClient.sendEmbed(embed);
             if (sent) {
-                if (logger.isWarnEnabled()) {
-                    logger.warn("⚠️ Premium resolver alert sent to Discord: {}/{} ({}%)",
-                            failed, total, String.format("%.1f", failureRate * 100));
-                }
+                logLocalAlert(total, failed, failureRate, "Premium resolver alert sent to Discord: {}/{} ({}%)");
             } else {
                 logger.error("Failed to send Discord alert (check webhook URL)");
             }
@@ -188,6 +151,52 @@ public class PremiumResolverAlertService implements AutoCloseable {
         } catch (Exception e) {
             logger.error("Error sending Discord alert", e);
         }
+    }
+
+    private void logLocalAlert(int total, int failed, double failureRate) {
+        logLocalAlert(total, failed, failureRate, "⚠️ Premium resolver failure rate: {}/{} ({}%)");
+    }
+
+    private void logLocalAlert(int total, int failed, double failureRate, String template) {
+        if (logger.isWarnEnabled()) {
+            logger.warn(template,
+                    failed, total, String.format("%.1f", failureRate * 100));
+        }
+    }
+
+    private DiscordWebhookClient.DiscordEmbed createFailureAlertEmbed(int total, int failed, double failureRate) {
+        return new DiscordWebhookClient.DiscordEmbed()
+                .title("⚠️ VeloAuth Premium Resolver Alert")
+                .description("High failure rate detected in premium resolver service")
+                .color(0xFFA500) // Orange
+                .timestamp(Instant.now().toString())
+                .fields(java.util.List.of(
+                        new DiscordWebhookClient.EmbedField(
+                                "Failure Rate",
+                                String.format("%.1f%% (%d/%d)", failureRate * 100, failed, total),
+                                true
+                        ),
+                        new DiscordWebhookClient.EmbedField(
+                                "Threshold",
+                                String.format("%.1f%%", alertSettings.getFailureRateThreshold() * 100),
+                                true
+                        ),
+                        new DiscordWebhookClient.EmbedField(
+                                "Time Window",
+                                String.format("%d minutes", alertSettings.getCheckIntervalMinutes()),
+                                true
+                        ),
+                        new DiscordWebhookClient.EmbedField(
+                                "Failures by Resolver",
+                                buildFailureBreakdown(),
+                                false
+                        ),
+                        new DiscordWebhookClient.EmbedField(
+                                "Recommendation",
+                                "Check resolver API status and network connectivity",
+                                false
+                        )
+                ));
     }
 
     /**

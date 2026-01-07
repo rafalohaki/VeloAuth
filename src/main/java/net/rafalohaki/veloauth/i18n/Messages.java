@@ -34,7 +34,9 @@ public class Messages {
     // Current resource bundle
     private ResourceBundle bundle;
     
-    // Flag to indicate if using external files
+    // Compiled pattern for finding placeholders like {0} or {12}
+    private static final java.util.regex.Pattern MESSAGE_FORMAT_PATTERN = java.util.regex.Pattern.compile("\\{\\d+}");
+    
     private final boolean useExternalFiles;
 
     /**
@@ -242,7 +244,8 @@ public class Messages {
             // Support both MessageFormat style ({0}, {1}) and lightweight '{}' style used in some translations.
             // If '{}' tokens are present but no numeric indices, convert '{}' -> {0}, {1}, ... for MessageFormat.
             String formattedMessage = message;
-            if (message.contains("{}") && !message.matches(".*\\{\\d+}.*")) {
+            // Prevent ReDoS by using compiled pattern and avoiding greedy .* matches
+            if (message.contains("{}") && !MESSAGE_FORMAT_PATTERN.matcher(message).find()) {
                 StringBuilder sb = new StringBuilder();
                 int start = 0;
                 int index = 0;

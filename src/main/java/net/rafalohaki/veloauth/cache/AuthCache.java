@@ -148,35 +148,41 @@ public class AuthCache {
     private final Messages messages;
 
     /**
+     * Configuration parameters for AuthCache.
+     */
+    public record AuthCacheConfig(
+        int ttlMinutes,
+        int maxSize,
+        int maxSessions,
+        int maxPremiumCache,
+        int maxLoginAttempts,
+        int bruteForceTimeoutMinutes,
+        int cleanupIntervalMinutes
+    ) {}
+
+    /**
      * Tworzy nowy AuthCache.
      *
-     * @param ttlMinutes               TTL cache w minutach
-     * @param maxSize                  Maksymalny rozmiar cache
-     * @param maxSessions              Maksymalna liczba aktywnych sesji
-     * @param maxPremiumCache          Maksymalny rozmiar premium cache
-     * @param maxLoginAttempts         Maksymalna liczba prób logowania
-     * @param bruteForceTimeoutMinutes Timeout brute force w minutach
-     * @param cleanupIntervalMinutes   Interwał czyszczenia cache w minutach
-     * @param settings                 Ustawienia pluginu
-     * @param messages                 System wiadomości i18n
+     * @param config   Konfiguracja cache
+     * @param settings Ustawienia pluginu
+     * @param messages System wiadomości i18n
      */
-    @SuppressWarnings("java:S107") // SonarCloud false positive: all 9 parameters required for cache configuration
-    public AuthCache(int ttlMinutes, int maxSize, int maxSessions, int maxPremiumCache,
-                     int maxLoginAttempts, int bruteForceTimeoutMinutes, int cleanupIntervalMinutes,
-                     Settings settings, Messages messages) {
+    public AuthCache(AuthCacheConfig config, Settings settings, Messages messages) {
 
-        String error = validateParams(ttlMinutes, maxSize, maxSessions, maxPremiumCache,
-                maxLoginAttempts, bruteForceTimeoutMinutes, messages);
+        String error = validateParams(
+            config.ttlMinutes(), config.maxSize(), config.maxSessions(), config.maxPremiumCache(),
+            config.maxLoginAttempts(), config.bruteForceTimeoutMinutes(), messages
+        );
         if (error != null) {
             throw new IllegalArgumentException(error);
         }
 
-        this.ttlMinutes = ttlMinutes;
-        this.maxSize = maxSize;
-        this.maxSessions = maxSessions;
-        this.maxPremiumCache = maxPremiumCache;
-        this.maxLoginAttempts = maxLoginAttempts;
-        this.bruteForceTimeoutMinutes = bruteForceTimeoutMinutes;
+        this.ttlMinutes = config.ttlMinutes();
+        this.maxSize = config.maxSize();
+        this.maxSessions = config.maxSessions();
+        this.maxPremiumCache = config.maxPremiumCache();
+        this.maxLoginAttempts = config.maxLoginAttempts();
+        this.bruteForceTimeoutMinutes = config.bruteForceTimeoutMinutes();
         this.premiumTtlHours = settings.getPremiumTtlHours();
         this.premiumRefreshThreshold = settings.getPremiumRefreshThreshold();
         this.settings = settings;
@@ -206,12 +212,12 @@ public class AuthCache {
         });
 
         // Uruchom czyszczenie co określony interwał
-        if (cleanupIntervalMinutes > 0) {
+        if (config.cleanupIntervalMinutes() > 0) {
             // skipcq: JAVA-W1087 - Periodic scheduled task, fire-and-forget
             cleanupScheduler.scheduleAtFixedRate(
                     this::cleanupExpiredEntries,
-                    cleanupIntervalMinutes,
-                    cleanupIntervalMinutes,
+                    config.cleanupIntervalMinutes(),
+                    config.cleanupIntervalMinutes(),
                     TimeUnit.MINUTES
             );
         }
@@ -225,7 +231,7 @@ public class AuthCache {
 
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("cache.auth.created"),
-                    ttlMinutes, maxSize, maxLoginAttempts, bruteForceTimeoutMinutes);
+                    this.ttlMinutes, this.maxSize, this.maxLoginAttempts, this.bruteForceTimeoutMinutes);
         }
     }
 

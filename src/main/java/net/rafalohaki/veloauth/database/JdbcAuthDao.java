@@ -53,16 +53,19 @@ public final class JdbcAuthDao {
     private final DatabaseConfig config;
     private final boolean postgres;
 
-    private final String selectPlayerSql;
-    private final String insertPlayerSql;
-    private final String updatePlayerSql;
-    private final String deletePlayerSql;
+    private String selectPlayerSql;
+    private String insertPlayerSql;
+    private String updatePlayerSql;
+    private String deletePlayerSql;
 
-    @SuppressWarnings("java:S138") // Constructor initializes SQL templates - 54 lines, not refactorable
     public JdbcAuthDao(DatabaseConfig config) {
         this.config = Objects.requireNonNull(config, "config nie może być null");
         this.postgres = DatabaseType.POSTGRESQL.getName().equalsIgnoreCase(config.getStorageType());
-
+        
+        initializeSqlStatements();
+    }
+    
+    private void initializeSqlStatements() {
         String authTable = table(TABLE_AUTH);
         String nicknameColumn = column(COL_NICKNAME);
         String lowercaseNicknameColumn = column(COL_LOWERCASE_NICKNAME);
