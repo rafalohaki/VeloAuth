@@ -56,7 +56,7 @@ public class PostLoginHandler {
      */
     public void handlePremiumPlayer(Player player, String playerIp) {
         if (logger.isInfoEnabled()) {
-            logger.info(messages.get("player.premium.verified"), player.getUsername());
+            logger.info(messages.get("player.premium.verified", player.getUsername()));
         }
 
         UUID playerUuid = player.getUniqueId();

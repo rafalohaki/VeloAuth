@@ -78,8 +78,7 @@ public class ConnectionManager {
         this.messages = messages;
 
         if (logger.isDebugEnabled()) {
-            logger.debug(messages.get("connection.manager.initialized"),
-                    settings.getPicoLimboServerName());
+            logger.debug(messages.get("connection.manager.initialized", settings.getPicoLimboServerName()));
         }
     }
 
@@ -98,7 +97,7 @@ public class ConnectionManager {
             }
 
             if (logger.isDebugEnabled()) {
-                logger.debug(messages.get("player.transfer.attempt"), player.getUsername());
+                logger.debug(messages.get("player.transfer.attempt", player.getUsername()));
             }
 
             return executePicoLimboTransfer(player, targetServer);
@@ -156,7 +155,7 @@ public class ConnectionManager {
 
             if (result.isSuccessful()) {
                 if (logger.isDebugEnabled()) {
-                    logger.debug(messages.get("player.transfer.success"), player.getUsername());
+                    logger.debug(messages.get("player.transfer.success", player.getUsername()));
                 }
                 return true;
             } else {
@@ -239,8 +238,7 @@ public class ConnectionManager {
             ));
 
             if (logger.isDebugEnabled()) {
-                logger.debug(messages.get("player.transfer.backend.attempt"),
-                        player.getUsername(), serverName);
+                logger.debug(messages.get("player.transfer.backend.attempt", player.getUsername(), serverName));
             }
 
             // Wykonaj transfer synchroniczny z timeoutem
@@ -297,8 +295,7 @@ public class ConnectionManager {
                 // Reset retry counter on success
                 retryAttempts.remove(player.getUniqueId());
                 if (logger.isDebugEnabled()) {
-                    logger.debug(messages.get("player.transfer.backend.success"),
-                            player.getUsername(), serverName);
+                    logger.debug(messages.get("player.transfer.backend.success", player.getUsername(), serverName));
                 }
                 return true;
             } else {
@@ -617,7 +614,7 @@ public class ConnectionManager {
                 logger.debug("  - {} ({})", name, address);
             });
             
-            logger.debug(messages.get("connection.picolimbo.server"), settings.getPicoLimboServerName());
+            logger.debug(messages.get("connection.picolimbo.server", settings.getPicoLimboServerName()));
         }
 
         // Sprawdź czy PicoLimbo serwer istnieje
@@ -633,9 +630,9 @@ public class ConnectionManager {
             // Zmieniono na DEBUG, aby uniknąć duplikowania informacji o PicoLimbo przy starcie
             // Informacja o PicoLimbo jest już logowana w logStartupInfo w VeloAuth
             if (logger.isDebugEnabled()) {
-                logger.debug(messages.get("connection.picolimbo.found"),
+                logger.debug(messages.get("connection.picolimbo.found",
                         settings.getPicoLimboServerName(),
-                        picoLimbo.get().getServerInfo().getAddress());
+                        picoLimbo.get().getServerInfo().getAddress()));
             }
         }
     }

@@ -233,7 +233,7 @@ public class PreLoginHandler {
             String canonical = resolution.canonicalUsername() != null ? resolution.canonicalUsername() : username;
             authCache.addPremiumPlayer(canonical, premiumUuid);
             if (logger.isInfoEnabled()) {
-                logger.info(messages.get("player.premium.confirmed"), username, resolution.source(), premiumUuid);
+                logger.info(messages.get("player.premium.confirmed", username, resolution.source(), premiumUuid));
             }
             return new PremiumResolutionResult(true, premiumUuid);
         }

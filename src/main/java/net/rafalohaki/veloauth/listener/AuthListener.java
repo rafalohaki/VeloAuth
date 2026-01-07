@@ -442,8 +442,7 @@ public class AuthListener {
                 String reason = resolveBlockReason(isAuthorized, hasActiveSession);
 
                 if (logger.isDebugEnabled()) {
-                    logger.debug(messages.get("player.blocked.unauthorized"),
-                            player.getUsername(), targetServerName, reason, playerIp);
+                    logger.debug(messages.get("player.blocked.unauthorized", player.getUsername(), targetServerName, reason, playerIp));
                 }
 
                 event.setResult(ServerPreConnectEvent.ServerResult.denied());

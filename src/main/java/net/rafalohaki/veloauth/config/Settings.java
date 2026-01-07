@@ -50,7 +50,7 @@ public class Settings {
     private int premiumTtlHours = 24;
     private double premiumRefreshThreshold = 0.8;
     // PicoLimbo settings
-    private String picoLimboServerName = "lobby";
+    private String picoLimboServerName = "limbo";
     private int picoLimboTimeoutSeconds = 300;
     // Security settings
     private int bcryptCost = 10;
@@ -191,7 +191,7 @@ public class Settings {
                 
                 # PicoLimbo integration (fallback server for unauthenticated players)
                 picolimbo:
-                  server-name: lobby # Registered Velocity server name
+                  server-name: limbo # Registered Velocity server name
                   timeout-seconds: 300 # Kick timeout for PicoLimbo
                 
                 # Security settings for password hashing and brute-force protection
@@ -822,7 +822,7 @@ public class Settings {
     }
 
     public String getPicoLimboServerName() {
-        return picoLimboServerName != null ? picoLimboServerName : "lobby";
+        return picoLimboServerName != null ? picoLimboServerName : "limbo";
     }
 
     public int getPicoLimboTimeoutSeconds() {

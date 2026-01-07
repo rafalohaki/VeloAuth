@@ -33,7 +33,7 @@ import java.util.concurrent.CompletableFuture;
  * VeloAuth - Complete Velocity Authentication Plugin.
  * <p>
  * Manager autoryzacji na proxy Velocity, który zarządza przepuszczaniem graczy
- * między Velocity, PicoLimbo (mini serwer lobby) i serwerami backend.
+ * między Velocity, PicoLimbo (mini serwer limbo) i serwerami backend.
  * <p>
  * Kluczowe cechy:
  * - Zarządzanie cache autoryzacji - zalogowani gracze omijają logowanie
