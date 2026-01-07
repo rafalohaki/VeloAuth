@@ -6,10 +6,8 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.cache.AuthCache.PremiumCacheEntry;
-import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
-import net.rafalohaki.veloauth.i18n.SimpleMessages;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import org.slf4j.Logger;
@@ -25,35 +23,29 @@ public class PostLoginHandler {
 
     private final VeloAuth plugin;
     private final AuthCache authCache;
-    private final ConnectionManager connectionManager;
     private final DatabaseManager databaseManager;
     private final Messages messages;
     private final Logger logger;
-    private final SimpleMessages sm;
 
     /**
      * Creates a new PostLoginHandler.
      *
      * @param plugin            VeloAuth plugin instance
      * @param authCache         Cache for authorization and sessions
-     * @param connectionManager Manager for server connections
      * @param databaseManager   Manager for database operations
      * @param messages          i18n message system
      * @param logger            Logger instance
      */
     public PostLoginHandler(VeloAuth plugin,
                            AuthCache authCache,
-                           ConnectionManager connectionManager,
                            DatabaseManager databaseManager,
                            Messages messages,
                            Logger logger) {
         this.plugin = plugin;
         this.authCache = authCache;
-        this.connectionManager = connectionManager;
         this.databaseManager = databaseManager;
         this.messages = messages;
         this.logger = logger;
-        this.sm = new SimpleMessages(messages);
     }
 
     /**
@@ -83,23 +75,13 @@ public class PostLoginHandler {
         authCache.addAuthorizedPlayer(playerUuid, cachedUser);
         authCache.startSession(playerUuid, player.getUsername(), playerIp);
 
-        // Auto-transfer premium player to backend
-        transferToBackendAsync(player);
-    }
-
-    /**
-     * Schedules async backend transfer for premium player.
-     *
-     * @param player The player to transfer
-     */
-    private void transferToBackendAsync(Player player) {
-        plugin.getServer().getScheduler().buildTask(plugin, () -> {
-            try {
-                connectionManager.transferToBackend(player);
-            } catch (Exception e) {
-                logger.error("Error transferring premium player {} to backend", player.getUsername(), e);
-            }
-        }).schedule();
+        // Premium player is now authorized in cache
+        // ServerPreConnectEvent will redirect to PicoLimbo automatically
+        // Then onServerConnected will trigger auto-transfer to backend
+        if (logger.isDebugEnabled()) {
+            logger.debug("Premium player {} authorized - ServerPreConnectEvent will route to PicoLimbo", 
+                    player.getUsername());
+        }
     }
 
     /**
@@ -111,17 +93,17 @@ public class PostLoginHandler {
     public void handleOfflinePlayer(Player player, String playerIp) {
         if (authCache.isPlayerAuthorized(player.getUniqueId(), playerIp)) {
             if (logger.isDebugEnabled()) {
-                logger.debug("\u2705 Gracz {} jest już autoryzowany - pozostaje na backendzie",
+                logger.debug("\u2705 Gracz {} jest już autoryzowany - ServerPreConnectEvent przekieruje na backend",
                         player.getUsername());
             }
             return;
         }
 
         if (logger.isDebugEnabled()) {
-            logger.debug(messages.get("player.unauthorized.redirect"), player.getUsername());
+            logger.debug("Gracz {} nie jest autoryzowany - ServerPreConnectEvent przekieruje na PicoLimbo", 
+                    player.getUsername());
         }
-
-        transferToPicoLimboAsync(player);
+        // ServerPreConnectEvent will redirect to PicoLimbo automatically
     }
 
     /**
@@ -165,29 +147,5 @@ public class PostLoginHandler {
         return Optional.ofNullable(authCache.getPremiumStatus(player.getUsername()))
                 .map(PremiumCacheEntry::isPremium)
                 .orElse(false);
-    }
-
-    /**
-     * Schedules async PicoLimbo transfer for player.
-     *
-     * @param player The player to transfer
-     */
-    private void transferToPicoLimboAsync(Player player) {
-        plugin.getServer().getScheduler().buildTask(plugin, () -> {
-            try {
-                boolean success = connectionManager.transferToPicoLimbo(player);
-                if (!success) {
-                    logger.error("\u274C Błąd podczas przenoszenia gracza {} na PicoLimbo",
-                            player.getUsername());
-
-                    player.disconnect(sm.connectionErrorAuthConnect());
-                }
-            } catch (Exception e) {
-                logger.error("❌ Błąd podczas przenoszenia gracza {} na PicoLimbo: {}",
-                        player.getUsername(), e.getMessage(), e);
-
-                player.disconnect(sm.connectionErrorAuthConnect());
-            }
-        }).schedule();
     }
 }

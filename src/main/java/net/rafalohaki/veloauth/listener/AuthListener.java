@@ -8,12 +8,14 @@ import com.velocitypowered.api.event.connection.PreLoginEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.proxy.Player;
+import com.velocitypowered.api.proxy.server.RegisteredServer;
 import static com.velocitypowered.api.event.ResultedEvent.ComponentResult;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
+import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -26,6 +28,7 @@ import org.slf4j.MarkerFactory;
 
 import javax.inject.Inject;
 import java.net.InetAddress;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -69,6 +72,7 @@ public class AuthListener {
     // Handler instances for delegating complex logic
     private final PreLoginHandler preLoginHandler;
     private final PostLoginHandler postLoginHandler;
+    private final ConnectionManager connectionManager;
 
     /**
      * Tworzy nowy AuthListener.
@@ -78,6 +82,7 @@ public class AuthListener {
      * @param settings          Ustawienia pluginu
      * @param preLoginHandler   Handler for pre-login logic
      * @param postLoginHandler  Handler for post-login logic
+     * @param connectionManager Manager połączeń i transferów
      * @param databaseManager   Manager bazy danych
      * @param messages          System wiadomości i18n
      */
@@ -87,6 +92,7 @@ public class AuthListener {
             Settings settings,
             PreLoginHandler preLoginHandler,
             PostLoginHandler postLoginHandler,
+            ConnectionManager connectionManager,
             DatabaseManager databaseManager,
             Messages messages) {
         this.plugin = plugin;
@@ -95,6 +101,8 @@ public class AuthListener {
         this.logger = plugin.getLogger();
         this.databaseManager = databaseManager;
         this.messages = messages;
+        this.connectionManager = java.util.Objects.requireNonNull(connectionManager, 
+            "ConnectionManager cannot be null - initialization failed");
         this.preLoginHandler = java.util.Objects.requireNonNull(preLoginHandler, 
             "PreLoginHandler cannot be null - initialization failed");
         this.postLoginHandler = java.util.Objects.requireNonNull(postLoginHandler, 
@@ -150,20 +158,19 @@ public class AuthListener {
             logger.warn(
                     "🔒 STARTUP BLOCK: Player {} tried to connect before VeloAuth fully initialized - PreLogin block",
                     username);
-            // Use English fallback - Messages not available yet
+            // Use fallback if messages not available
+            String msg = messages != null ? messages.get("system.starting") : "VeloAuth is starting. Please wait.";
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    Component.text(messages.get("system.starting"),
-                            NamedTextColor.RED)));
+                    Component.text(msg, NamedTextColor.RED)));
             return;
         }
         
         // DEFENSE-IN-DEPTH: Verify handlers are initialized
         if (preLoginHandler == null) {
             logger.error("CRITICAL: PreLoginHandler is null during event processing for player {}", username);
-            // Use English fallback - Messages might not be available
+            String msg = messages != null ? messages.get("system.init_error") : "System initialization error.";
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    Component.text(messages.get("system.init_error"),
-                            NamedTextColor.RED)));
+                    Component.text(msg, NamedTextColor.RED)));
             return;
         }
 
@@ -286,6 +293,9 @@ public class AuthListener {
             // ✅ SESJE TRWAŁE: Nie kończ sesji przy rozłączeniu
             // Sesje powinny być trwałe dla autoryzowanych graczy offline
             // Kończymy tylko przy /logout, timeout lub banie
+            
+            // Cleanup retry attempts counter to prevent memory leak
+            connectionManager.clearRetryAttempts(player.getUniqueId());
 
             if (logger.isDebugEnabled()) {
                 logger.debug("Gracz {} rozłączył się - sesja pozostaje aktywna", player.getUsername());
@@ -312,10 +322,8 @@ public class AuthListener {
         if (postLoginHandler == null) {
             logger.error("CRITICAL: PostLoginHandler is null during event processing for player {}", 
                 player.getUsername());
-            // Use English fallback - Messages might not be available
-            player.disconnect(Component.text(
-                    messages.get("system.init_error"),
-                    NamedTextColor.RED));
+            String msg = messages != null ? messages.get("system.init_error") : "System initialization error.";
+            player.disconnect(Component.text(msg, NamedTextColor.RED));
             return;
         }
 
@@ -356,6 +364,11 @@ public class AuthListener {
      * <p>
      * KRYTYCZNE: Używamy async = false + maksymalny priorytet dla bezpieczeństwa
      * Zapobiega obejściu autoryzacji przez race conditions
+     * <p>
+     * FLOW dla nowych graczy (pierwszego połączenia):
+     * - Velocity próbuje połączyć z pierwszym serwerem z listy try (np. 2b2t)
+     * - My przechwytujemy i przekierowujemy na PicoLimbo
+     * - Po połączeniu z PicoLimbo, onServerConnected uruchomi auto-transfer
      */
     @Subscribe(priority = Short.MAX_VALUE)
     @SuppressWarnings("java:S3776") // Complex security checks - cyclomatic complexity 9
@@ -369,6 +382,33 @@ public class AuthListener {
 
             logger.debug("ServerPreConnectEvent dla gracza {} -> serwer {}",
                     player.getUsername(), targetServerName);
+
+            // ✅ PIERWSZE POŁĄCZENIE: Gracz nie ma jeszcze currentServer
+            // Velocity próbuje go wysłać na pierwszy serwer z try (np. 2b2t)
+            // My MUSIMY przekierować na PicoLimbo dla ViaVersion compatibility
+            if (player.getCurrentServer().isEmpty()) {
+                String picoLimboName = settings.getPicoLimboServerName();
+                
+                // Jeśli cel to już PicoLimbo - pozwól
+                if (targetServerName.equals(picoLimboName)) {
+                    logger.debug("Pierwsze połączenie {} -> PicoLimbo - pozwalam", player.getUsername());
+                    return;
+                }
+                
+                // Przekieruj na PicoLimbo zamiast backend
+                Optional<RegisteredServer> picoLimbo = plugin.getServer().getServer(picoLimboName);
+                if (picoLimbo.isPresent()) {
+                    logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na PicoLimbo", 
+                            player.getUsername(), targetServerName);
+                    event.setResult(ServerPreConnectEvent.ServerResult.allowed(picoLimbo.get()));
+                    return;
+                } else {
+                    logger.error("PicoLimbo server '{}' nie znaleziony! Gracz {} nie może się połączyć.", 
+                            picoLimboName, player.getUsername());
+                    event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                    return;
+                }
+            }
 
             // ✅ JEŚLI TO PICOLIMBO - SPRAWDŹ DODATKOWO AUTORYZACJĘ
             if (targetServerName.equals(settings.getPicoLimboServerName())) {
@@ -437,6 +477,7 @@ public class AuthListener {
     /**
      * Handles server connected event.
      * Logs player transfers between servers and sends appropriate messages.
+     * For verified players connecting to PicoLimbo, triggers auto-transfer to backend.
      */
     @Subscribe(priority = -200) // LAST priority
     public void onServerConnected(ServerConnectedEvent event) {
@@ -459,11 +500,23 @@ public class AuthListener {
                         messages.get("general.welcome.full"),
                         NamedTextColor.GREEN));
             } else {
+                // Player connected to PicoLimbo
                 if (logger.isDebugEnabled()) {
                     logger.debug(AUTH_MARKER, "ServerConnected to PicoLimbo: {}", player.getUsername());
                 }
+                
+                // ✅ AUTO-TRANSFER: Jeśli gracz jest zweryfikowany w cache, automatycznie przenieś na backend
+                String playerIp = PlayerAddressUtils.getPlayerIp(player);
+                if (authCache.isPlayerAuthorized(player.getUniqueId(), playerIp)) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Gracz {} jest zweryfikowany w cache - uruchamiam auto-transfer na backend", 
+                                player.getUsername());
+                    }
+                    connectionManager.autoTransferFromPicoLimboToBackend(player);
+                    return; // Nie pokazuj instrukcji logowania - gracz jest już zweryfikowany
+                }
 
-                // Send login instructions
+                // Gracz nie jest zweryfikowany - pokaż instrukcje logowania
                 player.sendMessage(Component.text(
                         messages.get("auth.header"),
                         NamedTextColor.GOLD));

@@ -24,8 +24,10 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🔄 **Conflict Resolution** - Smart handling of premium/cracked nickname conflicts
 - 📊 **Admin Tools** - Complete conflict management with `/vauth conflicts`
 - 🗄️ **Multi-Database** - MySQL, PostgreSQL, H2, SQLite
-- 🌍 **7 Languages** - EN, PL, DE, FR, RU, TR, SI
-- 🔄 **LimboAuth Compatible** - Seamless migration from existing setups
+- 🌍 **8 Languages** - EN, PL, DE, FR, RU, TR, SI, FI
+- 🔄 **LimboAuth Compatible** - 100% database compatibility (no migration needed)
+- 📢 **Discord Alerts** - Webhook notifications for security events
+- 🧵 **Virtual Threads** - Built on Java 21 for maximum performance
 
 ## Requirements
 
@@ -48,16 +50,20 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 
 Configure your `velocity.toml` with PicoLimbo and backend servers:
 
-```
+```toml
 [servers]
-auth = "127.0.0.1:25566"  # PicoLimbo (auth server)
+limbo = "127.0.0.1:25566"  # PicoLimbo (auth server)
 lobby = "127.0.0.1:25565"  # Backend server
-survival = "127.0.0.1:25565"
+survival = "127.0.0.1:25566" # Check port availability
 
 try = ["lobby", "survival"]  # Order matters for auth redirect
 ```
 
-**Important:** The `try` configuration controls where authenticated players are redirected. VeloAuth automatically skips the PicoLimbo server and selects the first available backend server.
+**Important:** The `try` configuration controls where authenticated players are redirected. VeloAuth automatically skips the `limbo` server and selects the first available backend server.
+
+### Discord Webhooks
+
+VeloAuth supports Discord notifications for security events. See [Discord Setup Guide](docs/DISCORD_WEBHOOK_SETUP.md).
 
 ### Database Config
 

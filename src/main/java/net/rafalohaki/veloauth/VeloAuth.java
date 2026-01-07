@@ -407,14 +407,14 @@ public class VeloAuth {
         logger.debug("PreLoginHandler created successfully");
         
         PostLoginHandler postLoginHandler = new PostLoginHandler(
-            this, authCache, connectionManager, databaseManager,
+            this, authCache, databaseManager,
             messages, logger);
         logger.debug("PostLoginHandler created successfully");
         
-        // Create AuthListener with initialized handlers
+        // Create AuthListener with initialized handlers and ConnectionManager
         authListener = new AuthListener(
             this, authCache, settings,
-            preLoginHandler, postLoginHandler, databaseManager, messages);
+            preLoginHandler, postLoginHandler, connectionManager, databaseManager, messages);
         
         server.getEventManager().register(this, authListener);
         logger.debug("✅ Event listeners registered in {} ms (PreLoginHandler + PostLoginHandler + AuthListener)", 

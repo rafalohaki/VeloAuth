@@ -71,6 +71,24 @@ public final class VirtualThreadExecutorProvider {
     }
 
     /**
+     * Executes a task on the shared Virtual Thread executor if it's not shutting down.
+     *
+     * @param task Runnable to execute
+     * @return true if task was submitted, false if executor is shutting down
+     */
+    public static boolean submitTask(Runnable task) {
+        if (SHUTDOWN_INITIATED.get()) {
+            return false;
+        }
+        try {
+            VIRTUAL_EXECUTOR.execute(task);
+            return true;
+        } catch (RejectedExecutionException e) {
+            return false;
+        }
+    }
+
+    /**
      * Checks if the executor has been shut down.
      *
      * @return true if shutdown has been initiated, false otherwise

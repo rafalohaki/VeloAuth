@@ -13,8 +13,9 @@ import java.util.Objects;
  * Thread-safe object dla bezpiecznego dostępu wielowątkowego.
  * 
  * <p><b>Builder Pattern (v2.0.0):</b>
- * The deprecated 11-parameter constructor has been removed in v2.0.0. All callers
- * must now use the {@link HikariConfigParams} builder pattern for remote databases:
+ * All public constructors have been removed in v2.0.0. All callers
+ * must now use the {@link HikariConfigParams} builder pattern for remote databases
+ * or the static factory methods for local/remote databases.
  * 
  * <pre>{@code
  * DatabaseConfig config = DatabaseConfig.forRemoteWithHikari(
@@ -93,34 +94,20 @@ public final class DatabaseConfig {
     private final String jdbcUrl;
 
     /**
-     * Konstruktor podstawowy.
-     *
-     * @param storageType        Typ bazy danych
-     * @param hostname           Hostname
-     * @param port               Port
-     * @param database           Nazwa bazy danych
-     * @param user               Użytkownik
-     * @param password           Hasło
-     * @param connectionPoolSize Rozmiar connection pool
+     * Private constructor for use with Builder pattern.
      */
-    public DatabaseConfig(String storageType, String hostname, int port,
+    private DatabaseConfig(String storageType, String hostname, int port,
                           String database, String user, String password,
-                          int connectionPoolSize) {
-
-        validateBasicParameters(storageType, database, connectionPoolSize);
-        DatabaseType dbType = validateDatabaseType(storageType);
-        validateRemoteDatabaseParameters(dbType, hostname, port, storageType);
-        
-        // Assign final fields directly in constructor
-        this.storageType = dbType.getName();
+                          int connectionPoolSize, DataSource dataSource, String jdbcUrl) {
+        this.storageType = storageType;
         this.hostname = hostname;
         this.port = port;
         this.database = database;
         this.user = user;
         this.password = password;
         this.connectionPoolSize = connectionPoolSize;
-        this.dataSource = null; // Brak HikariCP w tym konstruktorze
-        this.jdbcUrl = buildJdbcUrl(dbType, hostname, port, database, null, null);
+        this.dataSource = dataSource;
+        this.jdbcUrl = jdbcUrl;
     }
 
     private void validateBasicParameters(String storageType, String database, int connectionPoolSize) {
@@ -154,36 +141,6 @@ public final class DatabaseConfig {
         }
     }
 
-    /**
-     * Konstruktor z HikariCP DataSource.
-     *
-     * @param storageType        Typ bazy danych
-     * @param dataSource         HikariCP DataSource
-     * @param connectionPoolSize Rozmiar connection pool
-     */
-    public DatabaseConfig(String storageType, DataSource dataSource, int connectionPoolSize, String jdbcUrl) {
-        if (storageType == null || storageType.isEmpty()) {
-            throw new IllegalArgumentException("StorageType nie może być pusty");
-        }
-        if (dataSource == null) {
-            throw new IllegalArgumentException("DataSource nie może być null");
-        }
-        if (jdbcUrl == null || jdbcUrl.isEmpty()) {
-            throw new IllegalArgumentException("jdbcUrl nie może być pusty");
-        }
-
-        this.storageType = storageType.toUpperCase();
-        this.dataSource = dataSource;
-        this.connectionPoolSize = connectionPoolSize;
-        this.jdbcUrl = jdbcUrl;
-
-        // Pozostałe pola nie są używane z DataSource
-        this.hostname = null;
-        this.port = 0;
-        this.database = null;
-        this.user = null;
-        this.password = null;
-    }
 
     /**
      * Tworzy konfigurację dla lokalnych baz danych (H2, SQLite).
@@ -193,7 +150,12 @@ public final class DatabaseConfig {
      * @return DatabaseConfig
      */
     public static DatabaseConfig forLocalDatabase(String storageType, String database) {
-        return new DatabaseConfig(storageType, null, 0, database, null, null, 1);
+        DatabaseType dbType = DatabaseType.fromName(storageType);
+        if (dbType == null || !dbType.isLocalDatabase()) {
+            throw new IllegalArgumentException("Nieprawidłowy typ lokalnej bazy danych: " + storageType);
+        }
+        String jdbcUrl = buildJdbcUrl(dbType, null, 0, database, null, null);
+        return new DatabaseConfig(dbType.getName(), null, 0, database, null, null, 1, null, jdbcUrl);
     }
 
     /**
@@ -251,7 +213,7 @@ public final class DatabaseConfig {
 
         HikariDataSource dataSource = new HikariDataSource(hikariConfig);
 
-        return new DatabaseConfig(params.getStorageType(), dataSource, params.getConnectionPoolSize(), jdbcUrl);
+        return new DatabaseConfig(params.getStorageType(), null, 0, null, null, null, params.getConnectionPoolSize(), dataSource, jdbcUrl);
     }
 
 
@@ -332,12 +294,15 @@ public final class DatabaseConfig {
                                        net.rafalohaki.veloauth.config.Settings.PostgreSQLSettings postgreSQLSettings) {
         String params = processConnectionParameters(connectionParameters);
 
+        if (dbType == null) {
+            throw new IllegalArgumentException("DatabaseType cannot be null");
+        }
+
         return switch (dbType) {
             case MYSQL -> buildMySqlUrl(hostname, port, database, params);
             case POSTGRESQL -> buildPostgreSqlUrl(hostname, port, database, params, postgreSQLSettings);
             case H2 -> buildH2Url(database);
             case SQLITE -> buildSqliteUrl(database);
-            default -> throw new IllegalArgumentException("Invalid storage type: " + dbType);
         };
     }
     
@@ -404,8 +369,13 @@ public final class DatabaseConfig {
                                                    int port, String database,
                                                    String user, String password,
                                                    int connectionPoolSize) {
-        return new DatabaseConfig(storageType, hostname, port, database,
-                user, password, connectionPoolSize);
+        DatabaseType dbType = DatabaseType.fromName(storageType);
+        if (dbType == null) {
+            throw new IllegalArgumentException("Nieobsługiwany typ bazy danych: " + storageType);
+        }
+        String jdbcUrl = buildJdbcUrl(dbType, hostname, port, database, null, null);
+        return new DatabaseConfig(dbType.getName(), hostname, port, database,
+                user, password, connectionPoolSize, null, jdbcUrl);
     }
 
     /**

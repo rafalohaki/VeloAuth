@@ -16,11 +16,15 @@ import org.slf4j.Logger;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
+import com.velocitypowered.api.scheduler.ScheduledTask;
+
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
@@ -29,15 +33,24 @@ import java.util.concurrent.locks.LockSupport;
  * Zarządza przepuszczaniem graczy między Velocity, PicoLimbo i serwerami backend.
  * <p>
  * Flow autoryzacji:
- * 1. Gracz dołącza -> sprawdź cache -> jeśli autoryzowany: backend, jeśli nie: PicoLimbo
- * 2. Gracz na PicoLimbo -> /login lub /register -> transfer na backend
- * 3. Gracz na backend -> już autoryzowany, brak dodatkowych sprawdzeń
+ * 1. Gracz dołącza -> sprawdź cache -> zawsze przez PicoLimbo dla spójności ViaVersion
+ * 2. Gracz na PicoLimbo -> jeśli zweryfikowany w cache: auto-transfer na backend
+ * 3. Gracz na PicoLimbo -> /login lub /register -> transfer na backend
+ * 4. Gracz na backend -> już autoryzowany, brak dodatkowych sprawdzeń
  */
 public class ConnectionManager {
 
     private static final Marker SECURITY_MARKER = MarkerFactory.getMarker("SECURITY");
-    private static final long CONNECT_TIMEOUT_SECONDS = 5;
+    /** Timeout for server connection attempts - increased from 10s to 15s for slow/remote servers */
+    private static final long CONNECT_TIMEOUT_SECONDS = 15;
     private static final String CONNECTION_ERROR_GAME_SERVER = "connection.error.game_server";
+    private static final int MAX_RETRY_ATTEMPTS = 3;
+    
+    /** Retry attempt counter per player to prevent infinite fallback loops */
+    private final Map<UUID, Integer> retryAttempts = new ConcurrentHashMap<>();
+    
+    /** Pending transfer tasks per player - allows cancellation on disconnect to prevent race conditions */
+    private final Map<UUID, ScheduledTask> pendingTransfers = new ConcurrentHashMap<>();
 
     private final VeloAuth plugin;
     private final DatabaseManager databaseManager;
@@ -136,11 +149,11 @@ public class ConnectionManager {
         if (cachedUser != null && cachedUser.matchesIp(playerIp)) {
             // Cache HIT - gracz jest autoryzowany
             if (logger.isDebugEnabled()) {
-                logger.debug("Cache HIT dla gracza {} - transfer na backend", player.getUsername());
+                logger.debug("Cache HIT dla gracza {} - weryfikacja i transfer przez PicoLimbo", player.getUsername());
             }
 
-            // Weryfikuj z bazą danych dla bezpieczeństwa
-            return verifyAndTransferToBackend(player, cachedUser);
+            // ZAWSZE idź przez PicoLimbo - to rozwiązuje timing issues z ViaVersion/ViaFabric
+            return verifyAndTransferToPicoLimbo(player, cachedUser);
 
         } else {
             // Cache MISS - gracz musi się zalogować
@@ -165,15 +178,14 @@ public class ConnectionManager {
     }
 
     /**
-     * Weryfikuje gracza z bazą danych i transferuje na backend.
+     * Weryfikuje gracza i kieruje go przez PicoLimbo zamiast bezpośredniego transferu na backend.
+     * To zapewnia spójny flow dla klientów z ViaVersion/ViaFabric i daje czas na poprawne zainicjowanie sesji.
      */
-    @SuppressWarnings({"java:S3776", "java:S138"}) // Auth verification flow - 63 lines, complexity 9
-    private boolean verifyAndTransferToBackend(Player player, CachedAuthUser cachedUser) {
+    private boolean verifyAndTransferToPicoLimbo(Player player, CachedAuthUser cachedUser) {
         try {
-            // Sprawdź w bazie danych dla bezpieczeństwa
+            // Weryfikacja z bazą danych
             var dbResult = databaseManager.findPlayerByNickname(player.getUsername()).join();
 
-            // CRITICAL: Fail-secure on database errors
             if (dbResult.isDatabaseError()) {
                 logger.error("Database error during player verification for {}: {}",
                         player.getUsername(), dbResult.getErrorMessage());
@@ -198,23 +210,20 @@ public class ConnectionManager {
                 return transferToPicoLimbo(player);
             }
 
-            // NOWOŚĆ: Weryfikacja UUID - zapobiega UUID spoofing
+            // UUID verification
             UUID playerUuid = player.getUniqueId();
             UUID storedUuid = dbPlayer.getUuidAsUUID();
 
             if (storedUuid != null && !playerUuid.equals(storedUuid)) {
-                // UUID MISMATCH - POTENCJALNY ATAK!
                 if (logger.isErrorEnabled()) {
                     logger.error(SECURITY_MARKER,
                             "[UUID MISMATCH DETECTED] Gracz {} ma UUID {} ale baza zawiera {} (IP: {})",
                             player.getUsername(), playerUuid, storedUuid, getPlayerIp(player));
                 }
 
-                // Usuń z cache i zakończ sesję
                 authCache.removeAuthorizedPlayer(player.getUniqueId());
                 authCache.endSession(player.getUniqueId());
 
-                // Rozłącz gracza
                 player.disconnect(Component.text(
                         messages.get("connection.error.uuid_mismatch"),
                         NamedTextColor.RED
@@ -222,31 +231,16 @@ public class ConnectionManager {
                 return false;
             }
 
-            // Aktualizuj IP logowania jeśli się zmienił
-            String currentIp = getPlayerIp(player);
-            if (!currentIp.equals(dbPlayer.getLoginIp())) {
-                dbPlayer.updateLoginData(currentIp);
+            // Aktualizuj IP logowania synchronicznie
+            updatePlayerIpIfChanged(player, dbPlayer, cachedUser);
 
-                // Aktualizuj cache tylko po pomyślnym zapisie do bazy danych
-                // skipcq: JAVA-W1087 - Future is properly handled with thenAccept/exceptionally
-                databaseManager.savePlayer(dbPlayer)
-                        .thenAccept(result -> {
-                            // Sukces - zaktualizuj cache z nowym IP
-                            CachedAuthUser updatedUser = cachedUser.withUpdatedIp(currentIp);
-                            authCache.addAuthorizedPlayer(player.getUniqueId(), updatedUser);
-                            logger.debug("Zaktualizowano IP gracza {} w bazie danych i cache: {}",
-                                    player.getUsername(), currentIp);
-                        })
-                        .exceptionally(throwable -> {
-                            // Błąd - loguj problem ale nie aktualizuj cache
-                            logger.error("Błąd podczas zapisu danych gracza {} do bazy danych - cache nie zaktualizowany",
-                                    player.getUsername(), throwable);
-                            return null;
-                        });
-            }
+            // Informacja i transfer przez PicoLimbo
+            player.sendMessage(Component.text(
+                    messages.get("connection.connecting"),
+                    NamedTextColor.YELLOW
+            ));
 
-            // Transfer na backend
-            return transferToBackend(player);
+            return transferToPicoLimbo(player);
 
         } catch (Exception e) {
             if (logger.isErrorEnabled()) {
@@ -432,26 +426,105 @@ public class ConnectionManager {
     }
     
     private boolean executeBackendTransfer(Player player, RegisteredServer targetServer, String serverName) {
+        // Early exit if player disconnected (prevents TimeoutException on stale connections)
+        if (!player.isActive()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Gracz {} nie jest już aktywny - pomijam transfer do {}", 
+                        player.getUsername(), serverName);
+            }
+            return false;
+        }
+        
+        // Check retry limit before attempting
+        int attempts = retryAttempts.getOrDefault(player.getUniqueId(), 0);
+        if (attempts >= MAX_RETRY_ATTEMPTS) {
+            logger.warn("Gracz {} przekroczył limit prób transferu ({}) - przerywam",
+                    player.getUsername(), MAX_RETRY_ATTEMPTS);
+            retryAttempts.remove(player.getUniqueId());
+            player.sendMessage(Component.text(
+                    messages.get(CONNECTION_ERROR_GAME_SERVER),
+                    NamedTextColor.RED
+            ));
+            return false;
+        }
+        
         try {
-            // Użyj .join() aby zablokować do czasu zakończenia transferu
-            boolean transferSuccess = player.createConnectionRequest(targetServer)
+            // Final check before blocking operation
+            if (!player.isActive()) {
+                logger.debug("Gracz {} rozłączył się przed rozpoczęciem transferu", player.getUsername());
+                return false;
+            }
+            
+            // Wykonaj transfer i zbierz wynik, aby logować przyczynę niepowodzenia
+            var result = player.createConnectionRequest(targetServer)
                     .connect()
                     .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                    .join() // Czekaj na zakończenie transferu
-                    .isSuccessful();
+                    .join(); // Czekaj na zakończenie transferu
 
-            if (transferSuccess) {
+            if (result.isSuccessful()) {
+                // Reset retry counter on success
+                retryAttempts.remove(player.getUniqueId());
                 if (logger.isDebugEnabled()) {
                     logger.debug(messages.get("player.transfer.backend.success"),
                             player.getUsername(), serverName);
                 }
                 return true;
             } else {
+                // Szczegółowe logowanie powodu niepowodzenia
                 if (logger.isWarnEnabled()) {
-                    logger.warn("Failed to transfer player {} to server {}",
-                            player.getUsername(), serverName);
+                    logger.warn("Failed to transfer player {} to server {}: {}",
+                            player.getUsername(), serverName,
+                            result.getReasonComponent().orElse(createUnknownErrorComponent()));
                 }
 
+                // Fallback: jeśli nie jesteśmy już na PicoLimbo, spróbuj przenieść gracza na PicoLimbo a następnie ponowić próbę
+                RegisteredServer picoLimbo = validateAndGetPicoLimboServer(player);
+                if (picoLimbo != null && !isPlayerOnPicoLimbo(player)) {
+                    // Increment retry counter
+                    retryAttempts.put(player.getUniqueId(), attempts + 1);
+                    
+                    if (logger.isInfoEnabled()) {
+                        logger.info("Attempting fallback for player {} (attempt {}/{}): send to PicoLimbo then retry backend {}",
+                                player.getUsername(), attempts + 1, MAX_RETRY_ATTEMPTS, serverName);
+                    }
+
+                    // Asynchroniczny transfer na PicoLimbo; po udanym połączeniu zaplanuj retry do backend
+                    player.createConnectionRequest(picoLimbo)
+                            .connect()
+                            .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                            .whenComplete((limboResult, ex) -> {
+                                if (ex != null || limboResult == null || !limboResult.isSuccessful()) {
+                                    logger.warn("Fallback to PicoLimbo for {} failed: {}",
+                                            player.getUsername(), ex != null ? ex.getMessage() : (limboResult == null ? "null result" : limboResult.getReasonComponent().map(Component::toString).orElse("unknown")));
+                                    player.sendMessage(Component.text(messages.get(CONNECTION_ERROR_GAME_SERVER), NamedTextColor.RED));
+                                    return;
+                                }
+
+                                // Poczekaj krótko, aby limbo miał czas na zainicjowanie sesji, następnie spróbuj ponownie połączenia do docelowego backendu
+                                plugin.getServer().getScheduler().buildTask(plugin, () -> {
+                                    try {
+                                        var retry = player.createConnectionRequest(targetServer)
+                                                .connect()
+                                                .orTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                                                .join();
+                                        if (!retry.isSuccessful()) {
+                                            logger.warn("Retry to connect {} to {} after PicoLimbo failed: {}",
+                                                    player.getUsername(), serverName, retry.getReasonComponent().orElse(createUnknownErrorComponent()));
+                                            player.sendMessage(Component.text(messages.get(CONNECTION_ERROR_GAME_SERVER), NamedTextColor.RED));
+                                        }
+                                    } catch (Exception retryEx) {
+                                        logger.error("Error while retrying backend transfer for {}: {}",
+                                                player.getUsername(), retryEx.getMessage(), retryEx);
+                                        player.sendMessage(Component.text(messages.get(CONNECTION_ERROR_GAME_SERVER), NamedTextColor.RED));
+                                    }
+                                }).delay(300, TimeUnit.MILLISECONDS).schedule();
+                            });
+
+                    // Informujemy wywołującego, że podjęto działania zapasowe (transfer do PicoLimbo)
+                    return true;
+                }
+
+                // Jeśli fallback niedostępny lub jesteśmy już na PicoLimbo, przekazujemy błąd graczowi
                 player.sendMessage(Component.text(
                         messages.get(CONNECTION_ERROR_GAME_SERVER),
                         NamedTextColor.RED
@@ -583,9 +656,130 @@ public class ConnectionManager {
     }
 
     /**
+     * Automatycznie transferuje zweryfikowanego gracza z PicoLimbo na backend.
+     * Wywoływane przez AuthListener.onServerConnected gdy gracz jest już w cache autoryzacji.
+     * Używa opóźnienia dla poprawnej synchronizacji ViaVersion/ViaFabric.
+     * <p>
+     * Task jest zapisywany w {@link #pendingTransfers} i może być anulowany przez
+     * {@link #cancelPendingTransfer(UUID)} przy rozłączeniu gracza, zapobiegając race conditions.
+     *
+     * @param player Gracz do transferu
+     */
+    public void autoTransferFromPicoLimboToBackend(Player player) {
+        UUID playerUuid = player.getUniqueId();
+        String playerIp = getPlayerIp(player);
+        CachedAuthUser cachedUser = authCache.getAuthorizedPlayer(playerUuid);
+        
+        if (cachedUser == null || !cachedUser.matchesIp(playerIp)) {
+            // Gracz nie jest zweryfikowany w cache - nic nie rób
+            if (logger.isDebugEnabled()) {
+                logger.debug("Auto-transfer: gracz {} nie jest zweryfikowany w cache", player.getUsername());
+            }
+            return;
+        }
+        
+        // Anuluj poprzedni pending transfer jeśli istnieje (rapid reconnect protection)
+        cancelPendingTransfer(playerUuid);
+        
+        if (logger.isDebugEnabled()) {
+            logger.debug("Auto-transfer: gracz {} jest zweryfikowany - planowanie transferu na backend", 
+                    player.getUsername());
+        }
+        
+        // Delay dla ViaVersion synchronizacji (300ms)
+        // Zapisz task aby móc go anulować przy rozłączeniu
+        ScheduledTask task = plugin.getServer().getScheduler()
+                .buildTask(plugin, () -> {
+                    // Usuń z pending przed wykonaniem
+                    pendingTransfers.remove(playerUuid);
+                    
+                    // Sprawdź czy gracz nadal jest aktywny i na PicoLimbo
+                    if (!player.isActive()) {
+                        logger.debug("Auto-transfer: gracz {} już nie jest aktywny", player.getUsername());
+                        return;
+                    }
+                    
+                    if (!isPlayerOnPicoLimbo(player)) {
+                        logger.debug("Auto-transfer: gracz {} już nie jest na PicoLimbo", player.getUsername());
+                        return;
+                    }
+                    
+                    // Wykonaj transfer
+                    boolean success = transferToBackend(player);
+                    if (success) {
+                        logger.debug("Auto-transfer: gracz {} przeniesiony na backend", player.getUsername());
+                    } else {
+                        logger.warn("Auto-transfer: nie udało się przenieść gracza {} na backend", 
+                                player.getUsername());
+                    }
+                })
+                .delay(300, TimeUnit.MILLISECONDS)
+                .schedule();
+        
+        pendingTransfers.put(playerUuid, task);
+    }
+    
+    /**
+     * Anuluje oczekujący transfer dla gracza.
+     * Wywoływane przy rozłączeniu aby zapobiec race conditions.
+     *
+     * @param playerUuid UUID gracza
+     */
+    public void cancelPendingTransfer(UUID playerUuid) {
+        ScheduledTask pending = pendingTransfers.remove(playerUuid);
+        if (pending != null) {
+            pending.cancel();
+            if (logger.isDebugEnabled()) {
+                logger.debug("Anulowano pending transfer dla gracza UUID: {}", playerUuid);
+            }
+        }
+    }
+    
+    /**
+     * Czyści licznik prób i anuluje pending transfers dla gracza (np. przy rozłączeniu).
+     * Zapobiega race conditions gdy gracz szybko się rozłącza i łączy ponownie.
+     * 
+     * @param playerUuid UUID gracza
+     */
+    public void clearRetryAttempts(UUID playerUuid) {
+        retryAttempts.remove(playerUuid);
+        cancelPendingTransfer(playerUuid);
+    }
+    
+    /**
+     * Aktualizuje IP gracza w bazie danych i cache jeśli się zmienił.
+     * Wykonywane synchronicznie dla spójności przed transferem.
+     */
+    private void updatePlayerIpIfChanged(Player player, RegisteredPlayer dbPlayer, CachedAuthUser cachedUser) {
+        String currentIp = getPlayerIp(player);
+        if (currentIp.equals(dbPlayer.getLoginIp())) {
+            return; // IP się nie zmieniło
+        }
+        
+        dbPlayer.updateLoginData(currentIp);
+        try {
+            databaseManager.savePlayer(dbPlayer).join(); // synchronicznie
+            CachedAuthUser updatedUser = cachedUser.withUpdatedIp(currentIp);
+            authCache.addAuthorizedPlayer(player.getUniqueId(), updatedUser);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Zaktualizowano IP gracza {} w bazie danych i cache: {}",
+                        player.getUsername(), currentIp);
+            }
+        } catch (Exception ex) {
+            logger.error("Błąd podczas zapisu danych gracza {} do bazy danych - cache nie zaktualizowany",
+                    player.getUsername(), ex);
+        }
+    }
+
+    /**
      * Zamyka ConnectionManager.
+     * Anuluje wszystkie pending transfers i czyści retry attempts.
      */
     public void shutdown() {
+        // Anuluj wszystkie pending transfers
+        pendingTransfers.values().forEach(ScheduledTask::cancel);
+        pendingTransfers.clear();
+        retryAttempts.clear();
         logger.info("ConnectionManager zamknięty");
     }
 

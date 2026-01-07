@@ -459,24 +459,49 @@ public class DatabaseManager {
      * to prevent race conditions when switching between accounts rapidly.
      */
     public CompletableFuture<DbResult<RegisteredPlayer>> findPlayerByNickname(String nickname) {
+        return lookupPlayer(nickname, false);
+    }
+
+    /**
+     * 🔥 RUNTIME DETECTION: Enhanced player lookup with premium detection.
+     * For shared LimboAuth databases - detects premium/offline without migration.
+     * 
+     * @param nickname Player nickname
+     * @return DbResult with RegisteredPlayer and runtime premium detection
+     */
+    public CompletableFuture<DbResult<RegisteredPlayer>> findPlayerWithRuntimeDetection(String nickname) {
+        return lookupPlayer(nickname, true);
+    }
+
+    /**
+     * Unified player lookup logic.
+     * 
+     * @param nickname Player nickname
+     * @param runtimeDetection Whether to log runtime detection details
+     * @return CompletableFuture with DbResult
+     */
+    private CompletableFuture<DbResult<RegisteredPlayer>> lookupPlayer(String nickname, boolean runtimeDetection) {
         if (nickname == null || nickname.isEmpty()) {
             return CompletableFuture.completedFuture(DbResult.success(null));
+        }
+
+        if (dbExecutor.isShutdown()) {
+            return CompletableFuture.completedFuture(DbResult.databaseError(messages.get(DATABASE_ERROR) + ": Executor is shutting down"));
         }
 
         String normalizedNickname = nickname.toLowerCase();
 
         return CompletableFuture.supplyAsync(() -> {
             DbResult<RegisteredPlayer> cacheResult = checkCacheSafe(normalizedNickname);
-            
-            // Check for database errors (shouldn't happen in cache, but fail-secure)
-            if (cacheResult.isDatabaseError()) {
+            if (cacheResult.isDatabaseError() || cacheResult.getValue() != null) {
+                if (runtimeDetection && cacheResult.getValue() != null && logger.isDebugEnabled()) {
+                    logger.debug(CACHE_MARKER, "Runtime detection - cache HIT: {}", normalizedNickname);
+                }
                 return cacheResult;
             }
-            
-            // Check for cache hit
-            RegisteredPlayer cachedPlayer = cacheResult.getValue();
-            if (cachedPlayer != null) {
-                return DbResult.success(cachedPlayer);
+
+            if (runtimeDetection && logger.isDebugEnabled()) {
+                logger.debug(CACHE_MARKER, "Runtime detection - cache MISS: {}", normalizedNickname);
             }
 
             DbResult<Void> connectionResult = validateDatabaseConnection();
@@ -484,8 +509,32 @@ public class DatabaseManager {
                 return DbResult.databaseError(connectionResult.getErrorMessage());
             }
 
-            return queryPlayerFromDatabase(normalizedNickname);
+            return queryAndCachePlayer(normalizedNickname, nickname, runtimeDetection);
         }, dbExecutor);
+    }
+
+    private DbResult<RegisteredPlayer> queryAndCachePlayer(String normalizedNickname, String originalNickname, boolean runtimeDetection) {
+        try {
+            RegisteredPlayer player = jdbcAuthDao.findPlayerByLowercaseNickname(normalizedNickname);
+            if (player != null) {
+                if (player.getLowercaseNickname().equals(normalizedNickname)) {
+                    playerCache.put(normalizedNickname, player);
+                    if (runtimeDetection) {
+                        logRuntimeDetection(originalNickname, isPlayerPremiumRuntime(player), player.getHash());
+                    } else if (logger.isDebugEnabled()) {
+                        logger.debug(CACHE_MARKER, "Cache MISS -> DB HIT dla gracza: {}", normalizedNickname);
+                    }
+                } else if (logger.isWarnEnabled()) {
+                    logger.warn(CACHE_MARKER, "Database inconsistency for {} - expected {}, found {}",
+                            normalizedNickname, normalizedNickname, player.getLowercaseNickname());
+                }
+            } else {
+                logPlayerNotFound(normalizedNickname);
+            }
+            return DbResult.success(player);
+        } catch (SQLException e) {
+            return handleDatabaseError(normalizedNickname, e);
+        }
     }
 
     private boolean isCacheCorrupted(RegisteredPlayer cached, String normalizedNickname) {
@@ -505,33 +554,6 @@ public class DatabaseManager {
         }
     }
 
-    private DbResult<RegisteredPlayer> queryPlayerFromDatabase(String normalizedNickname) {
-        try {
-            RegisteredPlayer player = jdbcAuthDao.findPlayerByLowercaseNickname(normalizedNickname);
-            if (player != null) {
-                handleDatabaseResult(player, normalizedNickname);
-            } else {
-                logPlayerNotFound(normalizedNickname);
-            }
-            return DbResult.success(player);
-        } catch (SQLException e) {
-            return handleDatabaseError(normalizedNickname, e);
-        }
-    }
-
-    private void handleDatabaseResult(RegisteredPlayer player, String normalizedNickname) {
-        if (player.getLowercaseNickname().equals(normalizedNickname)) {
-            playerCache.put(normalizedNickname, player);
-            if (logger.isDebugEnabled()) {
-                logger.debug(CACHE_MARKER, "Cache MISS -> DB HIT dla gracza: {}", normalizedNickname);
-            }
-        } else {
-            if (logger.isWarnEnabled()) {
-                logger.warn(CACHE_MARKER, "Database inconsistency for {} - expected {}, found {}",
-                        normalizedNickname, normalizedNickname, player.getLowercaseNickname());
-            }
-        }
-    }
 
     private void logPlayerNotFound(String normalizedNickname) {
         if (logger.isDebugEnabled()) {
@@ -563,6 +585,10 @@ public class DatabaseManager {
     public CompletableFuture<DbResult<Boolean>> savePlayer(RegisteredPlayer player) {
         if (player == null) {
             return CompletableFuture.completedFuture(DbResult.success(false));
+        }
+
+        if (dbExecutor.isShutdown()) {
+            return CompletableFuture.completedFuture(DbResult.databaseError(messages.get(DATABASE_ERROR) + ": Executor is shutting down"));
         }
 
         return CompletableFuture.supplyAsync(() -> {
@@ -1136,49 +1162,6 @@ public class DatabaseManager {
         return hash == null || hash.isEmpty() || hash.isBlank();
     }
 
-    /**
-     * 🔥 RUNTIME DETECTION: Enhanced player lookup with premium detection.
-     * For shared LimboAuth databases - detects premium/offline without migration.
-     * 
-     * @param nickname Player nickname
-     * @return DbResult with RegisteredPlayer and runtime premium detection
-     */
-    public CompletableFuture<DbResult<RegisteredPlayer>> findPlayerWithRuntimeDetection(String nickname) {
-        if (nickname == null || nickname.isEmpty()) {
-            return CompletableFuture.completedFuture(DbResult.success(null));
-        }
-
-        String normalizedNickname = nickname.toLowerCase();
-
-        return CompletableFuture.supplyAsync(() -> {
-            // Check cache first - ALWAYS returns DbResult now
-            DbResult<RegisteredPlayer> cacheResult = checkCacheSafe(normalizedNickname);
-            
-            // Check for database errors (shouldn't happen in cache, but fail-secure)
-            if (cacheResult.isDatabaseError()) {
-                return cacheResult;
-            }
-            
-            // Check for cache hit
-            RegisteredPlayer cachedPlayer = cacheResult.getValue();
-            if (cachedPlayer != null) {
-                if (logger.isDebugEnabled()) {
-                    logger.debug(CACHE_MARKER, 
-                        "Runtime detection - cache HIT: {}", normalizedNickname);
-                }
-                return DbResult.success(cachedPlayer);
-            }
-            
-            // Cache miss - query database with runtime detection
-            if (logger.isDebugEnabled()) {
-                logger.debug(CACHE_MARKER, 
-                    "Runtime detection - cache MISS: {}", normalizedNickname);
-            }
-
-            // Query database with runtime detection
-            return queryPlayerWithRuntimeDetection(normalizedNickname, nickname);
-        }, dbExecutor);
-    }
 
     /**
      * Null-safe cache check that ALWAYS returns DbResult.
@@ -1203,30 +1186,6 @@ public class DatabaseManager {
         return DbResult.success(cached);
     }
 
-    /**
-     * Queries database and applies runtime premium detection.
-     */
-    private DbResult<RegisteredPlayer> queryPlayerWithRuntimeDetection(String normalizedNickname, String originalNickname) {
-        try {
-            RegisteredPlayer player = jdbcAuthDao.findPlayerByLowercaseNickname(normalizedNickname);
-            if (player == null) {
-                return DbResult.success(null);
-            }
-
-            // 🔥 RUNTIME DETECTION: Detect premium status without database modification
-            boolean isPremium = isPlayerPremiumRuntime(player);
-            
-            // Cache the result with runtime detection
-            playerCache.put(normalizedNickname, player);
-            
-            logRuntimeDetection(originalNickname, isPremium, player.getHash());
-
-            return DbResult.success(player);
-        } catch (SQLException e) {
-            logger.error("Database error during runtime detection for player: {}", originalNickname, e);
-            return DbResult.databaseError("Database error: " + e.getMessage());
-        }
-    }
 
     /**
      * Logs runtime detection results for debugging.

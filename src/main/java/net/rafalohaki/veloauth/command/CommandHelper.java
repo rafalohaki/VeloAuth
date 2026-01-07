@@ -129,13 +129,13 @@ public final class CommandHelper {
      */
     public static void runAsyncCommand(Runnable task, Messages messages,
                                        CommandSource source, String errorKey) {
-        try {
-            // Check if executor is shutting down
-            if (VirtualThreadExecutorProvider.isShutdown()) {
-                source.sendMessage(ValidationUtils.createErrorComponent(messages.get(MSG_KEY_SERVER_SHUTTING_DOWN)));
-                return;
-            }
+        // Check if executor is shutting down
+        if (VirtualThreadExecutorProvider.isShutdown()) {
+            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(MSG_KEY_SERVER_SHUTTING_DOWN)));
+            return;
+        }
 
+        try {
             // skipcq: JAVA-W1087 - Future handled with exceptionally, fire-and-forget operation
             CompletableFuture.runAsync(task, VirtualThreadExecutorProvider.getVirtualExecutor())
                     .exceptionally(throwable -> {
@@ -158,13 +158,13 @@ public final class CommandHelper {
      */
     public static void runAsyncCommandWithTimeout(Runnable task, Messages messages,
                                                   CommandSource source, String errorKey, String timeoutKey) {
-        try {
-            // Check if executor is shutting down
-            if (VirtualThreadExecutorProvider.isShutdown()) {
-                source.sendMessage(ValidationUtils.createErrorComponent(messages.get(MSG_KEY_SERVER_SHUTTING_DOWN)));
-                return;
-            }
+        // Check if executor is shutting down
+        if (VirtualThreadExecutorProvider.isShutdown()) {
+            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(MSG_KEY_SERVER_SHUTTING_DOWN)));
+            return;
+        }
 
+        try {
             // skipcq: JAVA-W1087 - Future handled with exceptionally, fire-and-forget operation
             CompletableFuture.runAsync(task, VirtualThreadExecutorProvider.getVirtualExecutor())
                     .orTimeout(30, java.util.concurrent.TimeUnit.SECONDS)

@@ -8,6 +8,7 @@ import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.premium.PremiumResolution;
 import net.rafalohaki.veloauth.premium.PremiumResolverService;
+import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.slf4j.Logger;
 
 import java.net.InetAddress;
@@ -120,19 +121,19 @@ public class PreLoginHandler {
      * @param username Username to refresh
      */
     private void triggerBackgroundRefresh(String username) {
-        try {
-            CompletableFuture.runAsync(() -> {
-                logger.debug("Background refresh of premium status for {}", username);
-                try {
-                    PremiumResolution resolution = premiumResolverService.resolve(username);
-                    cacheFromResolution(username, resolution);
-                    logger.debug("Background refresh completed for {}", username);
-                } catch (Exception e) {
-                    logger.warn("Background refresh failed for {}: {}", username, e.getMessage());
-                }
-            }, net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider.getVirtualExecutor());
-        } catch (Exception e) {
-            logger.warn("Failed to trigger background refresh for {}: {}", username, e.getMessage());
+        boolean submitted = VirtualThreadExecutorProvider.submitTask(() -> {
+            logger.debug("Background refresh of premium status for {}", username);
+            try {
+                PremiumResolution resolution = premiumResolverService.resolve(username);
+                cacheFromResolution(username, resolution);
+                logger.debug("Background refresh completed for {}", username);
+            } catch (Exception e) {
+                logger.warn("Background refresh failed for {}: {}", username, e.getMessage());
+            }
+        });
+
+        if (!submitted) {
+            logger.warn("Failed to trigger background refresh for {} - executor is shutting down", username);
         }
     }
 
