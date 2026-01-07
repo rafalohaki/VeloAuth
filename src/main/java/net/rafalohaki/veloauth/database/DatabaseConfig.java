@@ -96,49 +96,25 @@ public final class DatabaseConfig {
     /**
      * Private constructor for use with Builder pattern.
      */
-    private DatabaseConfig(String storageType, String hostname, int port,
-                          String database, String user, String password,
-                          int connectionPoolSize, DataSource dataSource, String jdbcUrl) {
-        this.storageType = storageType;
-        this.hostname = hostname;
-        this.port = port;
-        this.database = database;
-        this.user = user;
-        this.password = password;
-        this.connectionPoolSize = connectionPoolSize;
-        this.dataSource = dataSource;
-        this.jdbcUrl = jdbcUrl;
+    /**
+     * Internal parameter carrier used to reduce constructor parameter count and
+     * satisfy complexity rules. This record is private and only used by factory methods.
+     */
+    private static final record InternalParams(String storageType, String hostname, int port,
+                                               String database, String user, String password,
+                                               int connectionPoolSize, DataSource dataSource, String jdbcUrl) {
     }
 
-    private void validateBasicParameters(String storageType, String database, int connectionPoolSize) {
-        if (storageType == null || storageType.isEmpty()) {
-            throw new IllegalArgumentException("StorageType nie może być pusty");
-        }
-        if (database == null || database.isEmpty()) {
-            throw new IllegalArgumentException("Database nie może być pusty");
-        }
-        if (connectionPoolSize <= 0) {
-            throw new IllegalArgumentException("ConnectionPoolSize musi być > 0");
-        }
-    }
-
-    private DatabaseType validateDatabaseType(String storageType) {
-        DatabaseType dbType = DatabaseType.fromName(storageType);
-        if (dbType == null) {
-            throw new IllegalArgumentException("Nieobsługiwany typ bazy danych: " + storageType);
-        }
-        return dbType;
-    }
-
-    private void validateRemoteDatabaseParameters(DatabaseType dbType, String hostname, int port, String storageType) {
-        if (dbType.isRemoteDatabase()) {
-            if (hostname == null || hostname.isEmpty()) {
-                throw new IllegalArgumentException("Hostname nie może być pusty dla " + storageType);
-            }
-            if (port <= 0 || port > 65535) {
-                throw new IllegalArgumentException("Port musi być w zakresie 1-65535");
-            }
-        }
+    private DatabaseConfig(InternalParams p) {
+        this.storageType = p.storageType();
+        this.hostname = p.hostname();
+        this.port = p.port();
+        this.database = p.database();
+        this.user = p.user();
+        this.password = p.password();
+        this.connectionPoolSize = p.connectionPoolSize();
+        this.dataSource = p.dataSource();
+        this.jdbcUrl = p.jdbcUrl();
     }
 
 
@@ -155,7 +131,7 @@ public final class DatabaseConfig {
             throw new IllegalArgumentException("Nieprawidłowy typ lokalnej bazy danych: " + storageType);
         }
         String jdbcUrl = buildJdbcUrl(dbType, null, 0, database, null, null);
-        return new DatabaseConfig(dbType.getName(), null, 0, database, null, null, 1, null, jdbcUrl);
+        return new DatabaseConfig(new InternalParams(dbType.getName(), null, 0, database, null, null, 1, null, jdbcUrl));
     }
 
     /**
@@ -213,7 +189,7 @@ public final class DatabaseConfig {
 
         HikariDataSource dataSource = new HikariDataSource(hikariConfig);
 
-        return new DatabaseConfig(params.getStorageType(), null, 0, null, null, null, params.getConnectionPoolSize(), dataSource, jdbcUrl);
+        return new DatabaseConfig(new InternalParams(params.getStorageType(), null, 0, null, null, null, params.getConnectionPoolSize(), dataSource, jdbcUrl));
     }
 
 
@@ -374,8 +350,7 @@ public final class DatabaseConfig {
             throw new IllegalArgumentException("Nieobsługiwany typ bazy danych: " + storageType);
         }
         String jdbcUrl = buildJdbcUrl(dbType, hostname, port, database, null, null);
-        return new DatabaseConfig(dbType.getName(), hostname, port, database,
-                user, password, connectionPoolSize, null, jdbcUrl);
+        return new DatabaseConfig(new InternalParams(dbType.getName(), hostname, port, database, user, password, connectionPoolSize, null, jdbcUrl));
     }
 
     /**

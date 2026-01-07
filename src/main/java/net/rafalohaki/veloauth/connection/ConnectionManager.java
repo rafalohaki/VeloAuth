@@ -377,8 +377,14 @@ public class ConnectionManager {
 
     private void logFallbackFailure(Player player,
                                    com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result limboResult, Throwable ex) {
-        String reason = ex != null ? ex.getMessage() :
-                (limboResult == null ? "null result" : limboResult.getReasonComponent().map(Component::toString).orElse("unknown"));
+        String reason;
+        if (ex != null) {
+            reason = ex.getMessage();
+        } else if (limboResult == null) {
+            reason = "null result";
+        } else {
+            reason = limboResult.getReasonComponent().map(Component::toString).orElse("unknown");
+        }
         logger.warn("Fallback to PicoLimbo for {} failed: {}", player.getUsername(), reason);
     }
 
@@ -491,7 +497,12 @@ public class ConnectionManager {
                 logger.debug("Retry after timeout succeeded for {} -> {}", player.getUsername(), serverName);
             }
         } else {
-            Component reason = result != null ? result.getReasonComponent().orElse(createUnknownErrorComponent()) : createUnknownErrorComponent();
+            Component reason;
+            if (result != null) {
+                reason = result.getReasonComponent().orElse(createUnknownErrorComponent());
+            } else {
+                reason = createUnknownErrorComponent();
+            }
             logger.warn("Retry after timeout not successful for {} -> {}: {}", player.getUsername(), serverName, reason);
             sendErrorMessage(player);
         }
@@ -515,21 +526,19 @@ public class ConnectionManager {
         
         // Iteruj przez try servers w kolejności z konfiguracji Velocity
         for (String serverName : tryServers) {
-            // Pomiń PicoLimbo - to jest serwer auth, nie docelowy
+            // Skip PicoLimbo - it's an auth server, not a backend
             if (serverName.equals(picoLimboName)) {
                 logger.debug("Pomijam PicoLimbo server: {}", serverName);
-                continue;
-            }
-            
-            Optional<RegisteredServer> server = plugin.getServer().getServer(serverName);
-            if (server.isEmpty()) {
-                logger.debug("Serwer {} z try nie jest zarejestrowany", serverName);
-                continue;
-            }
-            
-            RegisteredServer registeredServer = server.get();
-            if (isServerAvailable(registeredServer, serverName)) {
-                return Optional.of(registeredServer);
+            } else {
+                Optional<RegisteredServer> server = plugin.getServer().getServer(serverName);
+                if (server.isEmpty()) {
+                    logger.debug("Serwer {} z try nie jest zarejestrowany", serverName);
+                } else {
+                    RegisteredServer registeredServer = server.get();
+                    if (isServerAvailable(registeredServer, serverName)) {
+                        return Optional.of(registeredServer);
+                    }
+                }
             }
         }
         
