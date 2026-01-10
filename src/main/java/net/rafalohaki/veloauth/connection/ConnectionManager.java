@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 
 import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -210,7 +211,7 @@ public class ConnectionManager {
     public boolean transferToBackend(Player player) {
         try {
             // Znajdź dostępny serwer backend (nie PicoLimbo)
-            Optional<RegisteredServer> backendServer = findAvailableBackendServer();
+            Optional<RegisteredServer> backendServer = findAvailableBackendServer(player);
 
             if (backendServer.isEmpty()) {
                 logger.error("No available backend servers!");
@@ -508,15 +509,22 @@ public class ConnectionManager {
     }
 
     /**
-     * Znajduje dostępny serwer backend używając Velocity try servers configuration.
-     * Iteruje przez listę serwerów z velocity.toml [servers.try] w kolejności.
-     *
-     * @return Optional z dostępny serwer backend
+     * Finds available backend server using Velocity configuration.
+     * Always checks forced hosts first if player's virtual host matches, then falls back to try servers.
+     * 
+     * @param player Player to find backend server for
+     * @return Optional with available backend server
      */
-    private Optional<RegisteredServer> findAvailableBackendServer() {
+    private Optional<RegisteredServer> findAvailableBackendServer(Player player) {
         String picoLimboName = settings.getPicoLimboServerName();
         
-        // Użyj Velocity try servers configuration
+        // Always check forced hosts first if player has a virtual host
+        Optional<RegisteredServer> forcedHostServer = findForcedHostServer(player, picoLimboName);
+        if (forcedHostServer.isPresent()) {
+            return forcedHostServer;
+        }
+        
+        // Use Velocity try servers configuration
         var tryServers = plugin.getServer().getConfiguration().getAttemptConnectionOrder();
         
         if (logger.isDebugEnabled()) {
@@ -547,6 +555,95 @@ public class ConnectionManager {
                 .filter(server -> !server.getServerInfo().getName().equals(picoLimboName))
                 .filter(server -> isServerAvailable(server, server.getServerInfo().getName()))
                 .findFirst();
+    }
+    
+    /**
+     * Finds backend server based on Velocity forced hosts configuration.
+     * 
+     * @param player Player to find server for
+     * @param picoLimboName PicoLimbo server name to exclude
+     * @return Optional with available backend server from forced hosts, or empty if none found
+     */
+    private Optional<RegisteredServer> findForcedHostServer(Player player, String picoLimboName) {
+        try {
+            // Get player's virtual host (the hostname they connected with)
+            Optional<InetSocketAddress> virtualHost = player.getVirtualHost();
+            if (virtualHost.isEmpty()) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Player {} has no virtual host, skipping forced hosts check", 
+                            player.getUsername());
+                }
+                return Optional.empty();
+            }
+            
+            String hostname = virtualHost.get().getHostString();
+            if (logger.isDebugEnabled()) {
+                logger.debug("Checking forced hosts for player {} with hostname: {}", 
+                        player.getUsername(), hostname);
+            }
+            
+            // Get forced hosts configuration from Velocity
+            var forcedHosts = plugin.getServer().getConfiguration().getForcedHosts();
+            if (forcedHosts == null || forcedHosts.isEmpty()) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("No forced hosts configuration found");
+                }
+                return Optional.empty();
+            }
+            
+            // Check each forced host entry
+            for (Map.Entry<String, List<String>> entry : forcedHosts.entrySet()) {
+                String forcedHostname = entry.getKey();
+                List<String> serverNames = entry.getValue();
+                
+                // Check if player's hostname matches this forced host entry
+                if (hostname.equalsIgnoreCase(forcedHostname)) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Found forced host match: {} -> {}", forcedHostname, serverNames);
+                    }
+                    
+                    // Try servers in order from forced host configuration
+                    for (String serverName : serverNames) {
+                        // Skip PicoLimbo
+                        if (serverName.equals(picoLimboName)) {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Skipping PicoLimbo server in forced hosts: {}", serverName);
+                            }
+                            continue;
+                        }
+                        
+                        Optional<RegisteredServer> server = plugin.getServer().getServer(serverName);
+                        if (server.isEmpty()) {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Server {} from forced hosts is not registered", serverName);
+                            }
+                            continue;
+                        }
+                        
+                        RegisteredServer registeredServer = server.get();
+                        if (isServerAvailable(registeredServer, serverName)) {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Found available server from forced hosts: {}", serverName);
+                            }
+                            return Optional.of(registeredServer);
+                        }
+                    }
+                }
+            }
+            
+            if (logger.isDebugEnabled()) {
+                logger.debug("No matching forced host found for hostname: {}", hostname);
+            }
+            return Optional.empty();
+            
+        } catch (Exception e) {
+            logger.warn("Error checking forced hosts for player {}: {}", 
+                    player.getUsername(), e.getMessage());
+            if (logger.isDebugEnabled()) {
+                logger.debug("Forced hosts check exception", e);
+            }
+            return Optional.empty();
+        }
     }
 
     private boolean isServerAvailable(RegisteredServer server, String serverName) {
