@@ -549,12 +549,8 @@ public class ConnectionManager {
             }
         }
         
-        // Fallback: jeśli żaden try server nie jest dostępny, spróbuj dowolny inny
-        logger.warn("Żaden serwer z try nie jest dostępny, próbuję fallback...");
-        return plugin.getServer().getAllServers().stream()
-                .filter(server -> !server.getServerInfo().getName().equals(picoLimboName))
-                .filter(server -> isServerAvailable(server, server.getServerInfo().getName()))
-                .findFirst();
+        // No available server found from forced hosts or try servers
+        return Optional.empty();
     }
     
     /**
