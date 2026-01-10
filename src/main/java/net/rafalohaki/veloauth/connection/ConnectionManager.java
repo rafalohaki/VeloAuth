@@ -542,7 +542,8 @@ public class ConnectionManager {
                     logger.debug("Serwer {} z try nie jest zarejestrowany", serverName);
                 } else {
                     RegisteredServer registeredServer = server.get();
-                    if (isServerAvailable(registeredServer, serverName)) {
+                    // Check availability only if not skipping availability check
+                    if (settings.isSkipAvailabilityCheck() || isServerAvailable(registeredServer, serverName)) {
                         return Optional.of(registeredServer);
                     }
                 }
@@ -617,7 +618,8 @@ public class ConnectionManager {
                         }
                         
                         RegisteredServer registeredServer = server.get();
-                        if (isServerAvailable(registeredServer, serverName)) {
+                        // Check availability only if not skipping availability check
+                        if (settings.isSkipAvailabilityCheck() || isServerAvailable(registeredServer, serverName)) {
                             if (logger.isDebugEnabled()) {
                                 logger.debug("Found available server from forced hosts: {}", serverName);
                             }

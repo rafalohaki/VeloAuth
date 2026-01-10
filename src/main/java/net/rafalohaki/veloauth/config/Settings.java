@@ -54,6 +54,7 @@ public class Settings {
     private int picoLimboTimeoutSeconds = 300;
     // Connection settings
     private int connectionTimeoutSeconds = 20;
+    private boolean skipAvailabilityCheck = false;
     // Security settings
     private int bcryptCost = 10;
     private int bruteForceMaxAttempts = 5;
@@ -200,6 +201,7 @@ public class Settings {
                 # Connection settings
                 connection:
                   timeout-seconds: 20 # Connection timeout in seconds. Increase if your backend servers are slow.
+                  skip-availability-check: false # If true, transfer to servers without checking if they're available (useful for auto-start plugins)
                 
                 # Security settings for password hashing and brute-force protection
                 security:
@@ -442,6 +444,7 @@ public class Settings {
         Map<String, Object> connection = (Map<String, Object>) config.get("connection");
         if (connection != null) {
             connectionTimeoutSeconds = getInt(connection, "timeout-seconds", connectionTimeoutSeconds);
+            skipAvailabilityCheck = getBoolean(connection, "skip-availability-check", skipAvailabilityCheck);
         }
     }
 
@@ -812,6 +815,10 @@ public class Settings {
 
     public int getConnectionTimeoutSeconds() {
         return connectionTimeoutSeconds;
+    }
+
+    public boolean isSkipAvailabilityCheck() {
+        return skipAvailabilityCheck;
     }
 
     public String getDatabaseConnectionParameters() {
