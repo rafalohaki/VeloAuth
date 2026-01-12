@@ -54,9 +54,9 @@ Configure your `velocity.toml` with PicoLimbo and backend servers:
 [servers]
 limbo = "127.0.0.1:25566"  # PicoLimbo (auth server)
 lobby = "127.0.0.1:25565"  # Backend server
-survival = "127.0.0.1:25566" # Check port availability
+survival = "127.0.0.1:25567" # Backend server nr2
 
-try = ["lobby", "survival"]  # Order matters for auth redirect
+try = ["lobby", "survival"]  # Order matters for auth redirect, no limbo in order needed
 ```
 
 **Important:** The `try` configuration controls where authenticated players are redirected. VeloAuth automatically skips the `limbo` server and selects the first available backend server.
