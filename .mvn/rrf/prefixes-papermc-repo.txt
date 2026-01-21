@@ -1,0 +1,2 @@
+# Allow Velocity artifacts from PaperMC repo
+/com/velocitypowered
