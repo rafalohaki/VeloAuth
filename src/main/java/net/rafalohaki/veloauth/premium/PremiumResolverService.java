@@ -59,6 +59,13 @@ public class PremiumResolverService {
         this.premiumTtlMillis = Math.max(0L, rs.getHitTtlMinutes()) * 60_000L;
         this.missTtlMillis = Math.max(0L, rs.getMissTtlMinutes()) * 60_000L;
         this.maxCacheSize = 10_000;
+
+        if (premiumTtlMillis == 0 && logger.isWarnEnabled()) {
+            logger.warn("[PremiumResolver] hitTtlMinutes = 0 — premium cache disabled, every login will query API!");
+        }
+        if (missTtlMillis == 0 && logger.isWarnEnabled()) {
+            logger.warn("[PremiumResolver] missTtlMinutes = 0 — miss cache disabled, every unknown player will query API!");
+        }
     }
 
     /**

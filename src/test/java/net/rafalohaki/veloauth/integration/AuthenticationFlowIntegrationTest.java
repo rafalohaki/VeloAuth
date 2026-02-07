@@ -75,7 +75,7 @@ class AuthenticationFlowIntegrationTest {
         settings.load();
         
         authCache = new AuthCache(
-                new AuthCache.AuthCacheConfig(60, 10000, 1000, 10000, 5, 5, 1),
+                new AuthCache.AuthCacheConfig(60, 10000, 1000, 10000, 5, 5, 1, 60),
                 settings, messages
         );
         

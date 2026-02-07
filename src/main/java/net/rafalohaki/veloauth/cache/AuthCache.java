@@ -113,6 +113,11 @@ public class AuthCache {
     private final int bruteForceTimeoutMinutes;
 
     /**
+     * Session inactivity timeout w minutach.
+     */
+    private final int sessionTimeoutMinutes;
+
+    /**
      * Premium cache TTL w godzinach.
      */
     private final int premiumTtlHours;
@@ -157,7 +162,8 @@ public class AuthCache {
         int maxPremiumCache,
         int maxLoginAttempts,
         int bruteForceTimeoutMinutes,
-        int cleanupIntervalMinutes
+        int cleanupIntervalMinutes,
+        int sessionTimeoutMinutes
     ) {}
 
     /**
@@ -183,6 +189,7 @@ public class AuthCache {
         this.maxPremiumCache = config.maxPremiumCache();
         this.maxLoginAttempts = config.maxLoginAttempts();
         this.bruteForceTimeoutMinutes = config.bruteForceTimeoutMinutes();
+        this.sessionTimeoutMinutes = config.sessionTimeoutMinutes() > 0 ? config.sessionTimeoutMinutes() : 60;
         this.premiumTtlHours = settings.getPremiumTtlHours();
         this.premiumRefreshThreshold = settings.getPremiumRefreshThreshold();
         this.settings = settings;
@@ -753,7 +760,7 @@ public class AuthCache {
                 int removedPremium = cleanupCache(premiumCache,
                         entry -> entry.getValue().isExpired());
                 int removedSessions = cleanupCache(activeSessions,
-                        entry -> !entry.getValue().isActive(60));
+                        entry -> !entry.getValue().isActive(sessionTimeoutMinutes));
 
                 if (removedAuth > 0 || removedBrute > 0 || removedPremium > 0 || removedSessions > 0) {
                     logger.debug("Cleanup: usunięto {} auth, {} brute force, {} premium, {} sessions",
@@ -809,7 +816,7 @@ public class AuthCache {
      */
     private void evictOldestSessionAtomic() {
         var oldest = activeSessions.entrySet().stream()
-                .min(java.util.Comparator.comparingLong(e -> e.getValue().getSessionStartTime()))
+                .min(java.util.Comparator.comparingLong(e -> e.getValue().getLastActivityTime()))
                 .orElse(null);
         if (oldest != null) {
             activeSessions.remove(oldest.getKey(), oldest.getValue());
@@ -931,8 +938,8 @@ public class AuthCache {
      * Wpis brute force.
      */
     private static class BruteForceEntry {
-        private int attempts = 0;
-        private long firstAttemptTime = System.currentTimeMillis();
+        private volatile int attempts = 0;
+        private volatile long firstAttemptTime = System.currentTimeMillis();
 
         public void incrementAttempts() {
             attempts++;

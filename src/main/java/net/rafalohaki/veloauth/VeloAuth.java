@@ -342,7 +342,8 @@ public class VeloAuth {
                     10000, // maxPremiumCache - set to 10000 as per requirement 6.5
                     settings.getBruteForceMaxAttempts(),
                     settings.getBruteForceTimeoutMinutes(),
-                    settings.getCacheCleanupIntervalMinutes()
+                    settings.getCacheCleanupIntervalMinutes(),
+                    settings.getSessionTimeoutMinutes()
                 ),
                 settings,
                 messages

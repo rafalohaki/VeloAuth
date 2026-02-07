@@ -235,8 +235,19 @@ public class CommandHandler {
                 return;
             }
 
+            // Verify player is registered and has a password hash
+            if (authContext.registeredPlayer == null) {
+                player.sendMessage(sm.notRegistered());
+                return;
+            }
+            String hash = authContext.registeredPlayer.getHash();
+            if (hash == null || hash.isBlank()) {
+                player.sendMessage(sm.notRegistered());
+                return;
+            }
+
             // Verify password
-            BCrypt.Result result = BCrypt.verifyer().verify(password.toCharArray(), authContext.registeredPlayer.getHash());
+            BCrypt.Result result = BCrypt.verifyer().verify(password.toCharArray(), hash);
 
             if (result.verified) {
                 handleSuccessfulLogin(authContext);

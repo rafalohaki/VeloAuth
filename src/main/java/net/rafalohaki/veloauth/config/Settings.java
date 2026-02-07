@@ -47,6 +47,7 @@ public class Settings {
     private int cacheTtlMinutes = 60;
     private int cacheMaxSize = 10000;
     private int cacheCleanupIntervalMinutes = 5;
+    private int sessionTimeoutMinutes = 60;
     private int premiumTtlHours = 24;
     private double premiumRefreshThreshold = 0.8;
     // PicoLimbo settings
@@ -189,6 +190,7 @@ public class Settings {
                   ttl-minutes: 60 # Cache entry lifetime
                   max-size: 10000 # Maximum cached records
                   cleanup-interval-minutes: 5 # Cleanup scheduler interval
+                  session-timeout-minutes: 60 # Session inactivity timeout in minutes (default: 60)
                   premium-ttl-hours: 24 # Premium status cache TTL in hours (default: 24)
                   premium-refresh-threshold: 0.8 # Background refresh threshold (0.0-1.0, default: 0.8)
                 
@@ -417,6 +419,7 @@ public class Settings {
             cacheTtlMinutes = getInt(cache, "ttl-minutes", cacheTtlMinutes);
             cacheMaxSize = getInt(cache, "max-size", cacheMaxSize);
             cacheCleanupIntervalMinutes = getInt(cache, "cleanup-interval-minutes", cacheCleanupIntervalMinutes);
+            sessionTimeoutMinutes = getInt(cache, "session-timeout-minutes", sessionTimeoutMinutes);
             premiumTtlHours = getInt(cache, "premium-ttl-hours", premiumTtlHours);
             premiumRefreshThreshold = getDouble(cache, "premium-refresh-threshold", premiumRefreshThreshold);
         }
@@ -840,6 +843,10 @@ public class Settings {
 
     public int getCacheCleanupIntervalMinutes() {
         return cacheCleanupIntervalMinutes;
+    }
+
+    public int getSessionTimeoutMinutes() {
+        return sessionTimeoutMinutes;
     }
 
     public int getPremiumTtlHours() {

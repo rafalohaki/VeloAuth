@@ -164,7 +164,13 @@ public class PreLoginHandler {
             existingPlayer.setConflictMode(true);
             existingPlayer.setConflictTimestamp(System.currentTimeMillis());
             existingPlayer.setOriginalNickname(existingPlayer.getNickname());
-            databaseManager.savePlayer(existingPlayer).join();
+            // Fire-and-forget: don't block Netty IO thread with .join()
+            databaseManager.savePlayer(existingPlayer)
+                    .exceptionally(throwable -> {
+                        logger.error("[NICKNAME CONFLICT] Failed to save conflict state for {}: {}",
+                                username, throwable.getMessage());
+                        return null;
+                    });
             logger.info("[NICKNAME CONFLICT] Premium player {} detected conflict with offline account", username);
         }
     }

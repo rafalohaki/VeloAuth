@@ -80,7 +80,7 @@ class VeloAuthIntegrationTest {
         messages.setLanguage("en");
         settings = new TestSettings(java.nio.file.Path.of(".test-settings"), true, "auth");
         authCache = new net.rafalohaki.veloauth.cache.AuthCache(
-                new net.rafalohaki.veloauth.cache.AuthCache.AuthCacheConfig(60, 10000, 1000, 10000, 5, 5, 1),
+                new net.rafalohaki.veloauth.cache.AuthCache.AuthCacheConfig(60, 10000, 1000, 10000, 5, 5, 1, 60),
                 settings, messages
         );
 
