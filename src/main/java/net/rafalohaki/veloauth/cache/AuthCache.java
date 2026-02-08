@@ -335,6 +335,7 @@ public class AuthCache {
             return null;
         }
 
+        user.touch();
         cacheHits.incrementAndGet();
         logCacheMetrics("cache.debug.hit.rate");
         return user;
@@ -799,15 +800,15 @@ public class AuthCache {
     }
 
     /**
-     * Czyści wygasłe wpisy z cache.
-     * Usuwa najstarszy wpis autoryzacji.
+     * Usuwa najmniej ostatnio używany wpis autoryzacji (LRU eviction).
+     * Sortuje po lastAccessTime zamiast cacheTime dla lepszego cache hit rate.
      */
     private void evictOldestAuthorizedEntryAtomic() {
-        var oldest = authorizedPlayers.entrySet().stream()
-                .min(java.util.Comparator.comparingLong(e -> e.getValue().getCacheTime()))
+        var lru = authorizedPlayers.entrySet().stream()
+                .min(java.util.Comparator.comparingLong(e -> e.getValue().getLastAccessTime()))
                 .orElse(null);
-        if (oldest != null) {
-            authorizedPlayers.remove(oldest.getKey(), oldest.getValue());
+        if (lru != null) {
+            authorizedPlayers.remove(lru.getKey(), lru.getValue());
         }
     }
 

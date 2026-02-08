@@ -1,5 +1,6 @@
 package net.rafalohaki.veloauth.listener;
 
+import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.LoginEvent;
@@ -29,6 +30,7 @@ import javax.inject.Inject;
 import java.net.InetAddress;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Listener eventów autoryzacji VeloAuth.
@@ -137,32 +139,31 @@ public class AuthListener {
      * Tutaj sprawdzamy premium PRZED weryfikacją UUID!
      * Jeśli premium → forceOnlineMode() = Velocity zweryfikuje
      * <p>
-     * KRYTYCZNE: Używamy async = false + maksymalny priorytet dla bezpieczeństwa
-     * Zapobiega race conditions gdzie async handlers mogą wykonać się przed sync
-     * handlers
+     * KRYTYCZNE: Używamy maksymalny priorytet dla bezpieczeństwa.
      * <p>
-     * UWAGA: PreLoginEvent WYMAGA synchronicznej odpowiedzi.
-     * Premium resolution na cache miss blokuje, ale to ograniczenie API Velocity.
-     * Dwa warstwy cache (AuthCache + PremiumResolverService) minimalizują impact.
+     * ASYNC: Zwraca EventTask aby NIE blokować wątku Netty IO.
+     * Validation checks (fast, sync) wykonują się natychmiast.
+     * Premium resolution + DB lookup wykonują się asynchronicznie.
+     * Velocity wstrzymuje event processing do zakończenia EventTask.
      */
     @Subscribe(priority = Short.MAX_VALUE)
-    public void onPreLogin(PreLoginEvent event) {
+    public EventTask onPreLogin(PreLoginEvent event) {
         String username = event.getUsername();
         if (logger.isDebugEnabled()) {
             logger.debug("\uD83D\uDD0D PreLogin: {}", username);
         }
 
         if (!validatePreLoginConditions(event, username)) {
-            return;
+            return null;
         }
 
         if (!settings.isPremiumCheckEnabled()) {
             logger.debug("Premium check wyłączony w konfiguracji - wymuszam offline mode dla {}", username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-            return;
+            return null;
         }
 
-        handlePremiumDetection(event, username);
+        return EventTask.resumeWhenComplete(handlePremiumDetectionAsync(event, username));
     }
 
     private boolean validatePreLoginConditions(PreLoginEvent event, String username) {
@@ -221,40 +222,58 @@ public class AuthListener {
         return false;
     }
 
-    private void handlePremiumDetection(PreLoginEvent event, String username) {
-        // Delegate premium resolution to PreLoginHandler
-        PreLoginHandler.PremiumResolutionResult result = preLoginHandler.resolvePremiumStatus(username);
+    /**
+     * Async premium detection — chains premium resolution and DB lookup without blocking Netty IO.
+     * Uses CompletableFuture composition: resolve premium → DB lookup → set event result.
+     *
+     * @param event    PreLoginEvent to set result on
+     * @param username Player username
+     * @return CompletableFuture that completes when event result is set
+     */
+    private CompletableFuture<Void> handlePremiumDetectionAsync(PreLoginEvent event, String username) {
+        return preLoginHandler.resolvePremiumStatusAsync(username)
+                .thenCompose(result -> {
+                    // Hybrid API failure handling: null means all resolvers failed AND no DB cache
+                    if (result == null) {
+                        logger.error("[SECURITY] Login DENIED for {} — cannot verify premium status (all API resolvers failed)",
+                                username);
+                        event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                                Component.text(messages.get("security.api_failure.denied"), NamedTextColor.RED)));
+                        return CompletableFuture.completedFuture(null);
+                    }
 
-        // Hybrid API failure handling: null means all resolvers failed AND no DB cache
-        if (result == null) {
-            logger.error("[SECURITY] Login DENIED for {} — cannot verify premium status (all API resolvers failed)",
-                    username);
-            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    Component.text(messages.get("security.api_failure.denied"), NamedTextColor.RED)));
-            return;
-        }
+                    boolean premium = result.premium();
+                    UUID currentPremiumUuid = result.premiumUuid();
 
-        boolean premium = result.premium();
-        UUID currentPremiumUuid = result.premiumUuid();
+                    // Async DB lookup — no .join(), chains via thenAccept
+                    return databaseManager.findPlayerByUuidOrNickname(username, currentPremiumUuid)
+                            .thenAccept(dbResult -> {
+                                RegisteredPlayer existingPlayer = dbResult.getValue();
 
-        // 🔥 USE_OFFLINE: Check for nickname conflicts with runtime detection + UUID fallback for nick changes
-        RegisteredPlayer existingPlayer = databaseManager.findPlayerByUuidOrNickname(username, currentPremiumUuid)
-                .join().getValue();
+                                if (existingPlayer != null) {
+                                    boolean existingIsPremium = databaseManager.isPlayerPremiumRuntime(existingPlayer);
 
-        if (existingPlayer != null) {
-            boolean existingIsPremium = databaseManager.isPlayerPremiumRuntime(existingPlayer);
+                                    if (preLoginHandler.isNicknameConflict(existingPlayer, premium,
+                                            existingIsPremium, currentPremiumUuid)) {
+                                        preLoginHandler.handleNicknameConflict(event, existingPlayer,
+                                                premium, currentPremiumUuid);
+                                        return;
+                                    }
+                                }
 
-            if (preLoginHandler.isNicknameConflict(existingPlayer, premium, existingIsPremium, currentPremiumUuid)) {
-                preLoginHandler.handleNicknameConflict(event, existingPlayer, premium, currentPremiumUuid);
-                return;
-            }
-        }
-
-        if (premium) {
-            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
-        } else {
-            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-        }
+                                if (premium) {
+                                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
+                                } else {
+                                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+                                }
+                            });
+                })
+                .exceptionally(throwable -> {
+                    logger.error("[ASYNC] Error during premium detection for {}: {}",
+                            username, throwable.getMessage());
+                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+                    return null;
+                });
     }
 
 

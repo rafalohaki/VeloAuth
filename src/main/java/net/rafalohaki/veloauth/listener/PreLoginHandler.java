@@ -115,6 +115,40 @@ public class PreLoginHandler {
     }
 
     /**
+     * Async version of resolvePremiumStatus — returns CompletableFuture to avoid blocking Netty IO thread.
+     * On cache hit, returns immediately via completedFuture.
+     * On cache miss, resolves via API asynchronously with 1.5s timeout.
+     *
+     * @param username Username to check
+     * @return CompletableFuture with PremiumResolutionResult (may be null on UNKNOWN/API failure)
+     */
+    public CompletableFuture<PremiumResolutionResult> resolvePremiumStatusAsync(String username) {
+        PremiumCacheEntry cachedStatus = authCache.getPremiumStatus(username);
+        if (cachedStatus != null) {
+            logger.debug("Premium cache hit dla {} -> {} (age: {}ms, TTL: {}ms)",
+                    username, cachedStatus.isPremium(), cachedStatus.getAgeMillis(), cachedStatus.getTtlMillis());
+
+            if (cachedStatus.isStale()) {
+                triggerBackgroundRefresh(username);
+            }
+
+            return CompletableFuture.completedFuture(
+                    new PremiumResolutionResult(cachedStatus.isPremium(), cachedStatus.getPremiumUuid()));
+        }
+
+        // Cache miss — async resolution (does NOT block Netty IO thread)
+        return CompletableFuture.supplyAsync(() -> premiumResolverService.resolve(username))
+                .orTimeout(1500, TimeUnit.MILLISECONDS)
+                .exceptionally(throwable -> {
+                    logger.warn("Premium resolution timeout/error for {} — fallback to offline: {}",
+                            username, throwable.getMessage());
+                    return PremiumResolution.offline(username, "VeloAuth-Timeout",
+                            "Timeout - fallback to offline");
+                })
+                .thenApply(resolution -> cacheFromResolution(username, resolution));
+    }
+
+    /**
      * Triggers asynchronous background refresh of premium status.
      * Uses stale-while-revalidate pattern to avoid blocking current request.
      *
@@ -275,7 +309,7 @@ public class PreLoginHandler {
     private PremiumResolution resolveViaServiceWithTimeout(String username) {
         try {
             return CompletableFuture.supplyAsync(() -> premiumResolverService.resolve(username))
-                    .orTimeout(3, TimeUnit.SECONDS)
+                    .orTimeout(1500, TimeUnit.MILLISECONDS)
                     .exceptionally(throwable -> PremiumResolution.offline(username, "VeloAuth-Timeout",
                             "Timeout - fallback to offline"))
                     .join();

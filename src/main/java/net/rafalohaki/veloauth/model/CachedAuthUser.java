@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.model;
 
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Model danych użytkownika w cache autoryzacji.
@@ -30,6 +31,12 @@ public final class CachedAuthUser {
      * Timestamp utworzenia wpisu w cache (TTL).
      */
     private final long cacheTime;
+
+    /**
+     * Timestamp ostatniego dostępu do wpisu (LRU eviction).
+     * AtomicLong dla thread-safe update bez synchronizacji.
+     */
+    private final AtomicLong lastAccessTime;
 
     /**
      * Timestamp ostatniego logowania.
@@ -72,6 +79,7 @@ public final class CachedAuthUser {
         this.isPremium = isPremium;
         this.premiumUuid = premiumUuid;
         this.cacheTime = System.currentTimeMillis();
+        this.lastAccessTime = new AtomicLong(this.cacheTime);
     }
 
     /**
@@ -135,6 +143,23 @@ public final class CachedAuthUser {
      */
     public long getCacheTime() {
         return cacheTime;
+    }
+
+    /**
+     * Aktualizuje timestamp ostatniego dostępu (LRU touch).
+     * Thread-safe dzięki AtomicLong.
+     */
+    public void touch() {
+        lastAccessTime.set(System.currentTimeMillis());
+    }
+
+    /**
+     * Zwraca timestamp ostatniego dostępu do wpisu cache.
+     *
+     * @return Czas ostatniego dostępu w milisekundach
+     */
+    public long getLastAccessTime() {
+        return lastAccessTime.get();
     }
 
     /**
@@ -215,7 +240,7 @@ public final class CachedAuthUser {
      * @return Nowy CachedAuthUser object
      */
     public CachedAuthUser withUpdatedIp(String newLoginIp) {
-        return new CachedAuthUser(
+        CachedAuthUser updated = new CachedAuthUser(
                 this.uuid,
                 this.nickname,
                 newLoginIp,
@@ -223,6 +248,9 @@ public final class CachedAuthUser {
                 this.isPremium,
                 this.premiumUuid
         );
+        // Preserve last access time from original entry
+        updated.lastAccessTime.set(this.lastAccessTime.get());
+        return updated;
     }
 
     @Override
@@ -247,6 +275,7 @@ public final class CachedAuthUser {
                 ", nickname='" + nickname + '\'' +
                 ", loginIp='" + loginIp + '\'' +
                 ", cacheTime=" + cacheTime +
+                ", lastAccessTime=" + lastAccessTime.get() +
                 ", loginTime=" + loginTime +
                 ", isPremium=" + isPremium +
                 ", premiumUuid=" + premiumUuid +
