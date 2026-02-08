@@ -63,7 +63,7 @@ try = ["lobby", "survival"]  # Order matters for auth redirect, no limbo in orde
 
 ### Discord Webhooks
 
-VeloAuth supports Discord notifications for security events. See [Discord Setup Guide](docs/DISCORD_WEBHOOK_SETUP.md).
+VeloAuth supports Discord notifications for security events. Configure webhook URL in config.yml.
 
 ### Database Config
 
@@ -113,15 +113,16 @@ VeloAuth is **100% compatible** with LimboAuth databases:
 3. Configure VeloAuth to use the same database as LimboAuth
 4. Start Velocity - all existing accounts will work automatically
 
-## Support
-
-Need help? Found a bug? Open an issue on GitHub or join our Discord server.
-
-
 ## Contributing
 
 Contributions are welcome! Please open an issue or PR.
 
+## Support
+
+Need help? Found a bug? Open an issue on GitHub or join our Discord server.
+
 ## License
+
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
 
 
