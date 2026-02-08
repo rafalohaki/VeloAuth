@@ -246,15 +246,16 @@ class AuthenticationFlowIntegrationTest {
         // Test: Premium player tries to use this nickname
         boolean isPremium = true;
         boolean existingIsPremium = (existingOfflinePlayer.getPremiumUuid() != null);
+        UUID currentPremiumUuid = UUID.randomUUID();
         
         boolean hasConflict = preLoginHandler.isNicknameConflict(
-                existingOfflinePlayer, isPremium, existingIsPremium);
+                existingOfflinePlayer, isPremium, existingIsPremium, currentPremiumUuid);
         
         assertTrue(hasConflict, 
                 "Should detect conflict when premium player uses offline nickname");
         
         assertDoesNotThrow(() ->
-                preLoginHandler.handleNicknameConflictNoEvent(conflictedNickname, existingOfflinePlayer, isPremium),
+                preLoginHandler.handleNicknameConflictNoEvent(conflictedNickname, existingOfflinePlayer, isPremium, currentPremiumUuid),
                 "Conflict handling should not throw exceptions");
     }
 
@@ -279,13 +280,13 @@ class AuthenticationFlowIntegrationTest {
         boolean existingIsPremium = false;
         
         boolean hasConflict = preLoginHandler.isNicknameConflict(
-                conflictedPlayer, isPremium, existingIsPremium);
+                conflictedPlayer, isPremium, existingIsPremium, null);
         
         assertTrue(hasConflict,
                 "Should detect conflict when offline player accesses conflicted account");
         
         assertDoesNotThrow(() ->
-                preLoginHandler.handleNicknameConflictNoEvent(conflictedNickname, conflictedPlayer, isPremium),
+                preLoginHandler.handleNicknameConflictNoEvent(conflictedNickname, conflictedPlayer, isPremium, null),
                 "Conflict handling should not throw exceptions");
     }
 

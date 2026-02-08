@@ -138,19 +138,44 @@ public class PreLoginHandler {
     }
 
     /**
-     * Checks for nickname conflicts between premium and offline players.
+     * Checks for nickname conflicts between premium and offline players,
+     * and detects name sniping (premium UUID mismatch).
      *
      * @param existingPlayer    Existing player in database
      * @param isPremium         Whether current player is premium
      * @param existingIsPremium Whether existing player is premium (runtime detection)
+     * @param currentPremiumUuid UUID of the current premium player (null for offline)
      * @return true if conflict exists
      */
-    public boolean isNicknameConflict(RegisteredPlayer existingPlayer, boolean isPremium, boolean existingIsPremium) {
-        // Conflict scenarios:
-        // 1. Premium player trying to use offline nickname
-        // 2. Offline player trying to access account in conflict mode
-        return (isPremium && !existingIsPremium) ||
-                (!isPremium && existingPlayer.getConflictMode());
+    public boolean isNicknameConflict(RegisteredPlayer existingPlayer, boolean isPremium,
+                                      boolean existingIsPremium, UUID currentPremiumUuid) {
+        // Conflict scenario 1: Premium player trying to use offline nickname
+        // Conflict scenario 2: Offline player trying to access account in conflict mode
+        if ((isPremium && !existingIsPremium) ||
+                (!isPremium && existingPlayer.getConflictMode())) {
+            return true;
+        }
+
+        // Conflict scenario 3: Name sniping — different premium UUID for same nickname
+        if (isPremium && existingIsPremium && currentPremiumUuid != null) {
+            String dbUuidStr = existingPlayer.getPremiumUuid();
+            if (dbUuidStr != null && !dbUuidStr.isEmpty()) {
+                try {
+                    UUID dbUuid = UUID.fromString(dbUuidStr);
+                    if (!dbUuid.equals(currentPremiumUuid)) {
+                        logger.warn("[SECURITY] Name snipe detected for {}: DB UUID={}, Current UUID={}",
+                                existingPlayer.getNickname(), dbUuid, currentPremiumUuid);
+                        return true;
+                    }
+                } catch (IllegalArgumentException e) {
+                    logger.error("[SECURITY] Invalid UUID in database for {}: {}",
+                            existingPlayer.getNickname(), dbUuidStr);
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -182,25 +207,58 @@ public class PreLoginHandler {
      * @param existingPlayer Existing player in database
      * @param isPremium      Whether current player is premium
      */
-    public void handleNicknameConflict(PreLoginEvent event, RegisteredPlayer existingPlayer, boolean isPremium) {
+    public void handleNicknameConflict(PreLoginEvent event, RegisteredPlayer existingPlayer,
+                                       boolean isPremium, UUID currentPremiumUuid) {
         String username = event.getUsername();
 
-        if (isPremium && existingPlayer.getPremiumUuid() == null) {
-            // Premium player trying to use offline nickname
-            markAsConflicted(existingPlayer, username);
+        // Case 1: Name sniping — premium player with DIFFERENT UUID than DB record
+        if (isPremium && currentPremiumUuid != null && existingPlayer.getPremiumUuid() != null) {
+            try {
+                UUID dbUuid = UUID.fromString(existingPlayer.getPremiumUuid());
+                if (!dbUuid.equals(currentPremiumUuid)) {
+                    logger.error("[SECURITY BREACH] Name snipe BLOCKED for {}: " +
+                                    "DB owner UUID={}, Attacker UUID={}",
+                            username, dbUuid, currentPremiumUuid);
+                    event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                            net.kyori.adventure.text.Component.text(
+                                    messages.get("security.name_snipe.denied"),
+                                    net.kyori.adventure.text.format.NamedTextColor.RED)));
+                    return;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Invalid UUID in DB — fall through to other conflict handling
+            }
+        }
 
-            // Force offline mode for premium player
+        if (isPremium && existingPlayer.getPremiumUuid() == null) {
+            // Case 2: Premium player trying to use offline nickname
+            markAsConflicted(existingPlayer, username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
 
         } else if (!isPremium && existingPlayer.getConflictMode()) {
-            // Offline player accessing conflicted account
+            // Case 3: Offline player accessing conflicted account
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-
             logger.debug("[NICKNAME CONFLICT] Offline player {} accessing conflicted account", username);
         }
     }
 
-    public void handleNicknameConflictNoEvent(String username, RegisteredPlayer existingPlayer, boolean isPremium) {
+    public void handleNicknameConflictNoEvent(String username, RegisteredPlayer existingPlayer,
+                                               boolean isPremium, UUID currentPremiumUuid) {
+        // Name sniping — log but can't deny without event
+        if (isPremium && currentPremiumUuid != null && existingPlayer.getPremiumUuid() != null) {
+            try {
+                UUID dbUuid = UUID.fromString(existingPlayer.getPremiumUuid());
+                if (!dbUuid.equals(currentPremiumUuid)) {
+                    logger.error("[SECURITY BREACH] Name snipe detected (no-event) for {}: " +
+                                    "DB owner UUID={}, Attacker UUID={}",
+                            username, dbUuid, currentPremiumUuid);
+                    return;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Invalid UUID in DB
+            }
+        }
+
         if (isPremium && existingPlayer.getPremiumUuid() == null) {
             markAsConflicted(existingPlayer, username);
         } else if (!isPremium && existingPlayer.getConflictMode()) {
@@ -249,9 +307,15 @@ public class PreLoginHandler {
                     resolution.message());
             return new PremiumResolutionResult(false, null);
         }
-        logger.warn("⚠️ Nie udało się jednoznacznie potwierdzić statusu premium dla {} (resolver: {}, info: {})",
+
+        // UNKNOWN: All API resolvers failed AND DB cache had no entry.
+        // Hybrid approach: DB cache was already checked in PremiumResolverService.resolve(),
+        // so reaching here means this is a new player with no cached premium status.
+        // Deny login for security — cannot verify premium status.
+        logger.error("[SECURITY] Cannot verify premium status for {} — all API resolvers failed " +
+                "(resolver: {}, info: {}). Login denied for safety.",
                 username, resolution.source(), resolution.message());
-        return new PremiumResolutionResult(false, null);
+        return null;
     }
 
     /**

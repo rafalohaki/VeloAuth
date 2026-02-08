@@ -224,16 +224,28 @@ public class AuthListener {
     private void handlePremiumDetection(PreLoginEvent event, String username) {
         // Delegate premium resolution to PreLoginHandler
         PreLoginHandler.PremiumResolutionResult result = preLoginHandler.resolvePremiumStatus(username);
-        boolean premium = result.premium();
 
-        // 🔥 USE_OFFLINE: Check for nickname conflicts with runtime detection
-        RegisteredPlayer existingPlayer = databaseManager.findPlayerWithRuntimeDetection(username).join().getValue();
+        // Hybrid API failure handling: null means all resolvers failed AND no DB cache
+        if (result == null) {
+            logger.error("[SECURITY] Login DENIED for {} — cannot verify premium status (all API resolvers failed)",
+                    username);
+            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                    Component.text(messages.get("security.api_failure.denied"), NamedTextColor.RED)));
+            return;
+        }
+
+        boolean premium = result.premium();
+        UUID currentPremiumUuid = result.premiumUuid();
+
+        // 🔥 USE_OFFLINE: Check for nickname conflicts with runtime detection + UUID fallback for nick changes
+        RegisteredPlayer existingPlayer = databaseManager.findPlayerByUuidOrNickname(username, currentPremiumUuid)
+                .join().getValue();
 
         if (existingPlayer != null) {
             boolean existingIsPremium = databaseManager.isPlayerPremiumRuntime(existingPlayer);
 
-            if (preLoginHandler.isNicknameConflict(existingPlayer, premium, existingIsPremium)) {
-                preLoginHandler.handleNicknameConflict(event, existingPlayer, premium);
+            if (preLoginHandler.isNicknameConflict(existingPlayer, premium, existingIsPremium, currentPremiumUuid)) {
+                preLoginHandler.handleNicknameConflict(event, existingPlayer, premium, currentPremiumUuid);
                 return;
             }
         }

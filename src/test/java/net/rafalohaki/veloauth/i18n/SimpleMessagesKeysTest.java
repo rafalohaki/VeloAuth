@@ -230,7 +230,9 @@ class SimpleMessagesKeysTest {
             "player.transfer.backend.attempt",
             // Security messages (additional)
             "security.session.hijack",
-            "security.session.ip.mismatch"
+            "security.session.ip.mismatch",
+            "security.name_snipe.denied",
+            "security.api_failure.denied"
     );
 
     /**

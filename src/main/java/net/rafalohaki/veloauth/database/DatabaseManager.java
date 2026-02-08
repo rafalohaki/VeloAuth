@@ -429,6 +429,85 @@ public class DatabaseManager {
     }
 
     /**
+     * Finds a player by nickname first (fast, primary key), then falls back to
+     * UUID-based lookup for premium players who changed their Mojang nickname.
+     * If found by UUID, auto-updates the nickname in AUTH table.
+     *
+     * @param nickname     Current player nickname
+     * @param premiumUuid  Premium UUID to use as fallback lookup (null for offline)
+     * @return DbResult with RegisteredPlayer (found by nick or UUID) or null
+     */
+    public CompletableFuture<DbResult<RegisteredPlayer>> findPlayerByUuidOrNickname(
+            String nickname, UUID premiumUuid) {
+        if (nickname == null || nickname.isEmpty()) {
+            return CompletableFuture.completedFuture(DbResult.success(null));
+        }
+        if (dbExecutor.isShutdown()) {
+            return CompletableFuture.completedFuture(
+                    DbResult.databaseError(messages.get(DATABASE_ERROR) + ": Executor is shutting down"));
+        }
+
+        String normalizedNickname = nickname.toLowerCase();
+
+        return CompletableFuture.supplyAsync(() -> {
+            // 1. Primary: lookup by nickname (fast, primary key)
+            DbResult<RegisteredPlayer> byNick = performPlayerLookup(normalizedNickname, nickname, true);
+            if (byNick.isDatabaseError() || byNick.getValue() != null) {
+                return byNick;
+            }
+
+            // 2. Fallback: lookup by PREMIUMUUID (premium nick change)
+            if (premiumUuid == null) {
+                return DbResult.success(null);
+            }
+
+            DbResult<Void> connectionResult = validateDatabaseConnection();
+            if (connectionResult.isDatabaseError()) {
+                return DbResult.databaseError(connectionResult.getErrorMessage());
+            }
+
+            return findAndMigrateByPremiumUuid(normalizedNickname, nickname, premiumUuid);
+        }, dbExecutor);
+    }
+
+    private DbResult<RegisteredPlayer> findAndMigrateByPremiumUuid(
+            String normalizedNickname, String originalNickname, UUID premiumUuid) {
+        try {
+            RegisteredPlayer byUuid = playerDao.queryForFirst(
+                    playerDao.queryBuilder().where()
+                            .eq("PREMIUMUUID", premiumUuid.toString())
+                            .prepare());
+
+            if (byUuid == null) {
+                return DbResult.success(null);
+            }
+
+            String oldNick = byUuid.getNickname();
+            logger.info("[NICK CHANGE] Premium player {} changed nickname: {} → {}",
+                    premiumUuid, oldNick, originalNickname);
+
+            // Remove old cache entry
+            playerCache.remove(byUuid.getLowercaseNickname());
+
+            // Update nickname in AUTH table (setNickname also updates lowercaseNickname)
+            byUuid.setNickname(originalNickname);
+            playerDao.update(byUuid);
+
+            // Update cache with new key
+            playerCache.put(normalizedNickname, byUuid);
+
+            logRuntimeDetection(originalNickname, isPlayerPremiumRuntime(byUuid), byUuid.getHash());
+            return DbResult.success(byUuid);
+        } catch (SQLException e) {
+            if (logger.isErrorEnabled()) {
+                logger.error(DB_MARKER, "Error during UUID-based player lookup for {}: {}",
+                        premiumUuid, e.getMessage());
+            }
+            return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+        }
+    }
+
+    /**
      * Unified player lookup logic.
      * 
      * @param nickname Player nickname

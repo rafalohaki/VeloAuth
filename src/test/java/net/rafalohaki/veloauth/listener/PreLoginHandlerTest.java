@@ -198,7 +198,7 @@ class PreLoginHandlerTest {
         offlinePlayer.setConflictMode(false);
 
         // When: Premium player tries to login with same nickname
-        boolean result = handler.isNicknameConflict(offlinePlayer, true, false);
+        boolean result = handler.isNicknameConflict(offlinePlayer, true, false, UUID.randomUUID());
 
         // Then: Should detect conflict (premium trying to use offline nickname)
         assertTrue(result, "Should detect conflict when premium uses offline nickname");
@@ -212,10 +212,11 @@ class PreLoginHandlerTest {
         premiumPlayer.setPremiumUuid("069a79f4-44e9-4726-a5be-fca90e38aaf5");
         premiumPlayer.setConflictMode(false);
 
-        // When: Same premium player logs in
-        boolean result = handler.isNicknameConflict(premiumPlayer, true, true);
+        // When: Same premium player logs in with SAME UUID
+        UUID sameUuid = UUID.fromString("069a79f4-44e9-4726-a5be-fca90e38aaf5");
+        boolean result = handler.isNicknameConflict(premiumPlayer, true, true, sameUuid);
 
-        // Then: Should not detect conflict (both premium)
+        // Then: Should not detect conflict (same premium UUID)
         assertFalse(result, "Should not detect conflict for same premium player");
     }
 
@@ -228,7 +229,7 @@ class PreLoginHandlerTest {
         conflictedPlayer.setConflictMode(true); // Already marked as conflicted
 
         // When: Offline player tries to access
-        boolean result = handler.isNicknameConflict(conflictedPlayer, false, false);
+        boolean result = handler.isNicknameConflict(conflictedPlayer, false, false, null);
 
         // Then: Should detect conflict (offline accessing conflicted account)
         assertTrue(result, "Should detect conflict for offline accessing conflicted account");
