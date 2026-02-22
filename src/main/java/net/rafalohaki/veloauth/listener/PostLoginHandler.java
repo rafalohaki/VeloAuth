@@ -71,16 +71,16 @@ public class PostLoginHandler {
         authCache.startSession(playerUuid, player.getUsername(), playerIp);
 
         // Premium player is now authorized in cache
-        // ServerPreConnectEvent will redirect to PicoLimbo automatically
+        // ServerPreConnectEvent will redirect to auth server automatically
         // Then onServerConnected will trigger auto-transfer to backend
         if (logger.isDebugEnabled()) {
-            logger.debug("Premium player {} authorized - ServerPreConnectEvent will route to PicoLimbo", 
+            logger.debug("Premium player {} authorized - ServerPreConnectEvent will route to auth server", 
                     player.getUsername());
         }
     }
 
     /**
-     * Handles offline player post-login (authorization check or PicoLimbo transfer).
+     * Handles offline player post-login (authorization check or auth server transfer).
      *
      * @param player   The offline player
      * @param playerIp Player's IP address
@@ -95,10 +95,10 @@ public class PostLoginHandler {
         }
 
         if (logger.isDebugEnabled()) {
-            logger.debug("Gracz {} nie jest autoryzowany - ServerPreConnectEvent przekieruje na PicoLimbo", 
+            logger.debug("Gracz {} nie jest autoryzowany - ServerPreConnectEvent przekieruje na auth server", 
                     player.getUsername());
         }
-        // ServerPreConnectEvent will redirect to PicoLimbo automatically
+        // ServerPreConnectEvent will redirect to auth server automatically
     }
 
     /**

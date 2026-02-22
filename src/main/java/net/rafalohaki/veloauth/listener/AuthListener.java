@@ -40,7 +40,7 @@ import java.util.concurrent.CompletableFuture;
  * <ol>
  *   <li>PreLoginEvent → sprawdź premium i force online mode</li>
  *   <li>LoginEvent → sprawdź brute force</li>
- *   <li>PostLoginEvent → kieruj na PicoLimbo lub backend</li>
+ *   <li>PostLoginEvent → kieruj na auth server lub backend</li>
  *   <li>ServerPreConnectEvent → blokuj nieautoryzowane połączenia z backend</li>
  *   <li>ServerConnectedEvent → loguj transfery</li>
  * </ol>
@@ -362,7 +362,7 @@ public class AuthListener {
 
     /**
      * Obsługuje event po zalogowaniu gracza.
-     * Kieruje gracza na odpowiedni serwer (PicoLimbo lub backend).
+     * Kieruje gracza na odpowiedni serwer (auth server lub backend).
      */
     @Subscribe(priority = 0) // NORMAL priority
     public void onPostLogin(PostLoginEvent event) {
@@ -421,8 +421,8 @@ public class AuthListener {
      * <p>
      * FLOW dla nowych graczy (pierwszego połączenia):
      * - Velocity próbuje połączyć z pierwszym serwerem z listy try (np. 2b2t)
-     * - My przechwytujemy i przekierowujemy na PicoLimbo
-     * - Po połączeniu z PicoLimbo, onServerConnected uruchomi auto-transfer
+     * - My przechwytujemy i przekierowujemy na auth server
+     * - Po połączeniu z auth server, onServerConnected uruchomi auto-transfer
      */
     @Subscribe(priority = Short.MAX_VALUE)
     public void onServerPreConnect(ServerPreConnectEvent event) {
@@ -439,8 +439,8 @@ public class AuthListener {
                 return;
             }
 
-            // ✅ JEŚLI TO PICOLIMBO - SPRAWDŹ DODATKOWO AUTORYZACJĘ
-            if (handlePicoLimboConnection(event, player, targetServerName)) {
+            // ✅ JEŚLI TO AUTH SERVER - SPRAWDŹ DODATKOWO AUTORYZACJĘ
+            if (handleAuthServerConnection(event, player, targetServerName)) {
                 return;
             }
 
@@ -456,25 +456,25 @@ public class AuthListener {
     private boolean handleFirstConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
         // ✅ PIERWSZE POŁĄCZENIE: Gracz nie ma jeszcze currentServer
         // Velocity próbuje go wysłać na pierwszy serwer z try (np. 2b2t)
-        // My MUSIMY przekierować na PicoLimbo dla ViaVersion compatibility
+        // My MUSIMY przekierować na auth server dla ViaVersion compatibility
         if (player.getCurrentServer().isEmpty()) {
-            String picoLimboName = settings.getPicoLimboServerName();
+            String authServerName = settings.getAuthServerName();
             
-            // Jeśli cel to już PicoLimbo - pozwól
-            if (targetServerName.equals(picoLimboName)) {
-                logger.debug("Pierwsze połączenie {} -> PicoLimbo - pozwalam", player.getUsername());
+            // Jeśli cel to już auth server - pozwól
+            if (targetServerName.equals(authServerName)) {
+                logger.debug("Pierwsze połączenie {} -> auth server - pozwalam", player.getUsername());
                 return true;
             }
             
-            // Przekieruj na PicoLimbo zamiast backend
-            Optional<RegisteredServer> picoLimbo = plugin.getServer().getServer(picoLimboName);
-            if (picoLimbo.isPresent()) {
-                logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na PicoLimbo", 
+            // Przekieruj na auth server zamiast backend
+            Optional<RegisteredServer> authServer = plugin.getServer().getServer(authServerName);
+            if (authServer.isPresent()) {
+                logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na auth server", 
                         player.getUsername(), targetServerName);
-                event.setResult(ServerPreConnectEvent.ServerResult.allowed(picoLimbo.get()));
+                event.setResult(ServerPreConnectEvent.ServerResult.allowed(authServer.get()));
             } else {
-                logger.error("PicoLimbo server '{}' nie znaleziony! Gracz {} nie może się połączyć.", 
-                        picoLimboName, player.getUsername());
+                logger.error("Auth server '{}' not found! Player {} cannot connect.", 
+                        authServerName, player.getUsername());
                 event.setResult(ServerPreConnectEvent.ServerResult.denied());
             }
             return true;
@@ -482,20 +482,20 @@ public class AuthListener {
         return false;
     }
 
-    private boolean handlePicoLimboConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
-        if (targetServerName.equals(settings.getPicoLimboServerName())) {
+    private boolean handleAuthServerConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
+        if (targetServerName.equals(settings.getAuthServerName())) {
             // DODATKOWA WERYFIKACJA - sprawdź czy gracz nie jest już autoryzowany
-            // Jeśli jest autoryzowany, nie powinien iść na PicoLimbo
+            // Jeśli jest autoryzowany, nie powinien iść na auth server
             String playerIp = PlayerAddressUtils.getPlayerIp(player);
             boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
             if (isAuthorized) {
-                // AUTORYZOWANY GRACZ NA PICOLIMBO - przekieruj na backend
-                logger.debug("Autoryzowany gracz {} próbuje iść na PicoLimbo - przekierowuję na backend",
+                // AUTORYZOWANY GRACZ NA AUTH SERVER - przekieruj na backend
+                logger.debug("Autoryzowany gracz {} próbuje iść na auth server - przekierowuję na backend",
                         player.getUsername());
                 event.setResult(ServerPreConnectEvent.ServerResult.denied());
                 // Velocity automatycznie przekieruje na inny serwer
             } else {
-                logger.debug("PicoLimbo - pozwól (gracz nie jest autoryzowany)");
+                logger.debug("Auth server - pozwól (gracz nie jest autoryzowany)");
             }
             return true;
         }
@@ -550,7 +550,7 @@ public class AuthListener {
     /**
      * Handles server connected event.
      * Logs player transfers between servers and sends appropriate messages.
-     * For verified players connecting to PicoLimbo, triggers auto-transfer to backend.
+     * For verified players connecting to auth server, triggers auto-transfer to backend.
      */
     @Subscribe(priority = -200) // LAST priority
     public void onServerConnected(ServerConnectedEvent event) {
@@ -561,10 +561,10 @@ public class AuthListener {
             logger.debug("ServerConnectedEvent for player {} -> server {}",
                     player.getUsername(), serverName);
 
-            if (!serverName.equals(settings.getPicoLimboServerName())) {
+            if (!serverName.equals(settings.getAuthServerName())) {
                 handleBackendConnection(player, serverName);
             } else {
-                handlePicoLimboConnection(player);
+                handleAuthServerConnection(player);
             }
         } catch (Exception e) {
             logger.error("Error in ServerConnected", e);
@@ -579,9 +579,9 @@ public class AuthListener {
         player.sendMessage(Component.text(messages.get("general.welcome.full"), NamedTextColor.GREEN));
     }
 
-    private void handlePicoLimboConnection(Player player) {
+    private void handleAuthServerConnection(Player player) {
         if (logger.isDebugEnabled()) {
-            logger.debug(AUTH_MARKER, "ServerConnected to PicoLimbo: {}", player.getUsername());
+            logger.debug(AUTH_MARKER, "ServerConnected to auth server: {}", player.getUsername());
         }
 
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
@@ -598,7 +598,7 @@ public class AuthListener {
             logger.debug("Gracz {} jest zweryfikowany w cache - uruchamiam auto-transfer na backend",
                     player.getUsername());
         }
-        connectionManager.autoTransferFromPicoLimboToBackend(player);
+        connectionManager.autoTransferFromAuthServerToBackend(player);
     }
 
     private void sendAuthInstructions(Player player) {

@@ -198,6 +198,14 @@ public class CommandHandler {
     }
 
     /**
+     * Resets brute-force and rate-limit counters for the given IP address.
+     * Shared by LoginCommand and RegisterCommand on successful auth.
+     */
+    private void resetSecurityCounters(InetAddress playerAddress) {
+        SecurityUtils.resetSecurityCounters(playerAddress, authCache, ipRateLimiter);
+    }
+
+    /**
      * Komenda /login <hasło>
      */
     private class LoginCommand implements SimpleCommand {
@@ -313,10 +321,6 @@ public class CommandHandler {
                 }
             }
         }
-
-        private void resetSecurityCounters(InetAddress playerAddress) {
-            SecurityUtils.resetSecurityCounters(playerAddress, authCache, ipRateLimiter);
-        }
     }
 
     /**
@@ -418,10 +422,6 @@ public class CommandHandler {
             }
 
             plugin.getConnectionManager().transferToBackend(authContext.player);
-        }
-
-        private void resetSecurityCounters(InetAddress playerAddress) {
-            SecurityUtils.resetSecurityCounters(playerAddress, authCache, ipRateLimiter);
         }
     }
 

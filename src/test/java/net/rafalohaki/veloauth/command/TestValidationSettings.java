@@ -4,6 +4,7 @@ import net.rafalohaki.veloauth.config.Settings;
 
 import java.nio.file.Path;
 
+@SuppressWarnings("PMD.TestClassWithoutTestCases") // Test helper/stub, not a test class
 class TestValidationSettings extends Settings {
     private final int minLen;
     private final int maxLen;

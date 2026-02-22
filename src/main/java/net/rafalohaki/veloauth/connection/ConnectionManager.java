@@ -26,12 +26,12 @@ import java.util.concurrent.locks.LockSupport;
 
 /**
  * Manager połączeń i transferów graczy między serwerami.
- * Zarządza przepuszczaniem graczy między Velocity, PicoLimbo i serwerami backend.
+ * Zarządza przepuszczaniem graczy między Velocity, serwerem auth (limbo) i serwerami backend.
  * <p>
  * Flow autoryzacji:
- * 1. Gracz dołącza -> sprawdź cache -> zawsze przez PicoLimbo dla spójności ViaVersion
- * 2. Gracz na PicoLimbo -> jeśli zweryfikowany w cache: auto-transfer na backend
- * 3. Gracz na PicoLimbo -> /login lub /register -> transfer na backend
+ * 1. Gracz dołącza -> sprawdź cache -> zawsze przez auth server dla spójności ViaVersion
+ * 2. Gracz na auth server -> jeśli zweryfikowany w cache: auto-transfer na backend
+ * 3. Gracz na auth server -> /login lub /register -> transfer na backend
  * 4. Gracz na backend -> już autoryzowany, brak dodatkowych sprawdzeń
  */
 public class ConnectionManager {
@@ -72,20 +72,20 @@ public class ConnectionManager {
         this.messages = messages;
 
         if (logger.isDebugEnabled()) {
-            logger.debug(messages.get("connection.manager.initialized", settings.getPicoLimboServerName()));
+            logger.debug(messages.get("connection.manager.initialized", settings.getAuthServerName()));
         }
     }
 
     /**
-     * Transferuje gracza na serwer PicoLimbo z asynchronicznym sprawdzeniem konta.
+     * Transferuje gracza na serwer auth (limbo) z asynchronicznym sprawdzeniem konta.
      * Używa synchronicznego połączenia z prawidłową obsługą błędów.
      *
      * @param player Gracz do transferu
      * @return true jeśli transfer się udał
      */
-    public boolean transferToPicoLimbo(Player player) {
+    public boolean transferToAuthServer(Player player) {
         try {
-            RegisteredServer targetServer = validateAndGetPicoLimboServer(player);
+            RegisteredServer targetServer = validateAndGetAuthServer(player);
             if (targetServer == null) {
                 return false;
             }
@@ -94,20 +94,26 @@ public class ConnectionManager {
                 logger.debug(messages.get("player.transfer.attempt", player.getUsername()));
             }
 
-            return executePicoLimboTransfer(player, targetServer);
+            return executeAuthServerTransfer(player, targetServer);
 
         } catch (Exception e) {
             return handleTransferError(player, e);
         }
     }
-    
-    private RegisteredServer validateAndGetPicoLimboServer(Player player) {
-        Optional<RegisteredServer> picoLimboServer = plugin.getServer()
-                .getServer(settings.getPicoLimboServerName());
 
-        if (picoLimboServer.isEmpty()) {
-            logger.error("Serwer PicoLimbo '{}' nie jest zarejestrowany!",
-                    settings.getPicoLimboServerName());
+    /** @deprecated Use {@link #transferToAuthServer(Player)} instead. */
+    @Deprecated(since = "1.1.0", forRemoval = true)
+    public boolean transferToPicoLimbo(Player player) {
+        return transferToAuthServer(player);
+    }
+    
+    private RegisteredServer validateAndGetAuthServer(Player player) {
+        Optional<RegisteredServer> authServer = plugin.getServer()
+                .getServer(settings.getAuthServerName());
+
+        if (authServer.isEmpty()) {
+            logger.error("Auth server '{}' is not registered!",
+                    settings.getAuthServerName());
 
             player.disconnect(Component.text(
                     messages.get("connection.error.auth_server"),
@@ -116,12 +122,12 @@ public class ConnectionManager {
             return null;
         }
         
-        return picoLimboServer.get();
+        return authServer.get();
     }
     
     private boolean handleTransferError(Player player, Exception e) {
         if (logger.isErrorEnabled()) {
-            logger.error("Krytyczny błąd podczas próby transferu gracza na PicoLimbo: {}", player.getUsername(), e);
+            logger.error("Critical error transferring player to auth server: {}", player.getUsername(), e);
         }
 
         disconnectWithError(player, messages.get("connection.error.auth_connect"));
@@ -129,17 +135,17 @@ public class ConnectionManager {
     }
 
     /**
-     * Wykonuje transfer gracza na serwer PicoLimbo.
+     * Wykonuje transfer gracza na serwer auth (limbo).
      * @param player       Gracz do transferu
-     * @param targetServer Serwer docelowy PicoLimbo
+     * @param targetServer Serwer docelowy auth
      * @return true jeśli transfer się udał
      */
-    private boolean executePicoLimboTransfer(Player player, RegisteredServer targetServer) {
+    private boolean executeAuthServerTransfer(Player player, RegisteredServer targetServer) {
         try {
-            // FIX: Ensure PicoLimbo is ready before connecting using Ping check
+            // Ensure auth server is ready before connecting using Ping check
             // This prevents race conditions better than a blind sleep
-            if (!waitForPicoLimboReady(targetServer) && logger.isWarnEnabled()) {
-                logger.warn("PicoLimbo not responding to ping after retries - attempting connection anyway...");
+            if (!waitForAuthServerReady(targetServer) && logger.isWarnEnabled()) {
+                logger.warn("Auth server not responding to ping after retries - attempting connection anyway...");
             }
 
             var result = player.createConnectionRequest(targetServer)
@@ -154,7 +160,7 @@ public class ConnectionManager {
                 return true;
             } else {
                 if (logger.isWarnEnabled()) {
-                    logger.warn("❌ Transfer {} na PicoLimbo FAILED: {}",
+                    logger.warn("❌ Transfer {} to auth server FAILED: {}",
                             player.getUsername(),
                             result.getReasonComponent().orElse(createUnknownErrorComponent()));
                 }
@@ -167,7 +173,7 @@ public class ConnectionManager {
             }
         } catch (Exception e) {
             if (logger.isErrorEnabled()) {
-                logger.error("Error transferring player {} to PicoLimbo: {}",
+                logger.error("Error transferring player {} to auth server: {}",
                         player.getUsername(), e.getMessage(), e);
             }
 
@@ -179,7 +185,7 @@ public class ConnectionManager {
         }
     }
 
-    private boolean waitForPicoLimboReady(RegisteredServer targetServer) {
+    private boolean waitForAuthServerReady(RegisteredServer targetServer) {
         // Attempt to ping server 3 times with small delays
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
@@ -209,7 +215,7 @@ public class ConnectionManager {
      */
     public boolean transferToBackend(Player player) {
         try {
-            // Znajdź dostępny serwer backend (nie PicoLimbo)
+            // Znajdź dostępny serwer backend (nie auth server)
             Optional<RegisteredServer> backendServer = findAvailableBackendServer();
 
             if (backendServer.isEmpty()) {
@@ -331,7 +337,7 @@ public class ConnectionManager {
                     result.getReasonComponent().orElse(createUnknownErrorComponent()));
         }
 
-        if (attemptPicoLimboFallback(player, targetServer, serverName, attempts)) {
+        if (attemptAuthServerFallback(player, targetServer, serverName, attempts)) {
             return true;
         }
 
@@ -339,32 +345,32 @@ public class ConnectionManager {
         return false;
     }
 
-    private boolean attemptPicoLimboFallback(Player player, RegisteredServer targetServer, String serverName, int attempts) {
-        RegisteredServer picoLimbo = validateAndGetPicoLimboServer(player);
-        if (picoLimbo == null || isPlayerOnPicoLimbo(player)) {
+    private boolean attemptAuthServerFallback(Player player, RegisteredServer targetServer, String serverName, int attempts) {
+        RegisteredServer authServer = validateAndGetAuthServer(player);
+        if (authServer == null || isPlayerOnAuthServer(player)) {
             return false;
         }
 
         retryAttempts.put(player.getUniqueId(), attempts + 1);
         if (logger.isInfoEnabled()) {
-            logger.info("Attempting fallback for player {} (attempt {}/{}): send to PicoLimbo then retry backend {}",
+            logger.info("Attempting fallback for player {} (attempt {}/{}): send to auth server then retry backend {}",
                     player.getUsername(), attempts + 1, MAX_RETRY_ATTEMPTS, serverName);
         }
 
-        schedulePicoLimboFallback(player, picoLimbo, targetServer, serverName);
+        scheduleAuthServerFallback(player, authServer, targetServer, serverName);
         return true;
     }
 
-    private void schedulePicoLimboFallback(Player player, RegisteredServer picoLimbo,
+    private void scheduleAuthServerFallback(Player player, RegisteredServer authServer,
                                            RegisteredServer targetServer, String serverName) {
-        player.createConnectionRequest(picoLimbo)
+        player.createConnectionRequest(authServer)
                 .connect()
                 .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                 .whenComplete((limboResult, ex) ->
-                        handlePicoLimboFallbackResult(player, targetServer, serverName, limboResult, ex));
+                        handleAuthServerFallbackResult(player, targetServer, serverName, limboResult, ex));
     }
 
-    private void handlePicoLimboFallbackResult(Player player, RegisteredServer targetServer, String serverName,
+    private void handleAuthServerFallbackResult(Player player, RegisteredServer targetServer, String serverName,
                                                com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result limboResult, Throwable ex) {
         if (ex != null || limboResult == null || !limboResult.isSuccessful()) {
             logFallbackFailure(player, limboResult, ex);
@@ -384,7 +390,7 @@ public class ConnectionManager {
         } else {
             reason = limboResult.getReasonComponent().map(Component::toString).orElse("unknown");
         }
-        logger.warn("Fallback to PicoLimbo for {} failed: {}", player.getUsername(), reason);
+        logger.warn("Fallback to auth server for {} failed: {}", player.getUsername(), reason);
     }
 
     private void scheduleBackendRetryAfterLimbo(Player player, RegisteredServer targetServer, String serverName) {
@@ -400,7 +406,7 @@ public class ConnectionManager {
                     .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                     .join();
             if (!retry.isSuccessful()) {
-                logger.warn("Retry to connect {} to {} after PicoLimbo failed: {}",
+                logger.warn("Retry to connect {} to {} after auth server failed: {}",
                         player.getUsername(), serverName, retry.getReasonComponent().orElse(createUnknownErrorComponent()));
                 sendErrorMessage(player);
             }
@@ -514,7 +520,7 @@ public class ConnectionManager {
      * @return Optional z dostępny serwer backend
      */
     private Optional<RegisteredServer> findAvailableBackendServer() {
-        String picoLimboName = settings.getPicoLimboServerName();
+        String authServerName = settings.getAuthServerName();
         
         // Użyj Velocity try servers configuration
         var tryServers = plugin.getServer().getConfiguration().getAttemptConnectionOrder();
@@ -525,9 +531,9 @@ public class ConnectionManager {
         
         // Iteruj przez try servers w kolejności z konfiguracji Velocity
         for (String serverName : tryServers) {
-            // Skip PicoLimbo - it's an auth server, not a backend
-            if (serverName.equals(picoLimboName)) {
-                logger.debug("Pomijam PicoLimbo server: {}", serverName);
+            // Skip auth server - it's an auth server, not a backend
+            if (serverName.equals(authServerName)) {
+                logger.debug("Skipping auth server: {}", serverName);
             } else {
                 Optional<RegisteredServer> server = plugin.getServer().getServer(serverName);
                 if (server.isEmpty()) {
@@ -544,7 +550,7 @@ public class ConnectionManager {
         // Fallback: jeśli żaden try server nie jest dostępny, spróbuj dowolny inny
         logger.warn("Żaden serwer z try nie jest dostępny, próbuję fallback...");
         return plugin.getServer().getAllServers().stream()
-                .filter(server -> !server.getServerInfo().getName().equals(picoLimboName))
+                .filter(server -> !server.getServerInfo().getName().equals(authServerName))
                 .filter(server -> isServerAvailable(server, server.getServerInfo().getName()))
                 .findFirst();
     }
@@ -562,16 +568,22 @@ public class ConnectionManager {
     }
 
     /**
-     * Sprawdza czy gracz jest na serwerze PicoLimbo.
+     * Sprawdza czy gracz jest na serwerze auth (limbo).
      *
      * @param player Gracz do sprawdzenia
-     * @return true jeśli na PicoLimbo
+     * @return true jeśli na auth server
      */
-    public boolean isPlayerOnPicoLimbo(Player player) {
+    public boolean isPlayerOnAuthServer(Player player) {
         return player.getCurrentServer()
                 .map(serverConnection -> serverConnection.getServerInfo().getName())
-                .map(serverName -> serverName.equals(settings.getPicoLimboServerName()))
+                .map(serverName -> serverName.equals(settings.getAuthServerName()))
                 .orElse(false);
+    }
+
+    /** @deprecated Use {@link #isPlayerOnAuthServer(Player)} instead. */
+    @Deprecated(since = "1.1.0", forRemoval = true)
+    public boolean isPlayerOnPicoLimbo(Player player) {
+        return isPlayerOnAuthServer(player);
     }
 
     /**
@@ -588,8 +600,8 @@ public class ConnectionManager {
             // Clear timeout retry flag
             timeoutRetryScheduled.remove(player.getUniqueId());
 
-            // Transfer na PicoLimbo
-            transferToPicoLimbo(player);
+            // Transfer na auth server
+            transferToAuthServer(player);
 
             player.sendMessage(Component.text(
                     messages.get("auth.logged_out"),
@@ -608,7 +620,7 @@ public class ConnectionManager {
     }
 
     /**
-     * Automatycznie transferuje zweryfikowanego gracza z PicoLimbo na backend.
+     * Automatycznie transferuje zweryfikowanego gracza z auth server na backend.
      * Wywoływane przez AuthListener.onServerConnected gdy gracz jest już w cache autoryzacji.
      * Używa opóźnienia dla poprawnej synchronizacji ViaVersion/ViaFabric.
      * <p>
@@ -617,7 +629,7 @@ public class ConnectionManager {
      *
      * @param player Gracz do transferu
      */
-    public void autoTransferFromPicoLimboToBackend(Player player) {
+    public void autoTransferFromAuthServerToBackend(Player player) {
         UUID playerUuid = player.getUniqueId();
         String playerIp = getPlayerIp(player);
         CachedAuthUser cachedUser = authCache.getAuthorizedPlayer(playerUuid);
@@ -645,14 +657,14 @@ public class ConnectionManager {
                     // Usuń z pending przed wykonaniem
                     pendingTransfers.remove(playerUuid);
                     
-                    // Sprawdź czy gracz nadal jest aktywny i na PicoLimbo
+                    // Sprawdź czy gracz nadal jest aktywny i na auth server
                     if (!player.isActive()) {
                         logger.debug("Auto-transfer: gracz {} już nie jest aktywny", player.getUsername());
                         return;
                     }
                     
-                    if (!isPlayerOnPicoLimbo(player)) {
-                        logger.debug("Auto-transfer: gracz {} już nie jest na PicoLimbo", player.getUsername());
+                    if (!isPlayerOnAuthServer(player)) {
+                        logger.debug("Auto-transfer: gracz {} już nie jest na auth server", player.getUsername());
                         return;
                     }
                     
@@ -669,6 +681,12 @@ public class ConnectionManager {
                 .schedule();
         
         pendingTransfers.put(playerUuid, task);
+    }
+
+    /** @deprecated Use {@link #autoTransferFromAuthServerToBackend(Player)} instead. */
+    @Deprecated(since = "1.1.0", forRemoval = true)
+    public void autoTransferFromPicoLimboToBackend(Player player) {
+        autoTransferFromAuthServerToBackend(player);
     }
     
     /**
@@ -717,7 +735,7 @@ public class ConnectionManager {
 
     /**
      * Debuguje dostępne serwery.
-     * Wyświetla wszystkie zarejestrowane serwery i sprawdza konfigurację PicoLimbo.
+     * Wyświetla wszystkie zarejestrowane serwery i sprawdza konfigurację auth server.
      */
     public void debugServers() {
         if (logger.isDebugEnabled()) {
@@ -729,25 +747,23 @@ public class ConnectionManager {
                 logger.debug("  - {} ({})", name, address);
             });
             
-            logger.debug(messages.get("connection.picolimbo.server", settings.getPicoLimboServerName()));
+            logger.debug(messages.get("connection.picolimbo.server", settings.getAuthServerName()));
         }
 
-        // Sprawdź czy PicoLimbo serwer istnieje
-        Optional<RegisteredServer> picoLimbo = plugin.getServer()
-                .getServer(settings.getPicoLimboServerName());
+        // Sprawdź czy auth server istnieje
+        Optional<RegisteredServer> authServer = plugin.getServer()
+                .getServer(settings.getAuthServerName());
 
-        if (picoLimbo.isEmpty()) {
+        if (authServer.isEmpty()) {
             if (logger.isErrorEnabled()) {
                 logger.error(messages.get("connection.picolimbo.error"),
-                    settings.getPicoLimboServerName());
+                    settings.getAuthServerName());
             }
         } else {
-            // Zmieniono na DEBUG, aby uniknąć duplikowania informacji o PicoLimbo przy starcie
-            // Informacja o PicoLimbo jest już logowana w logStartupInfo w VeloAuth
             if (logger.isDebugEnabled()) {
                 logger.debug(messages.get("connection.picolimbo.found",
-                        settings.getPicoLimboServerName(),
-                        picoLimbo.get().getServerInfo().getAddress()));
+                        settings.getAuthServerName(),
+                        authServer.get().getServerInfo().getAddress()));
             }
         }
     }

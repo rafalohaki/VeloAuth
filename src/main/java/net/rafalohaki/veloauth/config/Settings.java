@@ -50,9 +50,9 @@ public class Settings {
     private int sessionTimeoutMinutes = 60;
     private int premiumTtlHours = 24;
     private double premiumRefreshThreshold = 0.8;
-    // PicoLimbo settings
-    private String picoLimboServerName = "limbo";
-    private int picoLimboTimeoutSeconds = 300;
+    // Auth server settings (limbo/lobby for unauthenticated players)
+    private String authServerName = "limbo";
+    private int authServerTimeoutSeconds = 300;
     // Connection settings
     private int connectionTimeoutSeconds = 20;
     // Security settings
@@ -107,7 +107,7 @@ public class Settings {
 
             loadDatabaseSettings(config);
             loadCacheSettings(config);
-            loadPicoLimboSettings(config);
+            loadAuthServerSettings(config);
             loadConnectionSettings(config);
             loadSecuritySettings(config);
             loadPremiumSettings(config);
@@ -194,10 +194,11 @@ public class Settings {
                   premium-ttl-hours: 24 # Premium status cache TTL in hours (default: 24)
                   premium-refresh-threshold: 0.8 # Background refresh threshold (0.0-1.0, default: 0.8)
                 
-                # PicoLimbo integration (fallback server for unauthenticated players)
-                picolimbo:
-                  server-name: limbo # Registered Velocity server name
-                  timeout-seconds: 300 # Kick timeout for PicoLimbo
+                # Auth server (limbo/lobby for unauthenticated players)
+                # Compatible with: NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo
+                auth-server:
+                  server-name: limbo # Must match server name in velocity.toml [servers]
+                  timeout-seconds: 300 # Seconds before unauthenticated player is kicked
                 
                 # Connection settings
                 connection:
@@ -426,14 +427,24 @@ public class Settings {
     }
 
     /**
-     * Ładuje ustawienia PicoLimbo.
+     * Ładuje ustawienia auth server (limbo).
+     * Obsługuje nowy klucz 'auth-server' z fallbackiem na legacy 'picolimbo'.
      */
     @SuppressWarnings("unchecked")
-    private void loadPicoLimboSettings(Map<String, Object> config) {
+    private void loadAuthServerSettings(Map<String, Object> config) {
+        // Nowy klucz
+        Map<String, Object> authServer = (Map<String, Object>) config.get("auth-server");
+        if (authServer != null) {
+            authServerName = getString(authServer, "server-name", authServerName);
+            authServerTimeoutSeconds = getInt(authServer, "timeout-seconds", authServerTimeoutSeconds);
+            return;
+        }
+        // Legacy fallback — backward compat
         Map<String, Object> picolimbo = (Map<String, Object>) config.get("picolimbo");
         if (picolimbo != null) {
-            picoLimboServerName = getString(picolimbo, "server-name", picoLimboServerName);
-            picoLimboTimeoutSeconds = getInt(picolimbo, "timeout-seconds", picoLimboTimeoutSeconds);
+            logger.warn("Config section 'picolimbo:' is deprecated — rename to 'auth-server:' in config.yml");
+            authServerName = getString(picolimbo, "server-name", authServerName);
+            authServerTimeoutSeconds = getInt(picolimbo, "timeout-seconds", authServerTimeoutSeconds);
         }
     }
 
@@ -539,7 +550,7 @@ public class Settings {
         validateCacheSettings();
         validateSecuritySettings();
         validateConnectionPoolSettings();
-        validatePicoLimboSettings();
+        validateAuthServerSettings();
         validateServerSettings();
         validateLanguageSettings();
         validatePremiumResolverSettings();
@@ -617,15 +628,15 @@ public class Settings {
         }
     }
 
-    private void validatePicoLimboSettings() {
-        if (picoLimboTimeoutSeconds <= 0) {
-            throw new IllegalArgumentException("PicoLimbo timeout musi być > 0");
+    private void validateAuthServerSettings() {
+        if (authServerTimeoutSeconds <= 0) {
+            throw new IllegalArgumentException("Auth server timeout must be > 0");
         }
     }
 
     private void validateServerSettings() {
         validateIpLimitSettings();
-        validatePicoLimboServerName();
+        validateAuthServerName();
         validatePremiumResolverSettings();
         
         logger.debug("Walidacja konfiguracji zakończona pomyślnie");
@@ -637,9 +648,9 @@ public class Settings {
         }
     }
     
-    private void validatePicoLimboServerName() {
-        if (picoLimboServerName == null || picoLimboServerName.trim().isEmpty()) {
-            throw new IllegalArgumentException("PicoLimbo server name nie może być pusty");
+    private void validateAuthServerName() {
+        if (authServerName == null || authServerName.trim().isEmpty()) {
+            throw new IllegalArgumentException("Auth server name cannot be empty");
         }
     }
     
@@ -857,12 +868,24 @@ public class Settings {
         return premiumRefreshThreshold;
     }
 
-    public String getPicoLimboServerName() {
-        return picoLimboServerName != null ? picoLimboServerName : "limbo";
+    public String getAuthServerName() {
+        return authServerName != null ? authServerName : "limbo";
     }
 
+    public int getAuthServerTimeoutSeconds() {
+        return authServerTimeoutSeconds;
+    }
+
+    /** @deprecated Use {@link #getAuthServerName()} instead. */
+    @Deprecated(since = "1.1.0", forRemoval = true)
+    public String getPicoLimboServerName() {
+        return getAuthServerName();
+    }
+
+    /** @deprecated Use {@link #getAuthServerTimeoutSeconds()} instead. */
+    @Deprecated(since = "1.1.0", forRemoval = true)
     public int getPicoLimboTimeoutSeconds() {
-        return picoLimboTimeoutSeconds;
+        return getAuthServerTimeoutSeconds();
     }
 
     public int getBcryptCost() {

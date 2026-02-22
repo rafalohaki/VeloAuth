@@ -4,14 +4,15 @@ import net.rafalohaki.veloauth.config.Settings;
 
 import java.nio.file.Path;
 
+@SuppressWarnings("PMD.TestClassWithoutTestCases") // Test helper/stub, not a test class
 class TestSettings extends Settings {
     private final boolean debug;
-    private final String pico;
+    private final String authServer;
 
-    TestSettings(Path dataDirectory, boolean debug, String pico) {
+    TestSettings(Path dataDirectory, boolean debug, String authServer) {
         super(dataDirectory);
         this.debug = debug;
-        this.pico = pico;
+        this.authServer = authServer;
     }
 
     @Override
@@ -20,7 +21,7 @@ class TestSettings extends Settings {
     }
 
     @Override
-    public String getPicoLimboServerName() {
-        return pico;
+    public String getAuthServerName() {
+        return authServer;
     }
 }

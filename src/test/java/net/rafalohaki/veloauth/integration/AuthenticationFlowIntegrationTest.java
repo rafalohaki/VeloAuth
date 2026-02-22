@@ -166,7 +166,7 @@ class AuthenticationFlowIntegrationTest {
      * Requirements: 4.1, 4.2
      */
     @Test
-    void testOfflinePlayerLoginFlow_shouldRedirectToPicoLimbo() {
+    void testOfflinePlayerLoginFlow_shouldRedirectToAuthServer() {
         // Setup offline player
         String username = "OfflinePlayer";
         UUID offlineUuid = UUID.randomUUID();
@@ -291,11 +291,11 @@ class AuthenticationFlowIntegrationTest {
     }
 
     /**
-     * Test: PicoLimbo routing for unauthorized players
+     * Test: Auth server routing for unauthorized players
      * Requirements: 4.2
      */
     @Test
-    void testPicoLimboRouting_unauthorizedPlayer_shouldTransferToPicoLimbo() {
+    void testAuthServerRouting_unauthorizedPlayer_shouldTransferToAuthServer() {
         // Setup unauthorized player
         String username = "UnauthorizedPlayer";
         UUID playerUuid = UUID.randomUUID();

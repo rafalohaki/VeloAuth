@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Test stub for DatabaseManager to avoid Mockito inline mocking issues on Java 21.
  * Provides controllable results for initialize() and findPlayerByNickname().
  */
+@SuppressWarnings("PMD.TestClassWithoutTestCases") // Test helper/stub, not a test class
 class TestDatabaseManager extends DatabaseManager {
 
     private final Map<String, CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>>> findResults = new ConcurrentHashMap<>();

@@ -259,10 +259,10 @@ class VeloAuthIntegrationTest {
         // Should access configuration without exceptions
         assertDoesNotThrow(() -> {
             boolean debugEnabled = settings.isDebugEnabled();
-            String picoLimboServer = settings.getPicoLimboServerName();
+            String authServerName = settings.getAuthServerName();
 
             assertTrue(debugEnabled, "Debug setting should be accessible");
-            assertEquals("auth", picoLimboServer, "PicoLimbo server should be configurable");
+            assertEquals("auth", authServerName, "Auth server should be configurable");
         });
     }
 }

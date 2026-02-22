@@ -13,7 +13,7 @@
 
 ## What is VeloAuth?
 
-VeloAuth is a comprehensive authentication system for Velocity proxy that handles all player authorization before they reach your backend servers. It works seamlessly with PicoLimbo to provide a smooth login experience while protecting nickname ownership through intelligent conflict resolution.
+VeloAuth is a comprehensive authentication system for Velocity proxy that handles all player authorization before they reach your backend servers. It works with any limbo server to provide a smooth login experience while protecting nickname ownership through intelligent conflict resolution.
 
 ## Key Features
 
@@ -33,7 +33,7 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 
 - **Java 21 or newer**
 - **Velocity proxy** (API 3.4.0+)
-- **PicoLimbo** or other limbo/lobby server
+- **Limbo server**: NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or any other
 - **Database**: MySQL, PostgreSQL, H2, or SQLite
 
 ## Quick Setup
@@ -48,11 +48,11 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 
 ### Velocity Config
 
-Configure your `velocity.toml` with PicoLimbo and backend servers:
+Configure your `velocity.toml` with your limbo/auth server and backend servers:
 
 ```toml
 [servers]
-limbo = "127.0.0.1:25566"  # PicoLimbo (auth server)
+limbo = "127.0.0.1:25566"  # Auth/limbo server (NanoLimbo, LOOHP/Limbo, etc.)
 lobby = "127.0.0.1:25565"  # Backend server
 survival = "127.0.0.1:25567" # Backend server nr2
 
@@ -92,7 +92,7 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 ### Authentication Flow
 1. **Player connects** to Velocity
 2. **VeloAuth checks** authorization cache
-3. If **not cached**, player is sent to **PicoLimbo**
+3. If **not cached**, player is sent to the **auth server** (limbo)
 4. **Nickname protection** activates during registration
 5. Player types **/login** or **/register**
 6. **VeloAuth verifies** credentials with BCrypt
