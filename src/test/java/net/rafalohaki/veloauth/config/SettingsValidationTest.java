@@ -59,7 +59,7 @@ class SettingsValidationTest {
         );
 
         assertTrue(
-            exception.getMessage().contains("co najmniej jedno źródło") ||
+            exception.getMessage().contains("at least one source") ||
             exception.getMessage().contains("at least one resolver"),
             "Error message should mention resolver requirement"
         );
@@ -127,7 +127,7 @@ class SettingsValidationTest {
 
         assertTrue(
             exception.getMessage().contains("timeout") ||
-            exception.getMessage().contains("musi być > 0"),
+            exception.getMessage().contains("must be > 0"),
             "Error message should mention timeout validation"
         );
     }
@@ -161,7 +161,7 @@ class SettingsValidationTest {
 
         assertTrue(
             exception.getMessage().contains("TTL") ||
-            exception.getMessage().contains("ujemne"),
+            exception.getMessage().contains("negative"),
             "Error message should mention TTL validation"
         );
     }
