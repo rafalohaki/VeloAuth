@@ -20,6 +20,8 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🔒 **Intelligent Nickname Protection** - Premium nicknames are reserved unless already registered by cracked players
 - ⚡ **Premium Auto-Login** - Mojang account owners skip authentication automatically  
 - 🛡️ **Secure Offline Auth** - BCrypt password hashing with brute-force protection
+- 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
+- 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are completely hidden from tab-completion once the player is logged in
 - 🚀 **High Performance** - Authorization cache with 24-hour premium status caching
 - 🔄 **Conflict Resolution** - Smart handling of premium/cracked nickname conflicts
 - 📊 **Admin Tools** - Complete conflict management with `/vauth conflicts`
@@ -53,13 +55,19 @@ Configure your `velocity.toml` with your limbo/auth server and backend servers:
 ```toml
 [servers]
 limbo = "127.0.0.1:25566"  # Auth/limbo server (NanoLimbo, LOOHP/Limbo, etc.)
-lobby = "127.0.0.1:25565"  # Backend server
-survival = "127.0.0.1:25567" # Backend server nr2
+lobby = "127.0.0.1:25565"  # Typical backend server
+survival = "127.0.0.1:25567" # Another backend server
 
-try = ["lobby", "survival"]  # Order matters for auth redirect, no limbo in order needed
+try = ["lobby", "survival"]  # Order matters. Do NOT put 'limbo' here.
+
+[forced-hosts]
+# VeloAuth fully respects Velocity's forced hosts! 
+# Players connecting via this IP will be sent to limbo to login, 
+# and then seamlessly transferred to 'survival' instead of 'lobby'.
+"survival.example.com" = ["survival"] 
 ```
 
-**Important:** The `try` configuration controls where authenticated players are redirected. VeloAuth automatically skips the `limbo` server and selects the first available backend server.
+**Important:** The `try` configuration controls where authenticated players are redirected by default. VeloAuth automatically skips the `limbo` server and selects the first available backend server, **unless** the player used a `forced-host` domain, in which case they are natively routed to their intended destination!
 
 ### Discord Webhooks
 
@@ -73,8 +81,8 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 
 | Command | Description | Restrictions |
 |---------|-------------|--------------|
-| `/register <password> <confirm>` | Create new account | Cannot use premium nicknames |
-| `/login <password>` | Login to your account | Works for premium/cracked players |
+| `/register <password> <confirm>` | Create new account | Hidden after login. No premium nicknames |
+| `/login <password>` | Login to your account | Hidden after login. Works for all players |
 | `/changepassword <old> <new>` | Change your password | Must be logged in |
 
 ## Admin Commands

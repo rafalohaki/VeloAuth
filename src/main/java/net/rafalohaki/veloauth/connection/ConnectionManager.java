@@ -48,6 +48,9 @@ public class ConnectionManager {
     
     /** Pending transfer tasks per player - allows cancellation on disconnect to prevent race conditions */
     private final Map<UUID, ScheduledTask> pendingTransfers = new ConcurrentHashMap<>();
+    
+    /** Forced host targets per player - preserves original intended server through auth flow */
+    private final Map<UUID, String> forcedHostTargets = new ConcurrentHashMap<>();
 
     private final VeloAuth plugin;
     private final AuthCache authCache;
@@ -215,8 +218,13 @@ public class ConnectionManager {
      */
     public boolean transferToBackend(Player player) {
         try {
-            // Znajdź dostępny serwer backend (nie auth server)
-            Optional<RegisteredServer> backendServer = findAvailableBackendServer();
+            // 1. Sprawdź forced host target (zapamiętany z pierwszego połączenia)
+            Optional<RegisteredServer> backendServer = resolveForcedHostTarget(player);
+
+            // 2. Fallback: znajdź dostępny serwer z try list
+            if (backendServer.isEmpty()) {
+                backendServer = findAvailableBackendServer();
+            }
 
             if (backendServer.isEmpty()) {
                 logger.error("No available backend servers!");
@@ -555,6 +563,61 @@ public class ConnectionManager {
                 .findFirst();
     }
 
+    /**
+     * Resolves a forced host target for the given player.
+     * If the player was redirected from a forced-host connection, this method
+     * retrieves and validates the originally intended server.
+     * The target is consumed (removed) on retrieval.
+     *
+     * @param player the player to resolve for
+     * @return Optional with the target server if available and online
+     */
+    private Optional<RegisteredServer> resolveForcedHostTarget(Player player) {
+        String targetName = forcedHostTargets.remove(player.getUniqueId());
+        if (targetName == null) {
+            return Optional.empty();
+        }
+
+        String authServerName = settings.getAuthServerName();
+        if (targetName.equals(authServerName)) {
+            logger.debug("Forced host target for {} is auth server '{}' - ignoring",
+                    player.getUsername(), targetName);
+            return Optional.empty();
+        }
+
+        Optional<RegisteredServer> server = plugin.getServer().getServer(targetName);
+        if (server.isEmpty()) {
+            logger.warn("Forced host target '{}' for {} is not registered - falling back to try list",
+                    targetName, player.getUsername());
+            return Optional.empty();
+        }
+
+        if (isServerAvailable(server.get(), targetName)) {
+            logger.debug("Forced host target '{}' for {} is available - using it",
+                    targetName, player.getUsername());
+            return server;
+        }
+
+        logger.warn("Forced host target '{}' for {} is offline - falling back to try list",
+                targetName, player.getUsername());
+        return Optional.empty();
+    }
+
+    /**
+     * Saves the intended server for a player before redirecting to auth server.
+     * Called from AuthListener when intercepting a first connection to preserve
+     * the Velocity forced-host or try-list target through the auth flow.
+     *
+     * @param playerUuid target player UUID
+     * @param serverName the name of the originally intended server
+     */
+    public void setForcedHostTarget(UUID playerUuid, String serverName) {
+        forcedHostTargets.put(playerUuid, serverName);
+        if (logger.isDebugEnabled()) {
+            logger.debug("Saved forced host target '{}' for player UUID: {}", serverName, playerUuid);
+        }
+    }
+
     private boolean isServerAvailable(RegisteredServer server, String serverName) {
         try {
             if (server.ping().orTimeout(2, TimeUnit.SECONDS).join() != null) {
@@ -714,6 +777,7 @@ public class ConnectionManager {
     public void clearRetryAttempts(UUID playerUuid) {
         retryAttempts.remove(playerUuid);
         timeoutRetryScheduled.remove(playerUuid);
+        forcedHostTargets.remove(playerUuid);
         cancelPendingTransfer(playerUuid);
     }
     
@@ -729,6 +793,7 @@ public class ConnectionManager {
         // Wyczyść wszystkie mapy stanu
         retryAttempts.clear();
         timeoutRetryScheduled.clear();
+        forcedHostTargets.clear();
         
         logger.info("ConnectionManager zamknięty");
     }

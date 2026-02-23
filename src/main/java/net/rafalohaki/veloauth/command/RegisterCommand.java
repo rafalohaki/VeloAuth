@@ -10,6 +10,9 @@ import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 /**
  * Handles the /register command.
  * Creates a new player account and delegates post-auth flow to {@link PostAuthFlow}.
+ * <p>
+ * This command is hidden from players who are already authenticated
+ * and not on the auth server (via {@link #hasPermission}).
  */
 class RegisterCommand implements SimpleCommand {
 
@@ -19,6 +22,21 @@ class RegisterCommand implements SimpleCommand {
 
     RegisterCommand(CommandContext ctx) {
         this.ctx = ctx;
+    }
+
+    /**
+     * Hides this command from players who are already authenticated.
+     * When a player is on a backend server (not auth server), the command
+     * will not appear in tab-completion and cannot be executed.
+     * Console always has access.
+     */
+    @Override
+    public boolean hasPermission(Invocation invocation) {
+        if (!(invocation.source() instanceof Player player)) {
+            return true; // Console always has access
+        }
+        // Only show/allow command when player is on auth server (needs to authenticate)
+        return ctx.plugin().getConnectionManager().isPlayerOnAuthServer(player);
     }
 
     @Override

@@ -455,7 +455,7 @@ public class AuthListener {
 
     private boolean handleFirstConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
         // ✅ PIERWSZE POŁĄCZENIE: Gracz nie ma jeszcze currentServer
-        // Velocity próbuje go wysłać na pierwszy serwer z try (np. 2b2t)
+        // Velocity próbuje go wysłać na serwer z forced-hosts lub try list
         // My MUSIMY przekierować na auth server dla ViaVersion compatibility
         if (player.getCurrentServer().isEmpty()) {
             String authServerName = settings.getAuthServerName();
@@ -466,10 +466,15 @@ public class AuthListener {
                 return true;
             }
             
+            // ✅ FORCED HOSTS: Zapamiętaj oryginalny target serwer przed przekierowaniem
+            // Velocity resolved forced-hosts PRZED tym eventem, więc targetServerName
+            // zawiera poprawny serwer z [forced-hosts] lub [servers.try]
+            connectionManager.setForcedHostTarget(player.getUniqueId(), targetServerName);
+            
             // Przekieruj na auth server zamiast backend
             Optional<RegisteredServer> authServer = plugin.getServer().getServer(authServerName);
             if (authServer.isPresent()) {
-                logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na auth server", 
+                logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na auth server (forced host target saved)", 
                         player.getUsername(), targetServerName);
                 event.setResult(ServerPreConnectEvent.ServerResult.allowed(authServer.get()));
             } else {
