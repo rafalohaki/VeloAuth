@@ -425,7 +425,7 @@ public class AuthListener {
      * - Po połączeniu z auth server, onServerConnected uruchomi auto-transfer
      */
     @Subscribe(priority = Short.MAX_VALUE)
-    public void onServerPreConnect(ServerPreConnectEvent event) {
+    public EventTask onServerPreConnect(ServerPreConnectEvent event) {
         try {
             Player player = event.getPlayer();
             // NAPRAWIONE: Używamy getOriginalServer() zamiast getTarget()
@@ -436,20 +436,21 @@ public class AuthListener {
                     player.getUsername(), targetServerName);
 
             if (handleFirstConnection(event, player, targetServerName)) {
-                return;
+                return null;
             }
 
             // ✅ JEŚLI TO AUTH SERVER - SPRAWDŹ DODATKOWO AUTORYZACJĘ
             if (handleAuthServerConnection(event, player, targetServerName)) {
-                return;
+                return null;
             }
 
             // ✅ JEŚLI TO BACKEND - SPRAWDŹ AUTORYZACJĘ + SESJĘ + CACHE
-            verifyBackendConnection(event, player, targetServerName);
+            return EventTask.resumeWhenComplete(verifyBackendConnectionAsync(event, player, targetServerName));
 
         } catch (Exception e) {
             logger.error("Błąd w ServerPreConnect", e);
             event.setResult(ServerPreConnectEvent.ServerResult.denied());
+            return null;
         }
     }
 
@@ -507,7 +508,7 @@ public class AuthListener {
         return false;
     }
 
-    private void verifyBackendConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
+    private CompletableFuture<Void> verifyBackendConnectionAsync(ServerPreConnectEvent event, Player player, String targetServerName) {
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
         boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
 
@@ -515,16 +516,22 @@ public class AuthListener {
         boolean hasActiveSession = authCache.hasActiveSession(player.getUniqueId(), player.getUsername(),
                 playerIp);
 
-        // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa - delegate to handler
-        boolean uuidMatches = uuidVerificationHandler.verifyPlayerUuid(player);
-
-        if (!isAuthorized || !hasActiveSession || !uuidMatches) {
-            handleUnauthorizedConnection(event, player, targetServerName, isAuthorized, hasActiveSession, uuidMatches, playerIp);
-        } else {
-            // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
-            logger.debug("\u2705 Autoryzowany gracz {} idzie na {} (sesja: OK, UUID: OK)",
-                    player.getUsername(), targetServerName);
-        }
+        // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa - delegate to handler (ASYNC)
+        return uuidVerificationHandler.verifyPlayerUuid(player)
+                .thenAccept(uuidMatches -> {
+                    if (!isAuthorized || !hasActiveSession || !uuidMatches) {
+                        handleUnauthorizedConnection(event, player, targetServerName, isAuthorized, hasActiveSession, uuidMatches, playerIp);
+                    } else {
+                        // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
+                        logger.debug("\u2705 Autoryzowany gracz {} idzie na {} (sesja: OK, UUID: OK)",
+                                player.getUsername(), targetServerName);
+                    }
+                })
+                .exceptionally(throwable -> {
+                    logger.error("Error during async backend connection verification for {}", player.getUsername(), throwable);
+                    event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                    return null;
+                });
     }
 
     private void handleUnauthorizedConnection(ServerPreConnectEvent event, Player player, String targetServerName,

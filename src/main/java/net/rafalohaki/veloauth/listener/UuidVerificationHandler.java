@@ -13,6 +13,7 @@ import org.slf4j.MarkerFactory;
 
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Handles UUID verification logic for player authentication.
@@ -53,16 +54,16 @@ public class UuidVerificationHandler {
      * Premium players skip verification as they don't need to be registered.
      *
      * @param player Player to verify
-     * @return true if verification passes
+     * @return CompletableFuture that completes with true if verification passes
      */
-    public boolean verifyPlayerUuid(Player player) {
+    public CompletableFuture<Boolean> verifyPlayerUuid(Player player) {
         try {
             if (player.isOnlineMode()) {
-                return handlePremiumPlayer(player);
+                return CompletableFuture.completedFuture(handlePremiumPlayer(player));
             }
-            return verifyCrackedPlayerUuid(player);
+            return verifyCrackedPlayerUuidAsync(player);
         } catch (Exception e) {
-            return handleVerificationError(player, e);
+            return CompletableFuture.completedFuture(handleVerificationError(player, e));
         }
     }
 
@@ -73,18 +74,23 @@ public class UuidVerificationHandler {
         return true;
     }
 
-    private boolean verifyCrackedPlayerUuid(Player player) {
-        try {
-            var dbResult = databaseManager.findPlayerByNickname(player.getUsername()).join();
+    private CompletableFuture<Boolean> verifyCrackedPlayerUuidAsync(Player player) {
+        return databaseManager.findPlayerByNickname(player.getUsername())
+                .thenApply(dbResult -> {
+                    if (dbResult.isDatabaseError()) {
+                        return handleDatabaseVerificationError(player, dbResult);
+                    }
 
-            if (dbResult.isDatabaseError()) {
-                return handleDatabaseVerificationError(player, dbResult);
-            }
-
-            return performUuidVerification(player, dbResult.getValue());
-        } catch (Exception e) {
-            return handleAsyncVerificationError(player, e);
-        }
+                    return performUuidVerification(player, dbResult.getValue());
+                })
+                .exceptionally(e -> {
+                    // Extract cause if it's a CompletionException
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    if (cause instanceof Exception ex) {
+                        return handleAsyncVerificationError(player, ex);
+                    }
+                    return handleAsyncVerificationError(player, new Exception(cause));
+                });
     }
 
     private boolean handleDatabaseVerificationError(Player player, DbResult<RegisteredPlayer> dbResult) {
