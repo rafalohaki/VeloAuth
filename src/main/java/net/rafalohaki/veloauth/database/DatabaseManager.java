@@ -56,7 +56,6 @@ public class DatabaseManager {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
 
     private static final String DATABASE_ERROR = "database.error";
-    private static final String WHERE_CLAUSE = " WHERE ";
 
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
     private static final Marker CACHE_MARKER = MarkerFactory.getMarker("CACHE");
@@ -697,16 +696,13 @@ public class DatabaseManager {
 
     public CompletableFuture<Integer> getTotalNonPremiumAccounts() {
         return CompletableFuture.supplyAsync(() -> {
-            if (!connected) {
+            if (!connected || playerDao == null) {
                 return 0;
             }
             try {
-                boolean postgres = DatabaseType.POSTGRESQL.getName().equalsIgnoreCase(config.getStorageType());
-                String auth = postgres ? "\"AUTH\"" : "AUTH";
-                String hash = postgres ? "\"HASH\"" : "HASH";
-                String sql = "SELECT COUNT(*) FROM " + auth + WHERE_CLAUSE + hash + " IS NOT NULL";
-
-                return executeCountQuery(sql);
+                return (int) playerDao.countOf(playerDao.queryBuilder().where()
+                        .isNotNull("HASH")
+                        .prepare());
             } catch (SQLException e) {
                 if (logger.isErrorEnabled()) {
                     logger.error(DB_MARKER, "Error counting non-premium accounts", e);
@@ -716,44 +712,41 @@ public class DatabaseManager {
         }, dbExecutor);
     }
 
-    @SuppressWarnings("java:S2077")
-    private int executeCountQuery(String sql) throws SQLException {
-        DatabaseConnection dbConnection = connectionSource.getReadWriteConnection(null);
-        try {
-            java.sql.Connection connection = dbConnection.getUnderlyingConnection();
-            try (java.sql.Statement stmt = connection.createStatement();
-                 java.sql.ResultSet rs = stmt.executeQuery(sql)) {
-                if (rs.next()) {
-                    return rs.getInt(1);
+
+    public CompletableFuture<Integer> getTotalRegisteredAccounts() {
+        return CompletableFuture.supplyAsync(() -> {
+            if (!connected || playerDao == null) {
+                return 0;
+            }
+            try {
+                return (int) playerDao.countOf();
+            } catch (SQLException e) {
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Error counting total registered accounts", e);
                 }
                 return 0;
             }
-        } finally {
-            connectionSource.releaseConnection(dbConnection);
-        }
-    }
-
-    public CompletableFuture<Integer> getTotalRegisteredAccounts() {
-        return getAllPlayers().thenApply(Collection::size)
-                .exceptionally(e -> {
-                    if (logger.isErrorEnabled()) {
-                        logger.error(DB_MARKER, "Error getting total registered accounts", e);
-                    }
-                    return 0;
-                });
+        }, dbExecutor);
     }
 
     public CompletableFuture<Integer> getTotalPremiumAccounts() {
-        return getAllPlayers().thenApply(players ->
-                (int) players.stream()
-                        .filter(player -> player.getPremiumUuid() != null || player.getHash() == null)
-                        .count()
-        ).exceptionally(e -> {
-            if (logger.isErrorEnabled()) {
-                logger.error(DB_MARKER, "Error getting total premium accounts", e);
+        return CompletableFuture.supplyAsync(() -> {
+            if (!connected || playerDao == null) {
+                return 0;
             }
-            return 0;
-        });
+            try {
+                return (int) playerDao.countOf(playerDao.queryBuilder().where()
+                        .isNotNull("PREMIUMUUID")
+                        .or()
+                        .isNull("HASH")
+                        .prepare());
+            } catch (SQLException e) {
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Error counting total premium accounts", e);
+                }
+                return 0;
+            }
+        }, dbExecutor);
     }
 
     // ===== Runtime Detection =====
