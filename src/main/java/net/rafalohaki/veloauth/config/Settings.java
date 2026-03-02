@@ -459,18 +459,6 @@ public class Settings {
         return authServerTimeoutSeconds;
     }
 
-    /** @deprecated Use {@link #getAuthServerName()} instead. */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public String getPicoLimboServerName() {
-        return getAuthServerName();
-    }
-
-    /** @deprecated Use {@link #getAuthServerTimeoutSeconds()} instead. */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public int getPicoLimboTimeoutSeconds() {
-        return getAuthServerTimeoutSeconds();
-    }
-
     public int getBcryptCost() {
         return bcryptCost;
     }
