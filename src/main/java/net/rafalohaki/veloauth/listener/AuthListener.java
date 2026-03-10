@@ -22,6 +22,7 @@ import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
+import org.geysermc.floodgate.api.FloodgateApi;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
@@ -35,7 +36,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Listener eventów autoryzacji VeloAuth.
  * Obsługuje połączenia graczy i kieruje ich na odpowiednie serwery.
- * 
+ *
  * <p><b>Flow eventów:</b>
  * <ol>
  *   <li>PreLoginEvent → sprawdź premium i force online mode</li>
@@ -44,14 +45,14 @@ import java.util.concurrent.CompletableFuture;
  *   <li>ServerPreConnectEvent → blokuj nieautoryzowane połączenia z backend</li>
  *   <li>ServerConnectedEvent → loguj transfery</li>
  * </ol>
- * 
+ *
  * <p><b>Initialization Safety (v2.0.0):</b>
  * Handlers (PreLoginHandler, PostLoginHandler) are now initialized before AuthListener
  * construction and passed via constructor, preventing NullPointerException during event
  * processing. Defense-in-depth null checks are included in event handlers as additional safety.
- * 
+ *
  * <p><b>Thread Safety:</b> All event handlers are thread-safe and can process concurrent events.
- * 
+ *
  * @since 1.0.0
  * @see PreLoginHandler
  * @see PostLoginHandler
@@ -68,7 +69,7 @@ public class AuthListener {
     private final Logger logger;
     private final Messages messages;
     private final DatabaseManager databaseManager;
-    
+
     // Handler instances for delegating complex logic
     private final PreLoginHandler preLoginHandler;
     private final PostLoginHandler postLoginHandler;
@@ -102,11 +103,11 @@ public class AuthListener {
         this.logger = plugin.getLogger();
         this.databaseManager = databaseManager;
         this.messages = messages;
-        this.connectionManager = java.util.Objects.requireNonNull(connectionManager, 
+        this.connectionManager = java.util.Objects.requireNonNull(connectionManager,
             "ConnectionManager cannot be null - initialization failed");
-        this.preLoginHandler = java.util.Objects.requireNonNull(preLoginHandler, 
+        this.preLoginHandler = java.util.Objects.requireNonNull(preLoginHandler,
             "PreLoginHandler cannot be null - initialization failed");
-        this.postLoginHandler = java.util.Objects.requireNonNull(postLoginHandler, 
+        this.postLoginHandler = java.util.Objects.requireNonNull(postLoginHandler,
             "PostLoginHandler cannot be null - initialization failed");
         this.uuidVerificationHandler = new UuidVerificationHandler(databaseManager, authCache, logger);
 
@@ -347,7 +348,7 @@ public class AuthListener {
             // ✅ SESJE TRWAŁE: Nie kończ sesji przy rozłączeniu
             // Sesje powinny być trwałe dla autoryzowanych graczy offline
             // Kończymy tylko przy /logout, timeout lub banie
-            
+
             // Cleanup retry attempts counter to prevent memory leak
             connectionManager.clearRetryAttempts(player.getUniqueId());
 
@@ -374,7 +375,7 @@ public class AuthListener {
 
         // DEFENSE-IN-DEPTH: Verify handlers are initialized
         if (postLoginHandler == null) {
-            logger.error("CRITICAL: PostLoginHandler is null during event processing for player {}", 
+            logger.error("CRITICAL: PostLoginHandler is null during event processing for player {}",
                 player.getUsername());
             String msg = messages != null ? messages.get("system.init_error") : "System initialization error.";
             player.disconnect(Component.text(msg, NamedTextColor.RED));
@@ -459,32 +460,114 @@ public class AuthListener {
         // My MUSIMY przekierować na auth server dla ViaVersion compatibility
         if (player.getCurrentServer().isEmpty()) {
             String authServerName = settings.getAuthServerName();
-            
+
             // Jeśli cel to już auth server - pozwól
             if (targetServerName.equals(authServerName)) {
                 logger.debug("Pierwsze połączenie {} -> auth server - pozwalam", player.getUsername());
                 return true;
             }
-            
+
+            // ✅ BEDROCK BYPASS via official Floodgate PlayerLink API
+            if (handleFloodgateBypass(player, targetServerName)) {
+                return true;
+            }
+
             // ✅ FORCED HOSTS: Zapamiętaj oryginalny target serwer przed przekierowaniem
-            // Velocity resolved forced-hosts PRZED tym eventem, więc targetServerName
-            // zawiera poprawny serwer z [forced-hosts] lub [servers.try]
             connectionManager.setForcedHostTarget(player.getUniqueId(), targetServerName);
-            
+
             // Przekieruj na auth server zamiast backend
             Optional<RegisteredServer> authServer = plugin.getServer().getServer(authServerName);
             if (authServer.isPresent()) {
-                logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na auth server (forced host target saved)", 
+                logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na auth server (forced host target saved)",
                         player.getUsername(), targetServerName);
                 event.setResult(ServerPreConnectEvent.ServerResult.allowed(authServer.get()));
             } else {
-                logger.error("Auth server '{}' not found! Player {} cannot connect.", 
+                logger.error("Auth server '{}' not found! Player {} cannot connect.",
                         authServerName, player.getUsername());
                 event.setResult(ServerPreConnectEvent.ServerResult.denied());
             }
             return true;
         }
         return false;
+    }
+
+    /**
+     * Handles Floodgate/Geyser bypass for Bedrock players.
+     *
+     * <p>Security model:
+     * <ul>
+     *   <li>Unlinked Bedrock: bypasses auth server — unique Floodgate UUID + "." prefix
+     *       make Java account impersonation impossible.</li>
+     *   <li>Linked Bedrock: bypasses only if their linked Java account is already
+     *       authorized in {@link AuthCache}. Otherwise falls through to auth server.</li>
+     * </ul>
+     *
+     * @return true if the player should bypass the auth server
+     */
+    private boolean handleFloodgateBypass(Player player, String targetServerName) {
+        FloodgateCheckResult result = checkFloodgatePlayer(player);
+        if (!result.isFloodgate()) {
+            return false;
+        }
+        if (!result.isLinked()) {
+            logger.info("[FLOODGATE] Unlinked Bedrock player {} → {} (bypassing auth server)",
+                    player.getUsername(), targetServerName);
+            return true;
+        }
+        UUID linkedJavaUuid = result.linkedJavaUuid();
+        String playerIp = PlayerAddressUtils.getPlayerIp(player);
+        if (linkedJavaUuid != null && authCache.isPlayerAuthorized(linkedJavaUuid, playerIp)) {
+            logger.info("[FLOODGATE] Linked Bedrock player {} (Java UUID: {}) already authorized → bypass",
+                    player.getUsername(), linkedJavaUuid);
+            return true;
+        }
+        logger.info("[FLOODGATE] Linked Bedrock player {} → auth server (Java UUID: {})",
+                player.getUsername(), linkedJavaUuid);
+        return false;
+    }
+
+    /**
+     * Holds the result of a Floodgate player check.
+     *
+     * @param isFloodgate    true if the player connected via Geyser/Floodgate
+     * @param isLinked       true if the Bedrock account is linked to a Java account via Floodgate PlayerLink
+     * @param linkedJavaUuid the UUID of the linked Java account, or null if not linked
+     */
+    private record FloodgateCheckResult(boolean isFloodgate, boolean isLinked, UUID linkedJavaUuid) {
+        static FloodgateCheckResult notFloodgate() {
+            return new FloodgateCheckResult(false, false, null);
+        }
+    }
+
+    /**
+     * Checks if the player is a Bedrock player via the official Floodgate API and whether
+     * they have a linked Java account via Floodgate's PlayerLink system.
+     *
+     * <p>Uses {@code FloodgateApi#getPlayer(UUID)} which is available even in pre-login events.
+     * Returns {@link FloodgateCheckResult#notFloodgate()} defensively if Floodgate is not
+     * installed, preventing {@link NoClassDefFoundError} since it is an optional dependency.
+     *
+     * @see <a href="https://geysermc.org/wiki/floodgate/api/">Floodgate API docs</a>
+     */
+    private FloodgateCheckResult checkFloodgatePlayer(Player player) {
+        try {
+            FloodgateApi api = FloodgateApi.getInstance();
+            if (!api.isFloodgatePlayer(player.getUniqueId())) {
+                return FloodgateCheckResult.notFloodgate();
+            }
+            org.geysermc.floodgate.api.player.FloodgatePlayer fp = api.getPlayer(player.getUniqueId());
+            if (fp == null) {
+                return new FloodgateCheckResult(true, false, null);
+            }
+            if (fp.isLinked()) {
+                org.geysermc.floodgate.util.LinkedPlayer linked = fp.getLinkedPlayer();
+                UUID linkedUuid = linked != null ? linked.getJavaUniqueId() : null;
+                return new FloodgateCheckResult(true, true, linkedUuid);
+            }
+            return new FloodgateCheckResult(true, false, null);
+        } catch (NoClassDefFoundError | Exception e) {
+            return FloodgateCheckResult.notFloodgate();
+        }
     }
 
     private boolean handleAuthServerConnection(ServerPreConnectEvent event, Player player, String targetServerName) {

@@ -7,5 +7,10 @@
     "Rafal"
   ],
   "main": "net.rafalohaki.veloauth.VeloAuth",
-  "dependencies": []
+  "dependencies": [
+    {
+      "id": "floodgate",
+      "optional": true
+    }
+  ]
 }
