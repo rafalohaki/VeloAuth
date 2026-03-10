@@ -469,8 +469,11 @@ public class AuthListener {
 
             // ✅ BEDROCK BYPASS: Floodgate players are pre-authenticated via Xbox Live.
             // Sending them to auth server (limbo) causes Geyser chunk translation errors.
-            if (isFloodgatePlayer(player)) {
-                logger.info("[FLOODGATE] Bedrock player {} → {} (skipping auth server)",
+            // SECURITY: Only bypass if the player is NOT registered in VeloAuth database.
+            // Registered Bedrock players must still authenticate via the auth server
+            // to prevent account takeover on offline-mode servers.
+            if (isFloodgatePlayer(player) && !isRegisteredInCache(player.getUsername())) {
+                logger.info("[FLOODGATE] Bedrock player {} → {} (unregistered, skipping auth server)",
                         player.getUsername(), targetServerName);
                 return true;
             }
@@ -507,6 +510,15 @@ public class AuthListener {
         } catch (NoClassDefFoundError | Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Checks if a username is already registered in VeloAuth via the premium cache.
+     * Uses the in-memory cache populated during PreLoginEvent — no blocking DB call needed.
+     * Registered Bedrock players must still go through the auth server for security.
+     */
+    private boolean isRegisteredInCache(String username) {
+        return authCache.getPremiumStatus(username) != null;
     }
 
     private boolean handleAuthServerConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
