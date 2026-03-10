@@ -467,36 +467,12 @@ public class AuthListener {
                 return true;
             }
 
-            // ✅ BEDROCK BYPASS: Floodgate players are pre-authenticated via Xbox Live.
-            // Sending them to auth server (limbo) causes Geyser chunk translation errors.
-            //
-            // SECURITY MODEL (official Floodgate PlayerLink API):
-            //   - Unlinked Bedrock: unique Floodgate UUID (from Xbox XUID) + "." username prefix
-            //     make impersonation of any Java account impossible → safe to bypass.
-            //   - Linked Bedrock: Java account is the authoritative identity. Bypass only if
-            //     that Java account is already authorized in AuthCache. Otherwise → auth server.
-            FloodgateCheckResult floodgateResult = checkFloodgatePlayer(player);
-            if (floodgateResult.isFloodgate()) {
-                if (!floodgateResult.isLinked()) {
-                    logger.info("[FLOODGATE] Unlinked Bedrock player {} → {} (bypassing auth server)",
-                            player.getUsername(), targetServerName);
-                    return true;
-                } else {
-                    UUID linkedJavaUuid = floodgateResult.linkedJavaUuid();
-                    String playerIp = PlayerAddressUtils.getPlayerIp(player);
-                    if (linkedJavaUuid != null && authCache.isPlayerAuthorized(linkedJavaUuid, playerIp)) {
-                        logger.info("[FLOODGATE] Linked Bedrock player {} (Java UUID: {}) already authorized → bypass",
-                                player.getUsername(), linkedJavaUuid);
-                        return true;
-                    }
-                    logger.info("[FLOODGATE] Linked Bedrock player {} → auth server (Java UUID: {})",
-                            player.getUsername(), linkedJavaUuid);
-                }
+            // ✅ BEDROCK BYPASS via official Floodgate PlayerLink API
+            if (handleFloodgateBypass(player, targetServerName)) {
+                return true;
             }
 
             // ✅ FORCED HOSTS: Zapamiętaj oryginalny target serwer przed przekierowaniem
-            // Velocity resolved forced-hosts PRZED tym eventem, więc targetServerName
-            // zawiera poprawny serwer z [forced-hosts] lub [servers.try]
             connectionManager.setForcedHostTarget(player.getUniqueId(), targetServerName);
 
             // Przekieruj na auth server zamiast backend
@@ -512,6 +488,41 @@ public class AuthListener {
             }
             return true;
         }
+        return false;
+    }
+
+    /**
+     * Handles Floodgate/Geyser bypass for Bedrock players.
+     *
+     * <p>Security model:
+     * <ul>
+     *   <li>Unlinked Bedrock: bypasses auth server — unique Floodgate UUID + "." prefix
+     *       make Java account impersonation impossible.</li>
+     *   <li>Linked Bedrock: bypasses only if their linked Java account is already
+     *       authorized in {@link AuthCache}. Otherwise falls through to auth server.</li>
+     * </ul>
+     *
+     * @return true if the player should bypass the auth server
+     */
+    private boolean handleFloodgateBypass(Player player, String targetServerName) {
+        FloodgateCheckResult result = checkFloodgatePlayer(player);
+        if (!result.isFloodgate()) {
+            return false;
+        }
+        if (!result.isLinked()) {
+            logger.info("[FLOODGATE] Unlinked Bedrock player {} → {} (bypassing auth server)",
+                    player.getUsername(), targetServerName);
+            return true;
+        }
+        UUID linkedJavaUuid = result.linkedJavaUuid();
+        String playerIp = PlayerAddressUtils.getPlayerIp(player);
+        if (linkedJavaUuid != null && authCache.isPlayerAuthorized(linkedJavaUuid, playerIp)) {
+            logger.info("[FLOODGATE] Linked Bedrock player {} (Java UUID: {}) already authorized → bypass",
+                    player.getUsername(), linkedJavaUuid);
+            return true;
+        }
+        logger.info("[FLOODGATE] Linked Bedrock player {} → auth server (Java UUID: {})",
+                player.getUsername(), linkedJavaUuid);
         return false;
     }
 
