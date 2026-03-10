@@ -12,9 +12,9 @@
     <name>VeloAuth</name>
     <description>Complete Velocity Authentication Plugin with BCrypt, Virtual Threads and multi-database support
     </description>
-    
+
     <url>https://github.com/rafalohaki/VeloAuth</url>
-    
+
     <licenses>
         <license>
             <name>MIT License</name>
@@ -22,7 +22,7 @@
             <distribution>repo</distribution>
         </license>
     </licenses>
-    
+
     <developers>
         <developer>
             <name>rafalohaki</name>
@@ -44,6 +44,10 @@
             <id>papermc-repo</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
+        <repository>
+            <id>opencollab-snapshots</id>
+            <url>https://repo.opencollab.dev/main/</url>
+        </repository>
     </repositories>
 
     <dependencies>
@@ -52,6 +56,14 @@
             <groupId>com.velocitypowered</groupId>
             <artifactId>velocity-api</artifactId>
             <version>3.4.0-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Floodgate API (Bedrock player detection) -->
+        <dependency>
+            <groupId>org.geysermc.floodgate</groupId>
+            <artifactId>api</artifactId>
+            <version>2.2.2-SNAPSHOT</version>
             <scope>provided</scope>
         </dependency>
 
@@ -306,7 +318,7 @@
                     <linkXRef>false</linkXRef>
                     <includeTests>true</includeTests>
                     <failOnViolation>false</failOnViolation>
-                    
+
                     <!-- CPD (Copy-Paste Detector) configuration -->
                     <minimumTokens>50</minimumTokens> <!-- Minimum size for duplicate detection (50 tokens = ~5-10 lines) -->
                     <skipEmptyReport>false</skipEmptyReport>
