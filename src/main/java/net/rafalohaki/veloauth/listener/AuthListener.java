@@ -469,13 +469,29 @@ public class AuthListener {
 
             // ✅ BEDROCK BYPASS: Floodgate players are pre-authenticated via Xbox Live.
             // Sending them to auth server (limbo) causes Geyser chunk translation errors.
-            // SECURITY: Only bypass if the player is NOT registered in VeloAuth database.
-            // Registered Bedrock players must still authenticate via the auth server
-            // to prevent account takeover on offline-mode servers.
-            if (isFloodgatePlayer(player) && !isRegisteredInCache(player.getUsername())) {
-                logger.info("[FLOODGATE] Bedrock player {} → {} (unregistered, skipping auth server)",
-                        player.getUsername(), targetServerName);
-                return true;
+            //
+            // SECURITY MODEL (official Floodgate PlayerLink API):
+            //   - Unlinked Bedrock: unique Floodgate UUID (from Xbox XUID) + "." username prefix
+            //     make impersonation of any Java account impossible → safe to bypass.
+            //   - Linked Bedrock: Java account is the authoritative identity. Bypass only if
+            //     that Java account is already authorized in AuthCache. Otherwise → auth server.
+            FloodgateCheckResult floodgateResult = checkFloodgatePlayer(player);
+            if (floodgateResult.isFloodgate()) {
+                if (!floodgateResult.isLinked()) {
+                    logger.info("[FLOODGATE] Unlinked Bedrock player {} → {} (bypassing auth server)",
+                            player.getUsername(), targetServerName);
+                    return true;
+                } else {
+                    UUID linkedJavaUuid = floodgateResult.linkedJavaUuid();
+                    String playerIp = PlayerAddressUtils.getPlayerIp(player);
+                    if (linkedJavaUuid != null && authCache.isPlayerAuthorized(linkedJavaUuid, playerIp)) {
+                        logger.info("[FLOODGATE] Linked Bedrock player {} (Java UUID: {}) already authorized → bypass",
+                                player.getUsername(), linkedJavaUuid);
+                        return true;
+                    }
+                    logger.info("[FLOODGATE] Linked Bedrock player {} → auth server (Java UUID: {})",
+                            player.getUsername(), linkedJavaUuid);
+                }
             }
 
             // ✅ FORCED HOSTS: Zapamiętaj oryginalny target serwer przed przekierowaniem
@@ -500,25 +516,47 @@ public class AuthListener {
     }
 
     /**
-     * Safely checks if a player is a Bedrock player via Floodgate.
-     * Returns false if Floodgate is not installed, avoiding NoClassDefFoundError
-     * since Floodgate is a provided (optional) dependency.
+     * Holds the result of a Floodgate player check.
+     *
+     * @param isFloodgate    true if the player connected via Geyser/Floodgate
+     * @param isLinked       true if the Bedrock account is linked to a Java account via Floodgate PlayerLink
+     * @param linkedJavaUuid the UUID of the linked Java account, or null if not linked
      */
-    private boolean isFloodgatePlayer(Player player) {
-        try {
-            return FloodgateApi.getInstance().isFloodgatePlayer(player.getUniqueId());
-        } catch (NoClassDefFoundError | Exception e) {
-            return false;
+    private record FloodgateCheckResult(boolean isFloodgate, boolean isLinked, UUID linkedJavaUuid) {
+        static FloodgateCheckResult notFloodgate() {
+            return new FloodgateCheckResult(false, false, null);
         }
     }
 
     /**
-     * Checks if a username is already registered in VeloAuth via the premium cache.
-     * Uses the in-memory cache populated during PreLoginEvent — no blocking DB call needed.
-     * Registered Bedrock players must still go through the auth server for security.
+     * Checks if the player is a Bedrock player via the official Floodgate API and whether
+     * they have a linked Java account via Floodgate's PlayerLink system.
+     *
+     * <p>Uses {@code FloodgateApi#getPlayer(UUID)} which is available even in pre-login events.
+     * Returns {@link FloodgateCheckResult#notFloodgate()} defensively if Floodgate is not
+     * installed, preventing {@link NoClassDefFoundError} since it is an optional dependency.
+     *
+     * @see <a href="https://geysermc.org/wiki/floodgate/api/">Floodgate API docs</a>
      */
-    private boolean isRegisteredInCache(String username) {
-        return authCache.getPremiumStatus(username) != null;
+    private FloodgateCheckResult checkFloodgatePlayer(Player player) {
+        try {
+            FloodgateApi api = FloodgateApi.getInstance();
+            if (!api.isFloodgatePlayer(player.getUniqueId())) {
+                return FloodgateCheckResult.notFloodgate();
+            }
+            org.geysermc.floodgate.api.player.FloodgatePlayer fp = api.getPlayer(player.getUniqueId());
+            if (fp == null) {
+                return new FloodgateCheckResult(true, false, null);
+            }
+            if (fp.isLinked()) {
+                org.geysermc.floodgate.util.LinkedPlayer linked = fp.getLinkedPlayer();
+                UUID linkedUuid = linked != null ? linked.getJavaUniqueId() : null;
+                return new FloodgateCheckResult(true, true, linkedUuid);
+            }
+            return new FloodgateCheckResult(true, false, null);
+        } catch (NoClassDefFoundError | Exception e) {
+            return FloodgateCheckResult.notFloodgate();
+        }
     }
 
     private boolean handleAuthServerConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
