@@ -529,7 +529,6 @@ public class VeloAuth {
             
             String dbType = settings.getDatabaseStorageType();
             String language = settings.getLanguage();
-            // boolean bStats = true; // bStats jest zawsze inicjalizowane
             
             logger.info("Initialized in {} ms ({} database, {} language, bStats enabled)", 
                     initializationDuration, dbType, language);

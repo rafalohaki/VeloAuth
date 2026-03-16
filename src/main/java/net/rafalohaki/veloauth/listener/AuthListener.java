@@ -21,6 +21,7 @@ import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.i18n.Messages;
+import net.rafalohaki.veloauth.util.FloodgateDetector;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
@@ -423,9 +424,12 @@ public class AuthListener {
      * - Velocity próbuje połączyć z pierwszym serwerem z listy try (np. 2b2t)
      * - My przechwytujemy i przekierowujemy na auth server
      * - Po połączeniu z auth server, onServerConnected uruchomi auto-transfer
+     * <p>
+     * ASYNC: Returns EventTask for backend connection verification to avoid blocking
+     * Netty IO threads during database UUID lookup.
      */
     @Subscribe(priority = Short.MAX_VALUE)
-    public void onServerPreConnect(ServerPreConnectEvent event) {
+    public EventTask onServerPreConnect(ServerPreConnectEvent event) {
         try {
             Player player = event.getPlayer();
             // NAPRAWIONE: Używamy getOriginalServer() zamiast getTarget()
@@ -436,20 +440,21 @@ public class AuthListener {
                     player.getUsername(), targetServerName);
 
             if (handleFirstConnection(event, player, targetServerName)) {
-                return;
+                return null;
             }
 
             // ✅ JEŚLI TO AUTH SERVER - SPRAWDŹ DODATKOWO AUTORYZACJĘ
             if (handleAuthServerConnection(event, player, targetServerName)) {
-                return;
+                return null;
             }
 
-            // ✅ JEŚLI TO BACKEND - SPRAWDŹ AUTORYZACJĘ + SESJĘ + CACHE
-            verifyBackendConnection(event, player, targetServerName);
+            // ✅ JEŚLI TO BACKEND - SPRAWDŹ AUTORYZACJĘ + SESJĘ + CACHE (async)
+            return EventTask.resumeWhenComplete(verifyBackendConnectionAsync(event, player, targetServerName));
 
         } catch (Exception e) {
             logger.error("Błąd w ServerPreConnect", e);
             event.setResult(ServerPreConnectEvent.ServerResult.denied());
+            return null;
         }
     }
 
@@ -463,6 +468,16 @@ public class AuthListener {
             // Jeśli cel to już auth server - pozwól
             if (targetServerName.equals(authServerName)) {
                 logger.debug("Pierwsze połączenie {} -> auth server - pozwalam", player.getUsername());
+                return true;
+            }
+
+            // ✅ BEDROCK/FLOODGATE: Skip auth server for Bedrock players.
+            // Floodgate already authenticated the player via Xbox Live during the handshake
+            // phase, before this event fires. Redirecting to limbo causes
+            // ClientboundLevelChunkWithLightPacket translation failures in Geyser.
+            if (FloodgateDetector.isBedrockPlayer(player.getUniqueId())) {
+                logger.info("[FLOODGATE] Bedrock player {} → {} (skipping auth server)",
+                        player.getUsername(), targetServerName);
                 return true;
             }
             
@@ -507,7 +522,7 @@ public class AuthListener {
         return false;
     }
 
-    private void verifyBackendConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
+    private CompletableFuture<Void> verifyBackendConnectionAsync(ServerPreConnectEvent event, Player player, String targetServerName) {
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
         boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
 
@@ -515,16 +530,17 @@ public class AuthListener {
         boolean hasActiveSession = authCache.hasActiveSession(player.getUniqueId(), player.getUsername(),
                 playerIp);
 
-        // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa - delegate to handler
-        boolean uuidMatches = uuidVerificationHandler.verifyPlayerUuid(player);
-
-        if (!isAuthorized || !hasActiveSession || !uuidMatches) {
-            handleUnauthorizedConnection(event, player, targetServerName, isAuthorized, hasActiveSession, uuidMatches, playerIp);
-        } else {
-            // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
-            logger.debug("\u2705 Autoryzowany gracz {} idzie na {} (sesja: OK, UUID: OK)",
-                    player.getUsername(), targetServerName);
-        }
+        // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa - async, no IO thread blocking
+        return uuidVerificationHandler.verifyPlayerUuid(player)
+                .thenAccept(uuidMatches -> {
+                    if (!isAuthorized || !hasActiveSession || !uuidMatches) {
+                        handleUnauthorizedConnection(event, player, targetServerName, isAuthorized, hasActiveSession, uuidMatches, playerIp);
+                    } else {
+                        // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
+                        logger.debug("\u2705 Autoryzowany gracz {} idzie na {} (sesja: OK, UUID: OK)",
+                                player.getUsername(), targetServerName);
+                    }
+                });
     }
 
     private void handleUnauthorizedConnection(ServerPreConnectEvent event, Player player, String targetServerName,

@@ -349,7 +349,10 @@ public class ConnectionManager {
             return true;
         }
 
-        sendErrorMessage(player);
+        String reason = result.getReasonComponent()
+                .map(net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()::serialize)
+                .orElse(messages.get("error.unknown"));
+        sendErrorMessage(player, reason);
         return false;
     }
 
@@ -443,7 +446,11 @@ public class ConnectionManager {
     }
 
     private void sendErrorMessage(Player player) {
-        player.sendMessage(Component.text(messages.get(CONNECTION_ERROR_GAME_SERVER), NamedTextColor.RED));
+        sendErrorMessage(player, messages.get("error.unknown"));
+    }
+
+    private void sendErrorMessage(Player player, String reason) {
+        player.sendMessage(Component.text(messages.get(CONNECTION_ERROR_GAME_SERVER, reason), NamedTextColor.RED));
     }
 
     /**
