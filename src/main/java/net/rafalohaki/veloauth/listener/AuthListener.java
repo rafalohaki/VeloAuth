@@ -417,16 +417,19 @@ public class AuthListener {
      * Obsługuje event przed połączeniem z serwerem.
      * Blokuje nieautoryzowane połączenia z serwerami backend.
      * <p>
-     * KRYTYCZNE: Używamy async = false + maksymalny priorytet dla bezpieczeństwa
-     * Zapobiega obejściu autoryzacji przez race conditions
+     * KRYTYCZNE: Używamy maksymalny priorytet dla bezpieczeństwa.
+     * Zapobiega obejściu autoryzacji przez race conditions.
      * <p>
      * FLOW dla nowych graczy (pierwszego połączenia):
      * - Velocity próbuje połączyć z pierwszym serwerem z listy try (np. 2b2t)
      * - My przechwytujemy i przekierowujemy na auth server
      * - Po połączeniu z auth server, onServerConnected uruchomi auto-transfer
      * <p>
-     * ASYNC: Returns EventTask for backend connection verification to avoid blocking
-     * Netty IO threads during database UUID lookup.
+     * ASYNC: Returns {@link EventTask} (or null for synchronous fast-paths) to avoid
+     * blocking Netty IO threads. Backend connection verification performs a database
+     * UUID lookup and is therefore executed asynchronously via
+     * {@link EventTask#resumeWhenComplete(java.util.concurrent.CompletableFuture)}.
+     * Velocity suspends event processing until the returned future completes.
      */
     @Subscribe(priority = Short.MAX_VALUE)
     public EventTask onServerPreConnect(ServerPreConnectEvent event) {

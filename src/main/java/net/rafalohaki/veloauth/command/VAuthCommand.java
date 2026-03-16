@@ -59,6 +59,8 @@ class VAuthCommand implements SimpleCommand {
     }
 
     private void handleConflictsCommand(CommandSource source) {
+        // Run on a scheduler thread to avoid blocking the caller (Velocity command) thread
+        // during the database query. sendMessage() is thread-safe in Velocity.
         ctx.plugin().getServer().getScheduler().buildTask(ctx.plugin(), () -> {
             source.sendMessage(ValidationUtils.createWarningComponent(ctx.messages().get("admin.conflicts.header")));
             var conflicts = ctx.databaseManager().findPlayersInConflictMode().join();
@@ -121,6 +123,8 @@ class VAuthCommand implements SimpleCommand {
     }
 
     private void handleStatsCommand(CommandSource source) {
+        // Run on a scheduler thread to avoid blocking the caller (Velocity command) thread
+        // during parallel database queries. sendMessage() is thread-safe in Velocity.
         ctx.plugin().getServer().getScheduler().buildTask(ctx.plugin(), () -> {
             var totalF = ctx.databaseManager().getTotalRegisteredAccounts();
             var premiumF = ctx.databaseManager().getTotalPremiumAccounts();
