@@ -38,6 +38,7 @@ public class ConnectionManager {
 
     /** Timeout for server connection attempts - configurable via Settings */
     private static final String CONNECTION_ERROR_GAME_SERVER = "connection.error.game_server";
+    private static final String MSG_ERROR_UNKNOWN = "error.unknown";
     private static final int MAX_RETRY_ATTEMPTS = 3;
     
     /** Retry attempt counter per player to prevent infinite fallback loops */
@@ -351,7 +352,7 @@ public class ConnectionManager {
 
         String reason = result.getReasonComponent()
                 .map(net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()::serialize)
-                .orElse(messages.get("error.unknown"));
+                .orElse(messages.get(MSG_ERROR_UNKNOWN));
         sendErrorMessage(player, reason);
         return false;
     }
@@ -446,7 +447,7 @@ public class ConnectionManager {
     }
 
     private void sendErrorMessage(Player player) {
-        sendErrorMessage(player, messages.get("error.unknown"));
+        sendErrorMessage(player, messages.get(MSG_ERROR_UNKNOWN));
     }
 
     private void sendErrorMessage(Player player, String reason) {
@@ -859,6 +860,6 @@ public class ConnectionManager {
     }
 
     private Component createUnknownErrorComponent() {
-        return Component.text(messages.get("error.unknown"), NamedTextColor.RED);
+        return Component.text(messages.get(MSG_ERROR_UNKNOWN), NamedTextColor.RED);
     }
 }
