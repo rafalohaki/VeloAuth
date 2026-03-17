@@ -7,7 +7,6 @@ import com.j256.ormlite.jdbc.JdbcConnectionSource;
 import com.j256.ormlite.support.ConnectionSource;
 import com.j256.ormlite.support.DatabaseConnection;
 import net.rafalohaki.veloauth.i18n.Messages;
-import net.rafalohaki.veloauth.model.PremiumUuid;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +62,7 @@ public class DatabaseManager {
 
     private static final String DATABASE_NOT_CONNECTED = "Database not connected";
     private static final String DATABASE_NOT_CONNECTED_PREMIUM_CHECK = "Database not connected - cannot check premium status for {}";
+    private static final String EXECUTOR_SHUTTING_DOWN = ": Executor is shutting down";
 
     private final ConcurrentHashMap<String, RegisteredPlayer> playerCache;
     private final ReentrantLock databaseLock;
@@ -286,7 +286,7 @@ public class DatabaseManager {
         }
         if (dbExecutor.isShutdown()) {
             return CompletableFuture.completedFuture(
-                    DbResult.databaseError(messages.get(DATABASE_ERROR) + ": Executor is shutting down"));
+                    DbResult.databaseError(messages.get(DATABASE_ERROR) + EXECUTOR_SHUTTING_DOWN));
         }
 
         String normalizedNickname = nickname.toLowerCase();
@@ -348,7 +348,7 @@ public class DatabaseManager {
         }
 
         if (dbExecutor.isShutdown()) {
-            return CompletableFuture.completedFuture(DbResult.databaseError(messages.get(DATABASE_ERROR) + ": Executor is shutting down"));
+            return CompletableFuture.completedFuture(DbResult.databaseError(messages.get(DATABASE_ERROR) + EXECUTOR_SHUTTING_DOWN));
         }
 
         String normalizedNickname = nickname.toLowerCase();
@@ -452,7 +452,7 @@ public class DatabaseManager {
         }
 
         if (dbExecutor.isShutdown()) {
-            return CompletableFuture.completedFuture(DbResult.databaseError(messages.get(DATABASE_ERROR) + ": Executor is shutting down"));
+            return CompletableFuture.completedFuture(DbResult.databaseError(messages.get(DATABASE_ERROR) + EXECUTOR_SHUTTING_DOWN));
         }
 
         return CompletableFuture.supplyAsync(() -> {

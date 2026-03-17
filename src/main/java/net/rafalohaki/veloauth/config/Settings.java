@@ -36,6 +36,7 @@ public class Settings {
     private final PremiumSettings premiumSettings = new PremiumSettings();
     private final AlertSettings alertSettings = new AlertSettings();
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
+    private static final String CONFIG_KEY_TIMEOUT_SECONDS = "timeout-seconds";
     
     // Database settings
     private String databaseStorageType = DatabaseType.H2.getName();
@@ -194,7 +195,7 @@ public class Settings {
         Map<String, Object> authServer = (Map<String, Object>) config.get("auth-server");
         if (authServer != null) {
             authServerName = YamlParserUtils.getString(authServer, "server-name", authServerName);
-            authServerTimeoutSeconds = YamlParserUtils.getInt(authServer, "timeout-seconds", authServerTimeoutSeconds);
+            authServerTimeoutSeconds = YamlParserUtils.getInt(authServer, CONFIG_KEY_TIMEOUT_SECONDS, authServerTimeoutSeconds);
             return;
         }
         @SuppressWarnings("unchecked")
@@ -202,7 +203,7 @@ public class Settings {
         if (picolimbo != null) {
             logger.warn("Config section 'picolimbo:' is deprecated — rename to 'auth-server:' in config.yml");
             authServerName = YamlParserUtils.getString(picolimbo, "server-name", authServerName);
-            authServerTimeoutSeconds = YamlParserUtils.getInt(picolimbo, "timeout-seconds", authServerTimeoutSeconds);
+            authServerTimeoutSeconds = YamlParserUtils.getInt(picolimbo, CONFIG_KEY_TIMEOUT_SECONDS, authServerTimeoutSeconds);
         }
     }
 
@@ -210,7 +211,7 @@ public class Settings {
     private void loadConnectionSettings(Map<String, Object> config) {
         Map<String, Object> connection = (Map<String, Object>) config.get("connection");
         if (connection != null) {
-            connectionTimeoutSeconds = YamlParserUtils.getInt(connection, "timeout-seconds", connectionTimeoutSeconds);
+            connectionTimeoutSeconds = YamlParserUtils.getInt(connection, CONFIG_KEY_TIMEOUT_SECONDS, connectionTimeoutSeconds);
         }
     }
 
@@ -457,18 +458,6 @@ public class Settings {
 
     public int getAuthServerTimeoutSeconds() {
         return authServerTimeoutSeconds;
-    }
-
-    /** @deprecated Use {@link #getAuthServerName()} instead. */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public String getPicoLimboServerName() {
-        return getAuthServerName();
-    }
-
-    /** @deprecated Use {@link #getAuthServerTimeoutSeconds()} instead. */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public int getPicoLimboTimeoutSeconds() {
-        return getAuthServerTimeoutSeconds();
     }
 
     public int getBcryptCost() {

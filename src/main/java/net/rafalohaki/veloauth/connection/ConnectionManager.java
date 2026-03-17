@@ -104,12 +104,6 @@ public class ConnectionManager {
         }
     }
 
-    /** @deprecated Use {@link #transferToAuthServer(Player)} instead. */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public boolean transferToPicoLimbo(Player player) {
-        return transferToAuthServer(player);
-    }
-    
     private RegisteredServer validateAndGetAuthServer(Player player) {
         Optional<RegisteredServer> authServer = plugin.getServer()
                 .getServer(settings.getAuthServerName());
@@ -643,12 +637,6 @@ public class ConnectionManager {
                 .orElse(false);
     }
 
-    /** @deprecated Use {@link #isPlayerOnAuthServer(Player)} instead. */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public boolean isPlayerOnPicoLimbo(Player player) {
-        return isPlayerOnAuthServer(player);
-    }
-
     /**
      * Wymusza ponowną autoryzację gracza.
      * Can be used for /logout command implementation.
@@ -746,12 +734,6 @@ public class ConnectionManager {
         pendingTransfers.put(playerUuid, task);
     }
 
-    /** @deprecated Use {@link #autoTransferFromAuthServerToBackend(Player)} instead. */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public void autoTransferFromPicoLimboToBackend(Player player) {
-        autoTransferFromAuthServerToBackend(player);
-    }
-    
     /**
      * Anuluje oczekujący transfer dla gracza.
      * Wywoływane przy rozłączeniu aby zapobiec race conditions.
