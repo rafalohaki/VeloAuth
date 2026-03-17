@@ -294,12 +294,9 @@ public class DatabaseManager {
     public CompletableFuture<DbResult<RegisteredPlayer>> findPlayerByUuidOrNickname(
             String nickname, UUID premiumUuid) {
         String normalizedNickname = normalizeNickname(nickname);
-        if (normalizedNickname == null) {
-            return CompletableFuture.completedFuture(DbResult.success(null));
-        }
-        DbResult<RegisteredPlayer> executorState = checkExecutorState();
-        if (executorState != null) {
-            return CompletableFuture.completedFuture(executorState);
+        CompletableFuture<DbResult<RegisteredPlayer>> earlyExit = validateLookupPreconditions(normalizedNickname);
+        if (earlyExit != null) {
+            return earlyExit;
         }
 
         return CompletableFuture.supplyAsync(() -> {
@@ -355,15 +352,23 @@ public class DatabaseManager {
 
     private CompletableFuture<DbResult<RegisteredPlayer>> lookupPlayer(String nickname, boolean runtimeDetection) {
         String normalizedNickname = normalizeNickname(nickname);
-        if (normalizedNickname == null) {
-            return CompletableFuture.completedFuture(DbResult.success(null));
-        }
-        DbResult<RegisteredPlayer> executorState = checkExecutorState();
-        if (executorState != null) {
-            return CompletableFuture.completedFuture(executorState);
+        CompletableFuture<DbResult<RegisteredPlayer>> earlyExit = validateLookupPreconditions(normalizedNickname);
+        if (earlyExit != null) {
+            return earlyExit;
         }
 
         return CompletableFuture.supplyAsync(() -> performPlayerLookup(normalizedNickname, nickname, runtimeDetection), dbExecutor);
+    }
+
+    private <T> CompletableFuture<DbResult<T>> validateLookupPreconditions(String normalizedNickname) {
+        if (normalizedNickname == null) {
+            return CompletableFuture.completedFuture(DbResult.success(null));
+        }
+        DbResult<T> executorState = checkExecutorState();
+        if (executorState != null) {
+            return CompletableFuture.completedFuture(executorState);
+        }
+        return null;
     }
 
     private String normalizeNickname(String nickname) {
