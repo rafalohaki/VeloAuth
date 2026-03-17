@@ -156,7 +156,7 @@ public class IPRateLimiter {
      * increments recorded in testing). AtomicInteger.incrementAndGet() provides atomic
      * read-modify-write operations, preventing brute force bypass attacks.
      */
-    private static class RateLimitEntry {
+    private static final class RateLimitEntry {
         private final AtomicInteger attempts = new AtomicInteger(0);
         private volatile long firstAttemptTime = System.currentTimeMillis();
 

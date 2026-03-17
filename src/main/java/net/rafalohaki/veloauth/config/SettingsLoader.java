@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Map;
 
+@SuppressWarnings("java:S2068") // YAML config key names, not hardcoded credentials
 final class SettingsLoader {
 
     private static final String YAML_FIELD_ENABLED = "enabled";

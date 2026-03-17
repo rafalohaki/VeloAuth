@@ -27,7 +27,7 @@ public class Messages {
     private static final Map<String, String> normalizedPatternCache = new ConcurrentHashMap<>();
 
     // Current language
-    private String currentLanguage = "en";
+    private String currentLanguage;
     
     // Language file manager for external files
     private final LanguageFileManager languageFileManager;

@@ -12,7 +12,7 @@ import java.nio.file.Path;
  * Generates default configuration files for VeloAuth.
  * Extracted from Settings for single-responsibility.
  */
-class DefaultConfigGenerator {
+final class DefaultConfigGenerator {
 
     private static final Logger logger = LoggerFactory.getLogger(DefaultConfigGenerator.class);
     private static final String BUILT_IN_LANGUAGE_CODES_PLACEHOLDER = "__BUILT_IN_LANGUAGE_CODES__";

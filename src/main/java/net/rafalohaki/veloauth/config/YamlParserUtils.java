@@ -9,7 +9,7 @@ import java.util.Map;
  * Utility methods for parsing YAML configuration values.
  * Extracted from Settings for single-responsibility and reuse.
  */
-class YamlParserUtils {
+final class YamlParserUtils {
 
     private static final Logger logger = LoggerFactory.getLogger(YamlParserUtils.class);
 
