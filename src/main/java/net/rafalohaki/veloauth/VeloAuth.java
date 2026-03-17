@@ -5,6 +5,7 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
 import net.rafalohaki.veloauth.cache.AuthCache;
@@ -26,32 +27,23 @@ import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.bstats.velocity.Metrics;
 import org.slf4j.Logger;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * VeloAuth - Complete Velocity Authentication Plugin.
- * <p>
- * Manager autoryzacji na proxy Velocity, który zarządza przepuszczaniem graczy
- * między Velocity, serwerem auth (limbo) i serwerami backend.
- * <p>
- * Kluczowe cechy:
- * - Zarządzanie cache autoryzacji - zalogowani gracze omijają logowanie
- * - Transfer graczy via Velocity - Velocity steruje przepuszczaniem między serwerami
- * - Wszystkie operacje na proxy - /login, /register, /changepassword obsługiwane przez VeloAuth
- * - BCrypt hashing - bezpieczne przechowywanie haseł
- * - Wspólna baza danych - kompatybilna z LimboAuth
- * - Obsługa graczy premium i cracked
- * - Virtual Threads (Project Loom) - wydajne I/O
- * - Backend API - integracja z innymi pluginami
- * - Java 21 - najnowsze optymalizacje
+ * Velocity proxy authentication plugin.
+ * Manages player auth flows between Velocity, a configurable auth server, and backend servers.
  */
 @Plugin(
         id = "veloauth",
         name = "VeloAuth",
         version = BuildConstants.VERSION,
         description = "Complete Velocity Authentication Plugin with BCrypt, Virtual Threads and multi-database support",
-        authors = {"Rafal"}
+    authors = {"Rafal"},
+    dependencies = {
+        @Dependency(id = "floodgate", optional = true)
+    }
 )
 public class VeloAuth {
 
@@ -113,7 +105,7 @@ public class VeloAuth {
             messages.reloadWithLanguage(newLanguage);
             logger.info("Language files reloaded successfully (language: {})", newLanguage);
             return true;
-        } catch (Exception e) {
+        } catch (IOException e) {
             logger.error("Failed to reload language files", e);
             return false;
         }
@@ -297,7 +289,7 @@ public class VeloAuth {
                 logger.debug("✅ Message system initialized in {} ms (Language: {}, External files: enabled)", 
                         System.currentTimeMillis() - startTime, language);
             }
-        } catch (Exception e) {
+        } catch (IOException e) {
             logger.error("Failed to initialize external language files, falling back to JAR-embedded files", e);
             messages = new Messages();
             messages.setLanguage(language);
@@ -405,7 +397,7 @@ public class VeloAuth {
         
         // CRITICAL: Create handlers BEFORE AuthListener
         PreLoginHandler preLoginHandler = new PreLoginHandler(
-            authCache, premiumResolverService, databaseManager,
+            authCache, premiumResolverService, settings, databaseManager,
             messages, logger);
         logger.debug("PreLoginHandler created successfully");
         
@@ -526,10 +518,13 @@ public class VeloAuth {
     private void logStartupInfo(long initializationDuration) {
         if (logger.isInfoEnabled()) {
             logger.info("Auth server '{}' configured", settings.getAuthServerName());
+            logger.info("Floodgate support: {} (prefix='{}', auth bypass={})",
+                    settings.isFloodgateIntegrationEnabled() ? "enabled" : "disabled",
+                    settings.getFloodgateUsernamePrefix(),
+                    settings.isFloodgateBypassAuthServerEnabled());
             
             String dbType = settings.getDatabaseStorageType();
             String language = settings.getLanguage();
-            // boolean bStats = true; // bStats jest zawsze inicjalizowane
             
             logger.info("Initialized in {} ms ({} database, {} language, bStats enabled)", 
                     initializationDuration, dbType, language);

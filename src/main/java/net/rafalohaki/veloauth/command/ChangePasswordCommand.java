@@ -5,6 +5,7 @@ import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
+import net.rafalohaki.veloauth.util.SecurityUtils;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
@@ -86,6 +87,7 @@ class ChangePasswordCommand implements SimpleCommand {
         BCrypt.Result result = BCrypt.verifyer().verify(oldPassword.toCharArray(), authCtx.registeredPlayer().getHash());
         if (!result.verified) {
             authCtx.player().sendMessage(ctx.sm().incorrectOldPassword());
+            SecurityUtils.registerFailedLogin(authCtx.playerAddress(), ctx.authCache());
             return false;
         }
         return true;

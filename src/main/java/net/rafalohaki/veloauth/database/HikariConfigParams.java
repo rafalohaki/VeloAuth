@@ -6,7 +6,7 @@ import net.rafalohaki.veloauth.config.Settings;
  * Configuration parameters for HikariCP connection pool.
  * Groups related parameters to reduce method parameter count.
  */
-public class HikariConfigParams {
+public final class HikariConfigParams {
     private final String storageType;
     private final String hostname;
     private final int port;

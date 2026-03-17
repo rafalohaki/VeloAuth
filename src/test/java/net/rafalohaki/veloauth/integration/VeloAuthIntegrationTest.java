@@ -85,7 +85,7 @@ class VeloAuthIntegrationTest {
         );
 
         // Fix CommandManager mocking - properly chain builder pattern
-        com.velocitypowered.api.command.CommandMeta.Builder metaBuilder = mock(com.velocitypowered.api.command.CommandMeta.Builder.class);
+        var metaBuilder = mock(com.velocitypowered.api.command.CommandMeta.Builder.class);
         when(metaBuilder.aliases(any(String[].class))).thenReturn(metaBuilder);
         when(metaBuilder.build()).thenReturn(mock(com.velocitypowered.api.command.CommandMeta.class));
         when(commandManager.metaBuilder(anyString())).thenReturn(metaBuilder);
@@ -119,11 +119,6 @@ class VeloAuthIntegrationTest {
 
     @Test
     void testLoginCommand_throughPublicAPI_shouldHandleDatabaseFailure() {
-        // Setup: Mock command execution through CommandManager
-        when(commandManager.metaBuilder(LOGIN_COMMAND)).thenReturn(mock(com.velocitypowered.api.command.CommandMeta.Builder.class));
-        when(commandManager.metaBuilder(LOGIN_COMMAND).aliases("log", "l")).thenReturn(mock(com.velocitypowered.api.command.CommandMeta.Builder.class));
-        when(commandManager.metaBuilder(LOGIN_COMMAND).aliases("log", "l").build()).thenReturn(mock(com.velocitypowered.api.command.CommandMeta.class));
-
         // Register commands
         commandHandler.registerCommands();
 

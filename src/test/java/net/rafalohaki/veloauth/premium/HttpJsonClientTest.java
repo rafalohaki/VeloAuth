@@ -38,9 +38,9 @@ class HttpJsonClientTest {
     }
 
     @Test
-    void extractStringFieldReturnsNullWhenFieldIncomplete() {
+    void extractStringFieldConvertsNumericValueToString() {
         String payload = "{\"id\":\"abcdef\",\"name\":123}";
 
-        assertNull(HttpJsonClient.extractStringField(payload, "name"));
+        assertEquals("123", HttpJsonClient.extractStringField(payload, "name"));
     }
 }

@@ -12,7 +12,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ResourceBundle;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -97,27 +96,5 @@ class LanguageFileManagerTest {
         assertThrows(IOException.class, () -> {
             languageFileManager.loadLanguageBundle("en");
         }, "Should throw IOException when no language files exist");
-    }
-
-    @Test
-    void testValidateLanguageFile_ValidatesSuccessfully() throws IOException {
-        // Given
-        languageFileManager.initializeLanguageFiles();
-
-        // When/Then - should not throw exception
-        assertDoesNotThrow(() -> {
-            languageFileManager.validateLanguageFile("en");
-        }, "Validation should succeed for valid language file");
-    }
-
-    @Test
-    void testValidateLanguageFile_HandlesInvalidLanguage() throws IOException {
-        // Given
-        languageFileManager.initializeLanguageFiles();
-
-        // When/Then - should not throw exception (logs error instead)
-        assertDoesNotThrow(() -> {
-            languageFileManager.validateLanguageFile("invalid");
-        }, "Validation should handle invalid language gracefully");
     }
 }

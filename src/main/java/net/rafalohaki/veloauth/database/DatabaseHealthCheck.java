@@ -29,7 +29,8 @@ public class DatabaseHealthCheck {
     public DatabaseHealthCheck(JdbcAuthDao jdbcAuthDao, Messages messages) {
         this.jdbcAuthDao = jdbcAuthDao;
         this.messages = messages;
-        this.healthCheckExecutor = Executors.newSingleThreadScheduledExecutor();
+        this.healthCheckExecutor = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("veloauth-healthcheck-", 0).factory());
         this.lastHealthCheckTime = 0;
         this.lastHealthCheckPassed = false;
     }

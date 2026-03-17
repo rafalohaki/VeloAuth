@@ -7,6 +7,8 @@ import java.net.HttpURLConnection;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -42,23 +44,30 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
         if (pre != null) {
             return pre;
         }
-        return executeWithRetries(username);
+        return executeWithRetriesAsync(username, 0, 2, 100).join();
     }
 
-    private PremiumResolution executeWithRetries(String username) {
-        int maxRetries = 2;
-        int baseDelayMs = 100;
-
-        for (int attempt = 0; attempt <= maxRetries; attempt++) {
-            PremiumResolution result = tryResolveAttempt(username, attempt, maxRetries, baseDelayMs);
+    private CompletableFuture<PremiumResolution> executeWithRetriesAsync(
+            String username, int attempt, int maxRetries, int baseDelayMs) {
+        return CompletableFuture.supplyAsync(
+                () -> tryResolveAttempt(username, attempt, maxRetries),
+                net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider.getVirtualExecutor()
+        ).thenCompose(result -> {
             if (result != null) {
-                return result;
+                return CompletableFuture.completedFuture(result);
             }
-        }
-        return PremiumResolution.unknown(id(), "max retries exceeded");
+
+            int nextAttempt = attempt + 1;
+            if (nextAttempt > maxRetries) {
+                return CompletableFuture.completedFuture(PremiumResolution.unknown(id(), "max retries exceeded"));
+            }
+
+            return delayBeforeRetry(username, attempt, baseDelayMs)
+                    .thenCompose(ignored -> executeWithRetriesAsync(username, nextAttempt, maxRetries, baseDelayMs));
+        });
     }
 
-    private PremiumResolution tryResolveAttempt(String username, int attempt, int maxRetries, int baseDelayMs) {
+    private PremiumResolution tryResolveAttempt(String username, int attempt, int maxRetries) {
         try {
             HttpJsonClient.HttpJsonResponse response = HttpJsonClient.get(getEndpoint(), username, timeoutMs);
             PremiumResolution result = resolveFromResponse(response, username);
@@ -68,7 +77,6 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
                 return result;
             }
 
-            sleepBeforeRetry(username, attempt, baseDelayMs);
             return null; // Signal to continue loop
 
         } catch (IOException ex) {
@@ -84,16 +92,19 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
         }
     }
 
-    private void sleepBeforeRetry(String username, int attempt, int baseDelayMs) {
+    private CompletableFuture<Void> delayBeforeRetry(String username, int attempt, int baseDelayMs) {
         int delayMs = baseDelayMs * (1 << attempt);
         if (logger.isDebugEnabled()) {
             logger.debug("[{}] Retry {} after {}ms for {}", getClass().getSimpleName(), attempt + 1, delayMs, username);
         }
-        try {
-            Thread.sleep(delayMs);
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-        }
+        return CompletableFuture.runAsync(
+                () -> { },
+                CompletableFuture.delayedExecutor(
+                        delayMs,
+                        TimeUnit.MILLISECONDS,
+                        net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider.getVirtualExecutor()
+                )
+        );
     }
 
     private PremiumResolution handleIOException(String username, int attempt, int maxRetries, IOException ex) {

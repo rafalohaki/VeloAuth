@@ -81,14 +81,16 @@ public class IPRateLimiter {
             return 0;
         }
 
-        RateLimitEntry entry = rateLimits.computeIfAbsent(address, k -> new RateLimitEntry());
+        RateLimitEntry entry = rateLimits.compute(address, (k, existing) -> {
+            if (existing == null || existing.isExpired(timeoutMinutes)) {
+                RateLimitEntry fresh = new RateLimitEntry();
+                fresh.increment();
+                return fresh;
+            }
+            existing.increment();
+            return existing;
+        });
 
-        // Reset if expired
-        if (entry.isExpired(timeoutMinutes)) {
-            entry.reset();
-        }
-
-        entry.increment();
         return entry.getAttempts();
     }
 
@@ -154,7 +156,7 @@ public class IPRateLimiter {
      * increments recorded in testing). AtomicInteger.incrementAndGet() provides atomic
      * read-modify-write operations, preventing brute force bypass attacks.
      */
-    private static class RateLimitEntry {
+    private static final class RateLimitEntry {
         private final AtomicInteger attempts = new AtomicInteger(0);
         private volatile long firstAttemptTime = System.currentTimeMillis();
 

@@ -49,20 +49,24 @@ public class UuidVerificationHandler {
     }
 
     /**
-     * Verifies player UUID against database.
+     * Asynchronously verifies player UUID against database.
      * Premium players skip verification as they don't need to be registered.
      *
+     * <p>Returns a {@link java.util.concurrent.CompletableFuture} so that callers can use
+     * {@link com.velocitypowered.api.event.EventTask#resumeWhenComplete} in
+     * {@code ServerPreConnectEvent} handlers and avoid blocking Netty IO threads.
+     *
      * @param player Player to verify
-     * @return true if verification passes
+     * @return CompletableFuture that resolves to true if verification passes
      */
-    public boolean verifyPlayerUuid(Player player) {
+    public java.util.concurrent.CompletableFuture<Boolean> verifyPlayerUuid(Player player) {
         try {
             if (player.isOnlineMode()) {
-                return handlePremiumPlayer(player);
+                return java.util.concurrent.CompletableFuture.completedFuture(handlePremiumPlayer(player));
             }
-            return verifyCrackedPlayerUuid(player);
-        } catch (Exception e) {
-            return handleVerificationError(player, e);
+            return verifyCrackedPlayerUuidAsync(player);
+        } catch (RuntimeException e) {
+            return java.util.concurrent.CompletableFuture.completedFuture(handleVerificationError(player, e));
         }
     }
 
@@ -73,18 +77,18 @@ public class UuidVerificationHandler {
         return true;
     }
 
-    private boolean verifyCrackedPlayerUuid(Player player) {
-        try {
-            var dbResult = databaseManager.findPlayerByNickname(player.getUsername()).join();
-
-            if (dbResult.isDatabaseError()) {
-                return handleDatabaseVerificationError(player, dbResult);
-            }
-
-            return performUuidVerification(player, dbResult.getValue());
-        } catch (Exception e) {
-            return handleAsyncVerificationError(player, e);
-        }
+    private java.util.concurrent.CompletableFuture<Boolean> verifyCrackedPlayerUuidAsync(Player player) {
+        return databaseManager.findPlayerByNickname(player.getUsername())
+                .thenApply(dbResult -> {
+                    if (dbResult.isDatabaseError()) {
+                        return handleDatabaseVerificationError(player, dbResult);
+                    }
+                    return performUuidVerification(player, dbResult.getValue());
+                })
+                .exceptionally(t -> {
+                    Exception e = t instanceof Exception ex ? ex : new RuntimeException(t);
+                    return handleAsyncVerificationError(player, e);
+                });
     }
 
     private boolean handleDatabaseVerificationError(Player player, DbResult<RegisteredPlayer> dbResult) {

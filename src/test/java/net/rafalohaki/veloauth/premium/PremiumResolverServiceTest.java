@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -78,9 +79,19 @@ class PremiumResolverServiceTest {
     void shouldCallResolverOnlyOnce() {
         // Given: A username to resolve
         String username = "TestPlayer";
-        
-        // Mock resolver behavior - we can't directly mock internal resolvers
-        // but we can verify through DAO saves that only one resolution happened
+        PremiumResolver premiumResolver = mock(PremiumResolver.class);
+        PremiumResolver offlineResolver = mock(PremiumResolver.class);
+        UUID premiumUuid = UUID.randomUUID();
+
+        when(premiumResolver.enabled()).thenReturn(true);
+        when(premiumResolver.id()).thenReturn("premium-mock");
+        when(premiumResolver.resolve(username)).thenReturn(PremiumResolution.premium(premiumUuid, username, "premium-mock"));
+
+        when(offlineResolver.enabled()).thenReturn(true);
+        when(offlineResolver.id()).thenReturn("offline-mock");
+        when(offlineResolver.resolve(username)).thenReturn(PremiumResolution.offline(username, "offline-mock", "offline"));
+
+        service = new PremiumResolverService(logger, dao, List.of(premiumResolver, offlineResolver), 10 * 60_000L, 3 * 60_000L);
         when(dao.findByNickname(anyString())).thenReturn(Optional.empty());
         when(dao.saveOrUpdate(any(UUID.class), anyString())).thenReturn(true);
 
@@ -89,12 +100,12 @@ class PremiumResolverServiceTest {
 
         // Then: Should resolve without issues
         assertNotNull(result, "Result should not be null");
+        assertTrue(result.isPremium(), "Premium resolver result should win");
         
-        // Verify DAO was called for cache lookup
         verify(dao, times(1)).findByNickname(username);
-        
-        // Note: We can't directly verify resolver.resolve() call count without
-        // refactoring to inject resolvers, but the fix ensures single call per resolver
+        verify(dao, times(1)).saveOrUpdate(premiumUuid, username);
+        verify(premiumResolver, times(1)).resolve(username);
+        verify(offlineResolver, times(1)).resolve(username);
     }
 
     @Test

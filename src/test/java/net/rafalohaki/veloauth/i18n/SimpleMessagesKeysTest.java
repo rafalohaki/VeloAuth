@@ -3,7 +3,7 @@ package net.rafalohaki.veloauth.i18n;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -25,6 +26,14 @@ class SimpleMessagesKeysTest {
 
     private Properties englishProps;
     private Properties polishProps;
+
+    private static Stream<String> builtInLanguages() {
+        return Arrays.stream(BuiltInLanguages.codes());
+    }
+
+    private static Stream<String> nonEnglishBuiltInLanguages() {
+        return builtInLanguages().filter(language -> !BuiltInLanguages.englishCode().equals(language));
+    }
 
     /**
      * All translation keys used by SimpleMessages class.
@@ -103,6 +112,7 @@ class SimpleMessagesKeysTest {
             "admin.help.cache",
             "admin.help.stats",
             "admin.help.conflicts",
+            "admin.unknown_command",
             // Admin reload messages
             "admin.reload.success",
             "admin.reload.failed",
@@ -336,7 +346,7 @@ class SimpleMessagesKeysTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"en", "pl"})
+    @MethodSource("builtInLanguages")
     void messagesClass_canLoadAllRequiredKeys(String language) {
         Messages messages = new Messages();
         messages.setLanguage(language);
@@ -359,21 +369,54 @@ class SimpleMessagesKeysTest {
         // Check that all keys in properties files are documented in REQUIRED_KEYS
         // This ensures no unused/orphan keys exist in properties files
         StringBuilder unused = new StringBuilder();
-        
-        for (String key : englishProps.stringPropertyNames()) {
-            if (!REQUIRED_KEYS.contains(key)) {
-                unused.append("\n  - EN: ").append(key);
+
+        for (String language : BuiltInLanguages.codes()) {
+            Properties props;
+            try {
+                props = loadProperties("messages_" + language + ".properties");
+            } catch (IOException e) {
+                throw new AssertionError("Failed to load properties for language: " + language, e);
+            }
+
+            for (String key : props.stringPropertyNames()) {
+                if (!REQUIRED_KEYS.contains(key)) {
+                    unused.append("\n  - ").append(language.toUpperCase()).append(": ").append(key);
+                }
             }
         }
-        
-        for (String key : polishProps.stringPropertyNames()) {
-            if (!REQUIRED_KEYS.contains(key)) {
-                unused.append("\n  - PL: ").append(key);
-            }
-        }
-        
+
         assertTrue(unused.isEmpty(), 
                 "Properties contain keys not in REQUIRED_KEYS (potential unused keys):" + unused);
+    }
+
+    @ParameterizedTest
+    @MethodSource("nonEnglishBuiltInLanguages")
+    void builtInLanguages_haveConsistentKeysWithEnglish(String language) throws IOException {
+        Properties languageProps = loadProperties("messages_" + language + ".properties");
+
+        StringBuilder englishOnly = new StringBuilder();
+        for (String key : englishProps.stringPropertyNames()) {
+            if (!languageProps.containsKey(key)) {
+                englishOnly.append("\n  - ").append(key);
+            }
+        }
+
+        StringBuilder languageOnly = new StringBuilder();
+        for (String key : languageProps.stringPropertyNames()) {
+            if (!englishProps.containsKey(key)) {
+                languageOnly.append("\n  - ").append(key);
+            }
+        }
+
+        StringBuilder message = new StringBuilder();
+        if (!englishOnly.isEmpty()) {
+            message.append("\nKeys in EN but not in ").append(language).append(':').append(englishOnly);
+        }
+        if (!languageOnly.isEmpty()) {
+            message.append("\nKeys in ").append(language).append(" but not in EN:").append(languageOnly);
+        }
+
+        assertTrue(message.isEmpty(), "Language files have inconsistent keys:" + message);
     }
 
     @Test

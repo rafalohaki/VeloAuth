@@ -74,8 +74,7 @@ public class AuthCache {
     private final int premiumTtlHours;
     private final double premiumRefreshThreshold;
 
-    private final ScheduledExecutorService cleanupScheduler;
-    private final ScheduledExecutorService metricsScheduler;
+    private final ScheduledExecutorService scheduler;
 
     private final AtomicLong cacheHits = new AtomicLong(0);
     private final AtomicLong cacheMisses = new AtomicLong(0);
@@ -127,21 +126,15 @@ public class AuthCache {
         this.sessionManager = new SessionManager(
                 config.maxSessions(), config.sessionTimeoutMinutes() > 0 ? config.sessionTimeoutMinutes() : 60, messages);
 
-        this.cleanupScheduler = Executors.newScheduledThreadPool(1, r -> {
-            Thread t = new Thread(r, "AuthCache-Cleanup");
-            t.setDaemon(true);
-            return t;
-        });
-
-        this.metricsScheduler = Executors.newScheduledThreadPool(1, r -> {
-            Thread t = new Thread(r, "AuthCache-Metrics");
+        this.scheduler = Executors.newScheduledThreadPool(1, r -> {
+            Thread t = new Thread(r, "AuthCache-Scheduler");
             t.setDaemon(true);
             return t;
         });
 
         if (config.cleanupIntervalMinutes() > 0) {
             // skipcq: JAVA-W1087 - Periodic scheduled task, fire-and-forget
-            cleanupScheduler.scheduleAtFixedRate(
+            scheduler.scheduleAtFixedRate(
                     this::cleanupExpiredEntries,
                     config.cleanupIntervalMinutes(),
                     config.cleanupIntervalMinutes(),
@@ -150,7 +143,7 @@ public class AuthCache {
         }
 
         // skipcq: JAVA-W1087 - Periodic scheduled task, fire-and-forget
-        metricsScheduler.scheduleAtFixedRate(
+        scheduler.scheduleAtFixedRate(
                 this::logPeriodicCacheMetrics,
                 5, 5, TimeUnit.MINUTES
         );
@@ -161,30 +154,14 @@ public class AuthCache {
         }
     }
 
-    private static final class ParamCheck {
-        final boolean invalid;
-        final String message;
-        ParamCheck(boolean invalid, String message) {
-            this.invalid = invalid;
-            this.message = message;
-        }
-    }
-
     private static String validateParams(int ttlMinutes, int maxSize, int maxSessions, int maxPremiumCache,
                                          int maxLoginAttempts, int bruteForceTimeoutMinutes, Messages messages) {
-        ParamCheck[] checks = new ParamCheck[] {
-                new ParamCheck(ttlMinutes < 0, messages.get("validation.ttl.negative")),
-                new ParamCheck(maxSize <= 0, messages.get("validation.maxsize.gt_zero")),
-                new ParamCheck(maxSessions <= 0, messages.get("validation.maxsessions.gt_zero")),
-                new ParamCheck(maxPremiumCache <= 0, messages.get("validation.maxpremiumcache.gt_zero")),
-                new ParamCheck(maxLoginAttempts <= 0, messages.get("validation.maxloginattempts.gt_zero")),
-                new ParamCheck(bruteForceTimeoutMinutes <= 0, messages.get("validation.bruteforcetimeout.gt_zero"))
-        };
-        for (ParamCheck c : checks) {
-            if (c.invalid) {
-                return c.message;
-            }
-        }
+        if (ttlMinutes < 0) return messages.get("validation.ttl.negative");
+        if (maxSize <= 0) return messages.get("validation.maxsize.gt_zero");
+        if (maxSessions <= 0) return messages.get("validation.maxsessions.gt_zero");
+        if (maxPremiumCache <= 0) return messages.get("validation.maxpremiumcache.gt_zero");
+        if (maxLoginAttempts <= 0) return messages.get("validation.maxloginattempts.gt_zero");
+        if (bruteForceTimeoutMinutes <= 0) return messages.get("validation.bruteforcetimeout.gt_zero");
         return null;
     }
 
@@ -398,19 +375,14 @@ public class AuthCache {
 
     public void cleanupExpiredEntries() {
         try {
-            cacheLock.lock();
-            try {
-                int removedAuth = cleanupAuthorized();
-                int removedBrute = bruteForceTracker.cleanupExpired();
-                int removedPremium = cleanupPremium();
-                int removedSessions = sessionManager.cleanupExpired();
+            int removedAuth = cleanupAuthorized();
+            int removedBrute = bruteForceTracker.cleanupExpired();
+            int removedPremium = cleanupPremium();
+            int removedSessions = sessionManager.cleanupExpired();
 
-                if (removedAuth > 0 || removedBrute > 0 || removedPremium > 0 || removedSessions > 0) {
-                    logger.debug("Cleanup: usunięto {} auth, {} brute force, {} premium, {} sessions",
-                            removedAuth, removedBrute, removedPremium, removedSessions);
-                }
-            } finally {
-                cacheLock.unlock();
+            if (removedAuth > 0 || removedBrute > 0 || removedPremium > 0 || removedSessions > 0) {
+                logger.debug("Cleanup: usunięto {} auth, {} brute force, {} premium, {} sessions",
+                        removedAuth, removedBrute, removedPremium, removedSessions);
             }
         } catch (Exception e) {
             logger.error("Błąd podczas czyszczenia cache", e);
@@ -519,14 +491,9 @@ public class AuthCache {
                 }
             }
 
-            cleanupScheduler.shutdown();
-            if (!cleanupScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                cleanupScheduler.shutdownNow();
-            }
-
-            metricsScheduler.shutdown();
-            if (!metricsScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                metricsScheduler.shutdownNow();
+            scheduler.shutdown();
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                scheduler.shutdownNow();
             }
 
             clearAll();
@@ -536,8 +503,7 @@ public class AuthCache {
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            cleanupScheduler.shutdownNow();
-            metricsScheduler.shutdownNow();
+            scheduler.shutdownNow();
             if (logger.isWarnEnabled()) {
                 logger.warn(messages.get("cache.interrupted_shutdown"));
             }

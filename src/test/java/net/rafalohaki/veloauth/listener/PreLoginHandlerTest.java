@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.listener;
 
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.cache.AuthCache.PremiumCacheEntry;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -64,13 +65,20 @@ class PreLoginHandlerTest {
     @Mock
     private Logger logger;
 
+    @Mock
+    private Settings settings;
+
     private PreLoginHandler handler;
 
     @BeforeEach
     void setUp() {
+        when(settings.isFloodgateIntegrationEnabled()).thenReturn(true);
+        when(settings.getFloodgateUsernamePrefix()).thenReturn(".");
+
         handler = new PreLoginHandler(
                 authCache,
                 premiumResolverService,
+                settings,
                 databaseManager,
                 messages,
                 logger
@@ -87,7 +95,8 @@ class PreLoginHandlerTest {
             "jeb_",           // With underscore
             "Player123",      // With numbers
             "A_B_C_1_2_3",   // Mix of valid chars
-            "TestUser16Char" // 15 chars (under limit)
+            "TestUser16Char", // 15 chars (under limit)
+            ".Steve"          // Floodgate default prefix
     })
     void shouldAcceptValidUsername(String username) {
         // When: Validating standard Minecraft usernames
@@ -107,6 +116,9 @@ class PreLoginHandlerTest {
             "User Name",           // Invalid char: space
             "User@Name",           // Invalid char: @
             "User#123",            // Invalid char: #
+            ".AB",                 // Floodgate prefix but base username too short
+            ".ThisNameIsTooLong17",// Floodgate prefix but base username too long
+            "..Steve",             // Unsupported double prefix
             // Note: Cyrillic/Chinese chars currently accepted by Character.isLetterOrDigit()
             // This is a known issue with the current implementation
     })
@@ -125,6 +137,24 @@ class PreLoginHandlerTest {
 
         // Then: Should be rejected
         assertFalse(result, "Should reject null username");
+    }
+
+    @Test
+    void shouldAcceptCustomFloodgatePrefixWhenConfigured() {
+        when(settings.getFloodgateUsernamePrefix()).thenReturn("+");
+
+        boolean result = handler.isValidUsername("+Alex");
+
+        assertTrue(result, "Should accept username with configured custom Floodgate prefix");
+    }
+
+    @Test
+    void shouldRejectFloodgatePrefixWhenIntegrationDisabled() {
+        when(settings.isFloodgateIntegrationEnabled()).thenReturn(false);
+
+        boolean result = handler.isValidUsername(".Steve");
+
+        assertFalse(result, "Should reject Floodgate-prefixed username when integration is disabled");
     }
 
     // ==================== BRUTE FORCE PROTECTION TESTS ====================
@@ -178,9 +208,7 @@ class PreLoginHandlerTest {
         when(authCache.getPremiumStatus(username)).thenReturn(cachedEntry);
 
         // When: Resolving premium status
-        PreLoginHandler.PremiumResolutionResult result = handler.resolvePremiumStatus(username);
-
-        // Then: Should return cached status without API call (uses record accessor methods)
+        PreLoginHandler.PremiumResolutionResult result = handler.resolvePremiumStatusAsync(username).join();
         assertNotNull(result, "Result should not be null");
         assertTrue(result.premium(), "Should be premium");
         assertEquals(premiumUuid, result.premiumUuid(), "Should return cached UUID");
@@ -252,6 +280,16 @@ class PreLoginHandlerTest {
     }
 
     @Test
+    void shouldAcceptFloodgatePrefixedUsernameAtExtendedBoundaryLength() {
+        String username = ".A123456789012345";
+
+        boolean result = handler.isValidUsername(username);
+
+        assertTrue(result, "Should accept Floodgate username with 16-char base name");
+        assertEquals(17, username.length(), "Floodgate-prefixed username length mismatch");
+    }
+
+    @Test
     void shouldHandlePremiumStatusWithStaleCache() {
         // Given: Stale cache entry (should trigger background refresh)
         String username = "TestPlayer";
@@ -262,9 +300,7 @@ class PreLoginHandlerTest {
         when(authCache.getPremiumStatus(username)).thenReturn(staleEntry);
 
         // When: Resolving premium status
-        PreLoginHandler.PremiumResolutionResult result = handler.resolvePremiumStatus(username);
-
-        // Then: Should return stale data but trigger refresh (uses record accessors)
+        PreLoginHandler.PremiumResolutionResult result = handler.resolvePremiumStatusAsync(username).join();
         assertNotNull(result, "Result should not be null");
         assertTrue(result.premium(), "Should return stale premium status");
         assertEquals(premiumUuid, result.premiumUuid(), "Should return stale UUID");

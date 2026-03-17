@@ -8,11 +8,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
 
 /**
  * VeloAuth configuration with YAML support and validation.
@@ -34,7 +31,9 @@ public class Settings {
     private final ObjectMapper yamlMapper;
     private final PostgreSQLSettings postgreSQLSettings = new PostgreSQLSettings();
     private final PremiumSettings premiumSettings = new PremiumSettings();
+    private final FloodgateSettings floodgateSettings = new FloodgateSettings();
     private final AlertSettings alertSettings = new AlertSettings();
+    @SuppressWarnings("java:S2068")
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
     
     // Database settings
@@ -105,20 +104,7 @@ public class Settings {
 
             logger.debug("Loading configuration from: {}", configFile);
 
-            @SuppressWarnings("unchecked")
-            Map<String, Object> config = yamlMapper.readValue(configFile.toFile(), Map.class);
-
-            loadDatabaseSettings(config);
-            loadCacheSettings(config);
-            loadAuthServerSettings(config);
-            loadConnectionSettings(config);
-            loadSecuritySettings(config);
-            loadPremiumSettings(config);
-            loadAlertSettings(config);
-            loadDebugSettings(config);
-            loadLanguageSettings(config);
-
-            processDatabaseSettings();
+            applyLoadedState(SettingsLoader.load(this, configFile, yamlMapper, logger));
             SettingsValidator.validate(this);
 
             logger.debug("Configuration loaded successfully");
@@ -133,232 +119,69 @@ public class Settings {
         }
     }
 
-    // ===== Loading Methods =====
-
-    @SuppressWarnings("unchecked")
-    private void loadDatabaseSettings(Map<String, Object> config) {
-        Map<String, Object> database = (Map<String, Object>) config.get("database");
-        if (database != null) {
-            databaseStorageType = YamlParserUtils.getString(database, "storage-type", databaseStorageType);
-            databaseHostname = YamlParserUtils.getString(database, "hostname", databaseHostname);
-            databasePort = YamlParserUtils.getInt(database, "port", databasePort);
-            databaseName = YamlParserUtils.getString(database, "database", databaseName);
-            databaseUser = YamlParserUtils.getString(database, "user", databaseUser);
-            databasePassword = YamlParserUtils.getString(database, "password", databasePassword);
-            databaseConnectionUrl = YamlParserUtils.getString(database, "connection-url", databaseConnectionUrl);
-            databaseConnectionParameters = YamlParserUtils.getString(database, "connection-parameters", databaseConnectionParameters);
-            databaseConnectionPoolSize = YamlParserUtils.getInt(database, "connection-pool-size", databaseConnectionPoolSize);
-            databaseMaxLifetimeMillis = YamlParserUtils.getLong(database, "max-lifetime-millis", databaseMaxLifetimeMillis);
-
-            loadPostgreSQLSettings(database);
-        }
+    private void applyLoadedState(SettingsLoader.LoadedState state) {
+        databaseStorageType = state.databaseStorageType;
+        databaseHostname = state.databaseHostname;
+        databasePort = state.databasePort;
+        databaseName = state.databaseName;
+        databaseUser = state.databaseUser;
+        databasePassword = state.databasePassword;
+        databaseConnectionUrl = state.databaseConnectionUrl;
+        databaseConnectionParameters = state.databaseConnectionParameters;
+        databaseConnectionPoolSize = state.databaseConnectionPoolSize;
+        databaseMaxLifetimeMillis = state.databaseMaxLifetimeMillis;
+        cacheTtlMinutes = state.cacheTtlMinutes;
+        cacheMaxSize = state.cacheMaxSize;
+        cacheCleanupIntervalMinutes = state.cacheCleanupIntervalMinutes;
+        sessionTimeoutMinutes = state.sessionTimeoutMinutes;
+        premiumTtlHours = state.premiumTtlHours;
+        premiumRefreshThreshold = state.premiumRefreshThreshold;
+        authServerName = state.authServerName;
+        authServerTimeoutSeconds = state.authServerTimeoutSeconds;
+        connectionTimeoutSeconds = state.connectionTimeoutSeconds;
+        bcryptCost = state.bcryptCost;
+        bruteForceMaxAttempts = state.bruteForceMaxAttempts;
+        bruteForceTimeoutMinutes = state.bruteForceTimeoutMinutes;
+        ipLimitRegistrations = state.ipLimitRegistrations;
+        minPasswordLength = state.minPasswordLength;
+        maxPasswordLength = state.maxPasswordLength;
+        debugEnabled = state.debugEnabled;
+        language = state.language;
+        copyPostgreSqlSettings(state.postgreSQLSettings);
+        copyPremiumSettings(state.premiumSettings);
+        copyFloodgateSettings(state.floodgateSettings);
+        copyAlertSettings(state.alertSettings);
     }
 
-    @SuppressWarnings("unchecked")
-    private void loadPostgreSQLSettings(Map<String, Object> database) {
-        Object postgreSQLSection = database.get("postgresql");
-        if (postgreSQLSection instanceof Map<?, ?>) {
-            Map<String, Object> postgreSQL = (Map<String, Object>) postgreSQLSection;
-            postgreSQLSettings.setSslEnabled(YamlParserUtils.getBoolean(postgreSQL, "ssl-enabled", postgreSQLSettings.isSslEnabled()));
-            postgreSQLSettings.setSslMode(YamlParserUtils.getString(postgreSQL, "ssl-mode", postgreSQLSettings.getSslMode()));
-            postgreSQLSettings.setSslCert(YamlParserUtils.getString(postgreSQL, "ssl-cert", postgreSQLSettings.getSslCert()));
-            postgreSQLSettings.setSslKey(YamlParserUtils.getString(postgreSQL, "ssl-key", postgreSQLSettings.getSslKey()));
-            postgreSQLSettings.setSslRootCert(YamlParserUtils.getString(postgreSQL, "ssl-root-cert", postgreSQLSettings.getSslRootCert()));
-            postgreSQLSettings.setSslPassword(YamlParserUtils.getString(postgreSQL, "ssl-password", postgreSQLSettings.getSslPassword()));
-        }
+    private void copyPostgreSqlSettings(PostgreSQLSettings source) {
+        postgreSQLSettings.setSslEnabled(source.isSslEnabled());
+        postgreSQLSettings.setSslMode(source.getSslMode());
+        postgreSQLSettings.setSslCert(source.getSslCert());
+        postgreSQLSettings.setSslKey(source.getSslKey());
+        postgreSQLSettings.setSslRootCert(source.getSslRootCert());
+        postgreSQLSettings.setSslPassword(source.getSslPassword());
     }
 
-    private void loadDebugSettings(Map<String, Object> config) {
-        debugEnabled = YamlParserUtils.getBoolean(config, "debug-enabled", debugEnabled);
+    private void copyPremiumSettings(PremiumSettings source) {
+        premiumSettings.setCheckEnabled(source.isCheckEnabled());
+        premiumSettings.setOnlineModeNeedAuth(source.isOnlineModeNeedAuth());
+        premiumSettings.getResolver().copyFrom(source.getResolver());
     }
 
-    private void loadLanguageSettings(Map<String, Object> config) {
-        language = YamlParserUtils.getString(config, "language", language);
+    private void copyFloodgateSettings(FloodgateSettings source) {
+        floodgateSettings.setEnabled(source.isEnabled());
+        floodgateSettings.setUsernamePrefix(source.getUsernamePrefix());
+        floodgateSettings.setBypassAuthServer(source.isBypassAuthServer());
     }
 
-    @SuppressWarnings("unchecked")
-    private void loadCacheSettings(Map<String, Object> config) {
-        Map<String, Object> cache = (Map<String, Object>) config.get("cache");
-        if (cache != null) {
-            cacheTtlMinutes = YamlParserUtils.getInt(cache, "ttl-minutes", cacheTtlMinutes);
-            cacheMaxSize = YamlParserUtils.getInt(cache, "max-size", cacheMaxSize);
-            cacheCleanupIntervalMinutes = YamlParserUtils.getInt(cache, "cleanup-interval-minutes", cacheCleanupIntervalMinutes);
-            sessionTimeoutMinutes = YamlParserUtils.getInt(cache, "session-timeout-minutes", sessionTimeoutMinutes);
-            premiumTtlHours = YamlParserUtils.getInt(cache, "premium-ttl-hours", premiumTtlHours);
-            premiumRefreshThreshold = YamlParserUtils.getDouble(cache, "premium-refresh-threshold", premiumRefreshThreshold);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private void loadAuthServerSettings(Map<String, Object> config) {
-        Map<String, Object> authServer = (Map<String, Object>) config.get("auth-server");
-        if (authServer != null) {
-            authServerName = YamlParserUtils.getString(authServer, "server-name", authServerName);
-            authServerTimeoutSeconds = YamlParserUtils.getInt(authServer, "timeout-seconds", authServerTimeoutSeconds);
-            return;
-        }
-        @SuppressWarnings("unchecked")
-        Map<String, Object> picolimbo = (Map<String, Object>) config.get("picolimbo");
-        if (picolimbo != null) {
-            logger.warn("Config section 'picolimbo:' is deprecated — rename to 'auth-server:' in config.yml");
-            authServerName = YamlParserUtils.getString(picolimbo, "server-name", authServerName);
-            authServerTimeoutSeconds = YamlParserUtils.getInt(picolimbo, "timeout-seconds", authServerTimeoutSeconds);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private void loadConnectionSettings(Map<String, Object> config) {
-        Map<String, Object> connection = (Map<String, Object>) config.get("connection");
-        if (connection != null) {
-            connectionTimeoutSeconds = YamlParserUtils.getInt(connection, "timeout-seconds", connectionTimeoutSeconds);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private void loadSecuritySettings(Map<String, Object> config) {
-        Map<String, Object> security = (Map<String, Object>) config.get("security");
-        if (security != null) {
-            bcryptCost = YamlParserUtils.getInt(security, "bcrypt-cost", bcryptCost);
-            bruteForceMaxAttempts = YamlParserUtils.getInt(security, "bruteforce-max-attempts", bruteForceMaxAttempts);
-            bruteForceTimeoutMinutes = YamlParserUtils.getInt(security, "bruteforce-timeout-minutes", bruteForceTimeoutMinutes);
-            ipLimitRegistrations = YamlParserUtils.getInt(security, "ip-limit-registrations", ipLimitRegistrations);
-            minPasswordLength = YamlParserUtils.getInt(security, "min-password-length", minPasswordLength);
-            maxPasswordLength = YamlParserUtils.getInt(security, "max-password-length", maxPasswordLength);
-        }
-    }
-
-    @SuppressWarnings("java:S3776")
-    private void loadPremiumSettings(Map<String, Object> config) {
-        Object premiumSection = config.get("premium");
-        if (premiumSection instanceof Map<?, ?>) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> premium = (Map<String, Object>) premiumSection;
-            premiumSettings.setCheckEnabled(YamlParserUtils.getBoolean(premium, "check-enabled", premiumSettings.isCheckEnabled()));
-            premiumSettings.setOnlineModeNeedAuth(YamlParserUtils.getBoolean(premium, "online-mode-need-auth", premiumSettings.isOnlineModeNeedAuth()));
-
-            if (premium.containsKey("premium-uuid-resolver")) {
-                logger.warn("Detected legacy key premium.premium-uuid-resolver — ignoring. Configure premium.resolver.* instead");
-            }
-
-            Object resolverSection = premium.get("resolver");
-            if (resolverSection instanceof Map<?, ?>) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> resolver = (Map<String, Object>) resolverSection;
-                applyResolverSettings(resolver);
-            }
-        }
-
-        if (config.containsKey("premium-resolver")) {
-            logger.warn("Detected legacy section premium-resolver — ignoring. Configure premium.resolver.* instead");
-        }
-    }
-
-    private void applyResolverSettings(Map<String, Object> resolver) {
-        PremiumResolverSettings target = premiumSettings.getResolver();
-        target.setMojangEnabled(YamlParserUtils.getBoolean(resolver, "mojang-enabled", target.isMojangEnabled()));
-        target.setAshconEnabled(YamlParserUtils.getBoolean(resolver, "ashcon-enabled", target.isAshconEnabled()));
-        target.setWpmeEnabled(YamlParserUtils.getBoolean(resolver, "wpme-enabled", target.isWpmeEnabled()));
-        target.setRequestTimeoutMs(YamlParserUtils.getInt(resolver, "request-timeout-ms", target.getRequestTimeoutMs()));
-        target.setHitTtlMinutes(YamlParserUtils.getInt(resolver, "hit-ttl-minutes", target.getHitTtlMinutes()));
-        target.setMissTtlMinutes(YamlParserUtils.getInt(resolver, "miss-ttl-minutes", target.getMissTtlMinutes()));
-        target.setCaseSensitive(YamlParserUtils.getBoolean(resolver, "case-sensitive", target.isCaseSensitive()));
-    }
-
-    private void loadAlertSettings(Map<String, Object> config) {
-        Object alertSection = config.get("alerts");
-        if (alertSection instanceof Map<?, ?>) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> alerts = (Map<String, Object>) alertSection;
-            alertSettings.setEnabled(YamlParserUtils.getBoolean(alerts, "enabled", alertSettings.isEnabled()));
-            alertSettings.setFailureRateThreshold(YamlParserUtils.getDouble(alerts, "failure-rate-threshold", alertSettings.getFailureRateThreshold()));
-            alertSettings.setMinRequestsForAlert(YamlParserUtils.getInt(alerts, "min-requests-for-alert", alertSettings.getMinRequestsForAlert()));
-            alertSettings.setCheckIntervalMinutes(YamlParserUtils.getInt(alerts, "check-interval-minutes", alertSettings.getCheckIntervalMinutes()));
-            alertSettings.setAlertCooldownMinutes(YamlParserUtils.getInt(alerts, "alert-cooldown-minutes", alertSettings.getAlertCooldownMinutes()));
-
-            Object discordSection = alerts.get("discord");
-            if (discordSection instanceof Map<?, ?>) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> discord = (Map<String, Object>) discordSection;
-                alertSettings.setDiscordEnabled(YamlParserUtils.getBoolean(discord, "enabled", alertSettings.isDiscordEnabled()));
-                alertSettings.setDiscordWebhookUrl(YamlParserUtils.getString(discord, "webhook-url", alertSettings.getDiscordWebhookUrl()));
-            }
-        }
-    }
-
-    // ===== Connection URL Parsing =====
-
-    private void processDatabaseSettings() {
-        if (databaseConnectionUrl != null && !databaseConnectionUrl.trim().isEmpty()) {
-            parseConnectionUrl(databaseConnectionUrl);
-        }
-    }
-
-    private void parseConnectionUrl(String connectionUrl) {
-        try {
-            String url = connectionUrl.trim();
-
-            databaseStorageType = detectDatabaseType(url);
-            if (databaseStorageType == null) {
-                return;
-            }
-
-            String remaining = url.substring(url.indexOf("://") + 3);
-            parseConnectionCredentials(remaining);
-
-        } catch (StringIndexOutOfBoundsException e) {
-            logger.error("Invalid database connection URL format: {}", connectionUrl, e);
-        } catch (IllegalArgumentException e) {
-            logger.error("Invalid connection URL parameters: {}", connectionUrl, e);
-        }
-    }
-
-    private String detectDatabaseType(String url) {
-        DatabaseType dbType = DatabaseType.fromUrl(url);
-        return dbType != null ? dbType.getName() : null;
-    }
-
-    private void parseConnectionCredentials(String remaining) {
-        String[] parts = remaining.split("@");
-        if (parts.length == 2) {
-            String authPart = parts[0];
-            String hostPart = parts[1];
-
-            parseAuthPart(authPart);
-            parseHostPart(hostPart);
-
-            logger.info("Parsed connection URL: {}@{}:{}/{}",
-                    databaseUser, databaseHostname, databasePort, databaseName);
-        }
-    }
-
-    private void parseAuthPart(String authPart) {
-        String[] authSplit = authPart.split(":");
-        if (authSplit.length >= 1) {
-            databaseUser = URLDecoder.decode(authSplit[0], StandardCharsets.UTF_8);
-        }
-        if (authSplit.length >= 2) {
-            databasePassword = URLDecoder.decode(authSplit[1], StandardCharsets.UTF_8);
-        }
-    }
-
-    private void parseHostPart(String hostPart) {
-        String[] hostSplit = hostPart.split("/");
-        String hostAndPort = hostSplit[0];
-        if (hostSplit.length >= 2) {
-            databaseName = hostSplit[1];
-        }
-
-        String[] hpSplit = hostAndPort.split(":");
-        if (hpSplit.length >= 1) {
-            databaseHostname = hpSplit[0];
-        }
-        if (hpSplit.length >= 2) {
-            try {
-                databasePort = Integer.parseInt(hpSplit[1]);
-            } catch (NumberFormatException e) {
-                logger.warn("Invalid port in connection URL: {}", hpSplit[1]);
-            }
-        }
+    private void copyAlertSettings(AlertSettings source) {
+        alertSettings.setEnabled(source.isEnabled());
+        alertSettings.setDiscordEnabled(source.isDiscordEnabled());
+        alertSettings.setDiscordWebhookUrl(source.getDiscordWebhookUrl());
+        alertSettings.setFailureRateThreshold(source.getFailureRateThreshold());
+        alertSettings.setMinRequestsForAlert(source.getMinRequestsForAlert());
+        alertSettings.setCheckIntervalMinutes(source.getCheckIntervalMinutes());
+        alertSettings.setAlertCooldownMinutes(source.getAlertCooldownMinutes());
     }
 
     // ===== Package-private mutation methods for validator =====
@@ -459,18 +282,6 @@ public class Settings {
         return authServerTimeoutSeconds;
     }
 
-    /** @deprecated Use {@link #getAuthServerName()} instead. */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public String getPicoLimboServerName() {
-        return getAuthServerName();
-    }
-
-    /** @deprecated Use {@link #getAuthServerTimeoutSeconds()} instead. */
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    public int getPicoLimboTimeoutSeconds() {
-        return getAuthServerTimeoutSeconds();
-    }
-
     public int getBcryptCost() {
         return bcryptCost;
     }
@@ -509,6 +320,22 @@ public class Settings {
 
     public PremiumSettings getPremiumSettings() {
         return premiumSettings;
+    }
+
+    public boolean isFloodgateIntegrationEnabled() {
+        return floodgateSettings.isEnabled();
+    }
+
+    public String getFloodgateUsernamePrefix() {
+        return floodgateSettings.getUsernamePrefix();
+    }
+
+    public boolean isFloodgateBypassAuthServerEnabled() {
+        return floodgateSettings.isBypassAuthServer();
+    }
+
+    public FloodgateSettings getFloodgateSettings() {
+        return floodgateSettings;
     }
 
     public boolean isDebugEnabled() {
@@ -559,6 +386,16 @@ public class Settings {
         void setMissTtlMinutes(int value) { this.missTtlMinutes = value; }
         public boolean isCaseSensitive() { return caseSensitive; }
         void setCaseSensitive(boolean value) { this.caseSensitive = value; }
+
+        void copyFrom(PremiumResolverSettings source) {
+            this.mojangEnabled = source.mojangEnabled;
+            this.ashconEnabled = source.ashconEnabled;
+            this.wpmeEnabled = source.wpmeEnabled;
+            this.requestTimeoutMs = source.requestTimeoutMs;
+            this.hitTtlMinutes = source.hitTtlMinutes;
+            this.missTtlMinutes = source.missTtlMinutes;
+            this.caseSensitive = source.caseSensitive;
+        }
     }
 
     /**
@@ -568,6 +405,7 @@ public class Settings {
         private boolean sslEnabled = true;
         private String sslMode = "require";
         private String sslCert = "";
+        @SuppressWarnings("java:S2068")
         private String sslKey = "";
         private String sslRootCert = "";
         @SuppressWarnings("java:S2068")
@@ -600,6 +438,22 @@ public class Settings {
         public boolean isOnlineModeNeedAuth() { return onlineModeNeedAuth; }
         void setOnlineModeNeedAuth(boolean value) { this.onlineModeNeedAuth = value; }
         public PremiumResolverSettings getResolver() { return resolver; }
+    }
+
+    /**
+     * Floodgate integration configuration.
+     */
+    public static class FloodgateSettings {
+        private boolean enabled = false;
+        private String usernamePrefix = ".";
+        private boolean bypassAuthServer = true;
+
+        public boolean isEnabled() { return enabled; }
+        void setEnabled(boolean value) { this.enabled = value; }
+        public String getUsernamePrefix() { return usernamePrefix != null ? usernamePrefix : "."; }
+        void setUsernamePrefix(String value) { this.usernamePrefix = value != null ? value : "."; }
+        public boolean isBypassAuthServer() { return bypassAuthServer; }
+        void setBypassAuthServer(boolean value) { this.bypassAuthServer = value; }
     }
 
     /**

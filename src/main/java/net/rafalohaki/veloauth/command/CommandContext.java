@@ -42,7 +42,9 @@ class CommandContext {
         this.settings = settings;
         this.messages = messages;
         this.logger = plugin.getLogger();
-        this.ipRateLimiter = new IPRateLimiter(10, 5);
+        this.ipRateLimiter = new IPRateLimiter(
+                settings.getBruteForceMaxAttempts(),
+                settings.getBruteForceTimeoutMinutes());
         this.sm = new SimpleMessages(messages);
     }
 

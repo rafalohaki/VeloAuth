@@ -8,6 +8,7 @@
 [![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/e2RkPbc3ZR)
 [![SpigotMC](https://img.shields.io/badge/SpigotMC-VeloAuth-orange?style=for-the-badge&logo=spigotmc&logoColor=white)](https://www.spigotmc.org/resources/veloauth.130240/)
 [![License](https://img.shields.io/github/license/rafalohaki/veloauth?style=for-the-badge)](LICENSE)
+[![bStats](https://img.shields.io/badge/bStats-Tracked-blue?style=for-the-badge)](https://bstats.org/plugin/velocity/VeloAuth)
 
 **Complete Velocity authentication plugin** with intelligent nickname protection, premium auto-login, and secure offline player management.
 
@@ -18,18 +19,21 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 ## Key Features
 
 - 🔒 **Intelligent Nickname Protection** - Premium nicknames are reserved unless already registered by cracked players
-- ⚡ **Premium Auto-Login** - Mojang account owners skip authentication automatically  
+- ⚡ **Premium Auto-Login** - Mojang account owners skip authentication automatically
+- 🔄 **Automatic Nickname Change Detection** - Detects when a premium player renames their Mojang account and updates the database record automatically
 - 🛡️ **Secure Offline Auth** - BCrypt password hashing with brute-force protection
+- 📱 **Optional Floodgate Support** - Bedrock players can bypass the auth server when Floodgate integration is enabled
 - 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
 - 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are completely hidden from tab-completion once the player is logged in
-- 🚀 **High Performance** - Authorization cache with 24-hour premium status caching
+- 🚀 **High Performance** - Three-layer premium resolution cache: in-memory → database → external API, with 24-hour premium status retention
 - 🔄 **Conflict Resolution** - Smart handling of premium/cracked nickname conflicts
 - 📊 **Admin Tools** - Complete conflict management with `/vauth conflicts`
 - 🗄️ **Multi-Database** - MySQL, PostgreSQL, H2, SQLite
-- 🌍 **8 Languages** - EN, PL, DE, FR, RU, TR, SI, FI
+- 🌍 **17 Languages** - EN, PL, DE, FR, RU, TR, SI, FI, ZH_CN, ZH_HK, JA, HI, VI, KO, TH, ID, PT_BR
 - 🔄 **LimboAuth Compatible** - 100% database compatibility (no migration needed)
 - 📢 **Discord Alerts** - Webhook notifications for security events
 - 🧵 **Virtual Threads** - Built on Java 21 for maximum performance
+- 📈 **bStats Analytics** - Anonymous usage statistics via bStats
 
 ## Requirements
 
@@ -45,8 +49,10 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 1. Download VeloAuth from Modrinth
 2. Place the file in your Velocity `plugins/` folder
 3. Start Velocity - the plugin will create a `config.yml` file
-4. Stop Velocity and configure your database and limbo name in `plugins/VeloAuth/config.yml` 
+4. Stop Velocity and configure your database and auth server name in `plugins/VeloAuth/config.yml`
 5. Restart Velocity
+
+**Note:** Floodgate support is disabled by default. Enable it only if you actually use Geyser/Floodgate.
 
 ### Velocity Config
 
@@ -69,9 +75,55 @@ try = ["lobby", "survival"]  # Order matters. Do NOT put 'limbo' here.
 
 **Important:** The `try` configuration controls where authenticated players are redirected by default. VeloAuth automatically skips the `limbo` server and selects the first available backend server, **unless** the player used a `forced-host` domain, in which case they are natively routed to their intended destination!
 
+### VeloAuth Config
+
+Minimal auth server configuration in `plugins/VeloAuth/config.yml`:
+
+```yaml
+language: en
+# Built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
+
+auth-server:
+  server-name: limbo
+  timeout-seconds: 300
+```
+
+Built-in language codes you can copy directly into config:
+
+| Code | Language |
+|------|----------|
+| `en` | English |
+| `pl` | Polish |
+| `si` | Slovenian |
+| `ru` | Russian |
+| `tr` | Turkish |
+| `fr` | French |
+| `de` | German |
+| `fi` | Finnish |
+| `zh_cn` | Chinese Simplified |
+| `zh_hk` | Chinese Traditional (Hong Kong) |
+| `ja` | Japanese |
+| `hi` | Hindi |
+| `vi` | Vietnamese |
+| `ko` | Korean |
+| `th` | Thai |
+| `id` | Indonesian |
+| `pt_br` | Brazilian Portuguese |
+
+Optional Floodgate integration:
+
+```yaml
+floodgate:
+  enabled: true
+  username-prefix: "."
+  bypass-auth-server: true
+```
+
+Keep the Floodgate prefix aligned with your proxy-side Floodgate configuration.
+
 ### Discord Webhooks
 
-VeloAuth supports Discord notifications for security events. Configure webhook URL in config.yml.
+VeloAuth supports Discord notifications for security events (failed login bursts, brute-force attempts, premium resolution failures). Configure the webhook URL in `config.yml` under `alerts.discord`.
 
 ### Database Config
 
@@ -99,12 +151,23 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 
 ### Authentication Flow
 1. **Player connects** to Velocity
-2. **VeloAuth checks** authorization cache
-3. If **not cached**, player is sent to the **auth server** (limbo)
-4. **Nickname protection** activates during registration
-5. Player types **/login** or **/register**
-6. **VeloAuth verifies** credentials with BCrypt
-7. Player is **redirected to backend server** via `try` configuration
+2. **VeloAuth checks** in-memory authorization cache (instant, no I/O)
+3. If **not in memory**, checks **database premium cache** (persistent across restarts)
+4. If **not in DB cache**, resolves via **Mojang/Ashcon API** in parallel using virtual threads
+5. If **not premium**, player is sent to the **auth server** (unless Floodgate Bedrock bypass applies)
+6. Player types **/login** or **/register**
+7. **VeloAuth verifies** credentials with BCrypt
+8. Player is **redirected to backend server** via `try` configuration
+
+### Premium Resolution (3 layers)
+```
+Connect → [In-memory cache] → [Database cache] → [Mojang/Ashcon API]
+              ~0ms                ~1ms                 ~200-500ms
+```
+All API calls run in parallel on virtual threads. Results are cached in the database and survive proxy restarts.
+
+### Nickname Change Detection
+When a premium player logs in with a different username than what is stored (Mojang account rename), VeloAuth automatically detects the mismatch and updates the database record, keeping the UUID-to-username mapping accurate without any admin intervention.
 
 ### Nickname Protection System
 - **Premium nicknames are reserved** unless already registered by cracked players

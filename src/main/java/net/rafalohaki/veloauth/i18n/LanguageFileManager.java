@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.PropertyResourceBundle;
 import java.util.ResourceBundle;
+import java.util.regex.Pattern;
 
 /**
  * Manages external language files for VeloAuth.
@@ -19,12 +20,12 @@ import java.util.ResourceBundle;
 public final class LanguageFileManager {
     
     private static final Logger logger = LoggerFactory.getLogger(LanguageFileManager.class);
-    private static final String ENGLISH_FILE = "messages_en.properties";
     private static final String MESSAGES_PREFIX = "messages_";
     private static final String PROPERTIES_SUFFIX = ".properties";
     // Internal resource path within the JAR, not an external URI
     @SuppressWarnings("java:S1075")
     private static final String LANG_RESOURCE_PATH = "/lang/";
+    private static final Pattern VALID_LANGUAGE_CODE = Pattern.compile("^[a-zA-Z0-9_-]+$");
     
     private final Path langDirectory;
     
@@ -50,20 +51,17 @@ public final class LanguageFileManager {
             logger.info("Created language directory: {}", langDirectory);
         }
         
-        // Copy all built-in language files from JAR if they don't exist externally
-        // English is always required as the base/fallback language
-        copyLanguageFileFromJar(ENGLISH_FILE);
-        
-        // Copy other built-in languages (add more here as they are added to resources/lang/)
-        copyLanguageFileFromJar("messages_pl.properties");
-        copyLanguageFileFromJar("messages_si.properties");
-        copyLanguageFileFromJar("messages_ru.properties");
-        copyLanguageFileFromJar("messages_tr.properties");
-        copyLanguageFileFromJar("messages_fr.properties");
-        copyLanguageFileFromJar("messages_de.properties");
-        copyLanguageFileFromJar("messages_fi.properties");
+        for (String fileName : BuiltInLanguages.fileNames()) {
+            copyLanguageFileFromJar(fileName);
+        }
     }
     
+    private static void validateLanguageCode(String language) {
+        if (language == null || !VALID_LANGUAGE_CODE.matcher(language).matches()) {
+            throw new IllegalArgumentException("Invalid language code: must be alphanumeric/underscore/hyphen");
+        }
+    }
+
     /**
      * Checks if a language file exists in the JAR resources.
      *
@@ -181,8 +179,12 @@ public final class LanguageFileManager {
      * @throws IOException if the language file cannot be loaded
      */
     public ResourceBundle loadLanguageBundle(String language) throws IOException {
+        validateLanguageCode(language);
         String filename = MESSAGES_PREFIX + language + PROPERTIES_SUFFIX;
-        Path languageFile = langDirectory.resolve(filename);
+        Path languageFile = langDirectory.resolve(filename).normalize();
+        if (!languageFile.startsWith(langDirectory.normalize())) {
+            throw new IllegalArgumentException("Invalid language code: path traversal detected");
+        }
         
         logger.debug("Loading language: {}", language);
         logger.debug("Looking for external file: {}", languageFile.toAbsolutePath());
@@ -205,7 +207,7 @@ public final class LanguageFileManager {
         
         if (!Files.exists(languageFile)) {
             logger.warn("Language file not found: {}, falling back to English", filename);
-            languageFile = langDirectory.resolve(ENGLISH_FILE);
+            languageFile = langDirectory.resolve(BuiltInLanguages.englishFileName());
         }
         
         if (!Files.exists(languageFile)) {
@@ -213,7 +215,7 @@ public final class LanguageFileManager {
         }
         
         // For non-English languages, fill missing keys from English
-        if (!"en".equals(language) && Files.exists(langDirectory.resolve(filename))) {
+        if (!BuiltInLanguages.englishCode().equals(language) && Files.exists(langDirectory.resolve(filename))) {
             fillMissingKeysFromEnglish(language);
         }
         
@@ -237,7 +239,7 @@ public final class LanguageFileManager {
      * @throws IOException if file creation fails
      */
     private void createCustomLanguageFile(String language) throws IOException {
-        Path englishFile = langDirectory.resolve(ENGLISH_FILE);
+        Path englishFile = langDirectory.resolve(BuiltInLanguages.englishFileName());
         Path targetFile = langDirectory.resolve(MESSAGES_PREFIX + language + PROPERTIES_SUFFIX);
         
         if (!Files.exists(englishFile)) {
@@ -265,7 +267,7 @@ public final class LanguageFileManager {
      * @param language The language code (e.g., "de", "fr")
      */
     private void fillMissingKeysFromEnglish(String language) {
-        Path englishFile = langDirectory.resolve(ENGLISH_FILE);
+        Path englishFile = langDirectory.resolve(BuiltInLanguages.englishFileName());
         Path targetFile = langDirectory.resolve(MESSAGES_PREFIX + language + PROPERTIES_SUFFIX);
         
         if (!Files.exists(englishFile) || !Files.exists(targetFile)) {
@@ -315,19 +317,4 @@ public final class LanguageFileManager {
         }
     }
     
-    /**
-     * Validates that a language file can be loaded successfully.
-     * Logs validation results.
-     *
-     * @param language The language code to validate
-     */
-    public void validateLanguageFile(String language) {
-        try {
-            ResourceBundle bundle = loadLanguageBundle(language);
-            logger.info("Validated language file for: {}", language);
-            logger.debug("Language file contains {} keys", bundle.keySet().size());
-        } catch (IOException e) {
-            logger.error("Failed to validate language file for: {}", language, e);
-        }
-    }
 }

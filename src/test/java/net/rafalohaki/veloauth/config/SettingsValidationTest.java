@@ -12,6 +12,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -176,6 +178,48 @@ class SettingsValidationTest {
         // Then: Should create default config and load successfully
         assertTrue(loaded, "Should load with default configuration");
         assertTrue(Files.exists(tempDir.resolve("config.yml")), "Should create default config file");
+    }
+
+        @Test
+        void shouldLoadFloodgateSettingsWithCustomPrefix() {
+        String config = """
+                                floodgate:
+                                    enabled: false
+                                    username-prefix: "+"
+                                    bypass-auth-server: false
+                                """;
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, config);
+
+        boolean loaded = settings.load();
+
+        assertTrue(loaded, "Should load custom Floodgate settings");
+        assertFalse(settings.isFloodgateIntegrationEnabled(), "Floodgate integration should be disabled");
+        assertEquals("+", settings.getFloodgateUsernamePrefix(), "Custom Floodgate prefix should be loaded");
+        assertFalse(settings.isFloodgateBypassAuthServerEnabled(), "Floodgate auth bypass should be disabled");
+        }
+
+        @Test
+        void shouldRejectFloodgatePrefixWithWhitespace() {
+        String invalidConfig = """
+                                floodgate:
+                                    enabled: true
+                                    username-prefix: "bed rock"
+                                    bypass-auth-server: true
+                                """;
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, invalidConfig);
+
+        IllegalArgumentException exception = assertThrows(
+            IllegalArgumentException.class,
+            () -> settings.load(),
+            "Should reject Floodgate prefixes with whitespace"
+        );
+
+        assertTrue(exception.getMessage().contains("whitespace"),
+                "Error message should mention whitespace validation");
     }
 
     /**

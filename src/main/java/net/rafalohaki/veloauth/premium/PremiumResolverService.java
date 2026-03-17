@@ -49,12 +49,7 @@ public class PremiumResolverService {
                     rs.isWpmeEnabled());
         }
 
-        int timeoutMs = Math.max(100, rs.getRequestTimeoutMs());
-        List<PremiumResolver> resolverList = new ArrayList<>();
-        resolverList.add(new ConfigurablePremiumResolver(logger, rs.isMojangEnabled(), timeoutMs, ResolverConfig.MOJANG));
-        resolverList.add(new ConfigurablePremiumResolver(logger, rs.isAshconEnabled(), timeoutMs, ResolverConfig.ASHCON));
-        resolverList.add(new ConfigurablePremiumResolver(logger, rs.isWpmeEnabled(), timeoutMs, ResolverConfig.WPME));
-        this.resolvers = Collections.unmodifiableList(resolverList);
+        this.resolvers = createDefaultResolvers(logger, rs);
 
         this.premiumTtlMillis = Math.max(0L, rs.getHitTtlMinutes()) * 60_000L;
         this.missTtlMillis = Math.max(0L, rs.getMissTtlMinutes()) * 60_000L;
@@ -66,6 +61,28 @@ public class PremiumResolverService {
         if (missTtlMillis == 0 && logger.isWarnEnabled()) {
             logger.warn("[PremiumResolver] missTtlMinutes = 0 — miss cache disabled, every unknown player will query API!");
         }
+    }
+
+    PremiumResolverService(Logger logger,
+                           PremiumUuidDao premiumUuidDao,
+                           List<PremiumResolver> resolvers,
+                           long premiumTtlMillis,
+                           long missTtlMillis) {
+        this.logger = Objects.requireNonNull(logger, "logger");
+        this.dao = Objects.requireNonNull(premiumUuidDao, "premiumUuidDao");
+        this.resolvers = List.copyOf(Objects.requireNonNull(resolvers, "resolvers"));
+        this.premiumTtlMillis = Math.max(0L, premiumTtlMillis);
+        this.missTtlMillis = Math.max(0L, missTtlMillis);
+        this.maxCacheSize = 10_000;
+    }
+
+    private static List<PremiumResolver> createDefaultResolvers(Logger logger, PremiumResolverSettings settings) {
+        int timeoutMs = Math.max(100, settings.getRequestTimeoutMs());
+        List<PremiumResolver> resolverList = new ArrayList<>();
+        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isMojangEnabled(), timeoutMs, ResolverConfig.MOJANG));
+        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isAshconEnabled(), timeoutMs, ResolverConfig.ASHCON));
+        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isWpmeEnabled(), timeoutMs, ResolverConfig.WPME));
+        return Collections.unmodifiableList(resolverList);
     }
 
     /**

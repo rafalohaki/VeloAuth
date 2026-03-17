@@ -32,14 +32,4 @@ public final class UuidUtils {
             return null;
         }
     }
-
-    /**
-     * Checks if a string is a valid UUID format.
-     *
-     * @param uuidString String to validate
-     * @return true if string is a valid UUID, false otherwise
-     */
-    public static boolean isValidUuid(@javax.annotation.Nullable String uuidString) {
-        return parseUuidSafely(uuidString) != null;
-    }
 }

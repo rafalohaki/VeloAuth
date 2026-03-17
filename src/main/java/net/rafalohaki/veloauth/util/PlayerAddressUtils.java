@@ -34,10 +34,10 @@ public final class PlayerAddressUtils {
     public static String getPlayerIp(@javax.annotation.Nullable Player player) {
         InetAddress address = getPlayerAddress(player);
         if (address == null) {
-            return StringConstants.UNKNOWN;
+            return "unknown";
         }
         String hostAddress = address.getHostAddress();
-        return hostAddress != null ? hostAddress : StringConstants.UNKNOWN;
+        return hostAddress != null ? hostAddress : "unknown";
     }
 
     /**

@@ -101,7 +101,7 @@ class LoginCommand implements SimpleCommand {
             authContext.player().sendMessage(ctx.sm().loginSuccess());
             PostAuthFlow.execute(ctx, authContext, authContext.registeredPlayer(), "logged in");
 
-        } catch (Exception e) {
+        } catch (java.util.concurrent.CompletionException e) {
             if (ctx.logger().isErrorEnabled()) {
                 ctx.logger().error("Error processing successful login: {}", authContext.username(), e);
             }

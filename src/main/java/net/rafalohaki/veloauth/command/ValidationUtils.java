@@ -3,7 +3,6 @@ package net.rafalohaki.veloauth.command;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.config.Settings;
-import net.rafalohaki.veloauth.i18n.Messages;
 
 /**
  * Utility class for common validation operations across commands.
@@ -50,41 +49,6 @@ public final class ValidationUtils {
     }
 
     /**
-     * Validates password with i18n messages support.
-     *
-     * @param password Password to validate
-     * @param settings Settings instance for validation rules
-     * @param messages Messages instance for i18n
-     * @return ValidationResult with validation status and localized message
-     */
-    public static ValidationResult validatePasswordWithMessages(String password, Settings settings, Messages messages) {
-        if (password == null || password.isEmpty()) {
-            return ValidationResult.error(messages.get("validation.password.empty"));
-        }
-
-        if (password.length() < settings.getMinPasswordLength()) {
-            return ValidationResult.error(
-                    messages.get("validation.password.too_short", settings.getMinPasswordLength())
-            );
-        }
-
-        if (password.length() > settings.getMaxPasswordLength()) {
-            return ValidationResult.error(
-                    messages.get("validation.password.too_long", settings.getMaxPasswordLength())
-            );
-        }
-
-        int byteLength = password.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
-        if (byteLength > 72) {
-            return ValidationResult.error(
-                    messages.get("validation.password.utf8_too_long", byteLength)
-            );
-        }
-
-        return ValidationResult.success();
-    }
-
-    /**
      * Validates password confirmation match.
      *
      * @param password        Original password
@@ -94,21 +58,6 @@ public final class ValidationUtils {
     public static ValidationResult validatePasswordMatch(String password, String confirmPassword) {
         if (!password.equals(confirmPassword)) {
             return ValidationResult.error("validation.password.mismatch");
-        }
-        return ValidationResult.success();
-    }
-
-    /**
-     * Validates password confirmation match with i18n messages support.
-     *
-     * @param password        Original password
-     * @param confirmPassword Password confirmation
-     * @param messages        Messages instance for i18n
-     * @return ValidationResult with validation status and localized message
-     */
-    public static ValidationResult validatePasswordMatchWithMessages(String password, String confirmPassword, Messages messages) {
-        if (!password.equals(confirmPassword)) {
-            return ValidationResult.error(messages.get("validation.password.mismatch"));
         }
         return ValidationResult.success();
     }

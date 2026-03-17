@@ -5,8 +5,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetAddress;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -145,19 +145,19 @@ class BruteForceTracker {
      * Wpis brute force.
      */
     static class BruteForceEntry {
-        private volatile int attempts = 0;
+        private final AtomicInteger attempts = new AtomicInteger(0);
         private volatile long firstAttemptTime = System.currentTimeMillis();
 
         void incrementAttempts() {
-            attempts++;
+            attempts.incrementAndGet();
         }
 
         int getAttempts() {
-            return attempts;
+            return attempts.get();
         }
 
         void reset() {
-            attempts = 0;
+            attempts.set(0);
             firstAttemptTime = System.currentTimeMillis();
         }
 

@@ -14,9 +14,6 @@ import java.util.Properties;
 import java.util.ResourceBundle;
 import java.util.concurrent.ConcurrentHashMap;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 /**
  * Internationalization manager for VeloAuth messages.
  * Thread-safe message loading and formatting with support for external language files.
@@ -27,18 +24,16 @@ public class Messages {
 
     // Cache for loaded message files (legacy support)
     private static final Map<String, Properties> messageCache = new ConcurrentHashMap<>();
+    private static final Map<String, String> normalizedPatternCache = new ConcurrentHashMap<>();
 
     // Current language
-    private String currentLanguage = "en";
+    private String currentLanguage;
     
     // Language file manager for external files
     private final LanguageFileManager languageFileManager;
     
     // Current resource bundle
     private ResourceBundle bundle;
-    
-    // Compiled pattern for finding placeholders like {0} or {12}
-    private static final Pattern MESSAGE_FORMAT_PATTERN = Pattern.compile("\\{\\d+}");
     
     private final boolean useExternalFiles;
 
@@ -206,18 +201,7 @@ public class Messages {
         }
 
         // Format message with arguments if provided
-        if (args.length > 0) {
-            try {
-                return MessageFormat.format(message, args);
-            } catch (IllegalArgumentException e) {
-                if (logger.isWarnEnabled()) {
-                    logger.warn("Failed to format message '{}': {}", key, e.getMessage());
-                }
-                return message;
-            }
-        }
-
-        return message;
+        return formatMessageSafely(message, key, args);
     }
     
     /**
@@ -244,29 +228,53 @@ public class Messages {
         }
 
         try {
-            // Support both MessageFormat style ({0}, {1}) and lightweight '{}' style used in some translations.
-            // If '{}' tokens are present but no numeric indices, convert '{}' -> {0}, {1}, ... for MessageFormat.
-            String formattedMessage = message;
-            // Prevent ReDoS by using compiled pattern and avoiding greedy .* matches
-            if (message.contains("{}") && !MESSAGE_FORMAT_PATTERN.matcher(message).find()) {
-                StringBuilder sb = new StringBuilder();
-                int start = 0;
-                int index = 0;
-                int pos;
-                while ((pos = message.indexOf("{}", start)) >= 0) {
-                    sb.append(message, start, pos);
-                    sb.append('{').append(index++).append('}');
-                    start = pos + 2;
-                }
-                sb.append(message.substring(start));
-                formattedMessage = sb.toString();
-            }
-
-            return MessageFormat.format(formattedMessage, args);
+            return MessageFormat.format(normalizeMessagePattern(message), args);
         } catch (IllegalArgumentException e) {
             logger.warn("Failed to format message '{}': {}", key, e.getMessage());
             return message;
         }
+    }
+
+    private String normalizeMessagePattern(String message) {
+        if (message.indexOf('{') < 0) {
+            return message;
+        }
+        return normalizedPatternCache.computeIfAbsent(message, Messages::convertBracePlaceholders);
+    }
+
+    private static String convertBracePlaceholders(String message) {
+        if (message.indexOf("{}") < 0 || containsIndexedPlaceholders(message)) {
+            return message;
+        }
+
+        StringBuilder sb = new StringBuilder(message.length() + 8);
+        int start = 0;
+        int index = 0;
+        int pos;
+        while ((pos = message.indexOf("{}", start)) >= 0) {
+            sb.append(message, start, pos);
+            sb.append('{').append(index++).append('}');
+            start = pos + 2;
+        }
+        sb.append(message.substring(start));
+        return sb.toString();
+    }
+
+    private static boolean containsIndexedPlaceholders(String message) {
+        for (int index = 0; index < message.length() - 2; index++) {
+            if (message.charAt(index) != '{' || !Character.isDigit(message.charAt(index + 1))) {
+                continue;
+            }
+
+            int end = index + 2;
+            while (end < message.length() && Character.isDigit(message.charAt(end))) {
+                end++;
+            }
+            if (end < message.length() && message.charAt(end) == '}') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -292,19 +300,19 @@ public class Messages {
             }
         } else {
             // Legacy mode: check JAR resources (built-in languages only)
-            return "en".equals(lang) || "pl".equals(lang);
+            return BuiltInLanguages.isBuiltIn(lang);
         }
     }
 
     /**
      * Gets all supported language codes.
-     * Returns built-in languages (en, pl) - users can add custom languages by placing
+    * Returns built-in languages bundled with the plugin. Users can still add custom languages by placing
      * messages_*.properties files in the lang directory.
      *
      * @return Array of built-in language codes
      */
     public String[] getSupportedLanguages() {
-        return new String[]{"en", "pl"};
+        return BuiltInLanguages.codes();
     }
 
     /**
@@ -314,6 +322,7 @@ public class Messages {
     public void clearCache() {
         int sizeBefore = messageCache.size();
         messageCache.clear();
+        normalizedPatternCache.clear();
         if (sizeBefore > 0) {
             logger.info("Message cache cleared ({} entries removed)", sizeBefore);
         }
@@ -347,7 +356,7 @@ public class Messages {
             } else {
                 logger.error("Could not find language file: {}", fileName);
             }
-        } catch (Exception e) {
+        } catch (IOException e) {
             logger.error("Error loading language file: {}", fileName, e);
         }
 

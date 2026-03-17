@@ -39,7 +39,7 @@ public class EarlyLoginBlocker {
 
         // CRITICAL: Block connections until plugin is fully initialized
         if (!plugin.isInitialized()) {
-            logger.warn("🔒 STARTUP BLOCK: Player {} tried to connect before VeloAuth fully initialized - EarlyLoginBlocker",
+            logger.warn("STARTUP BLOCK: Player {} tried to connect before VeloAuth fully initialized - EarlyLoginBlocker",
                     username);
             // Use English fallback - Messages not available during startup
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(

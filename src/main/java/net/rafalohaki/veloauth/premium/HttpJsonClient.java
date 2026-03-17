@@ -1,5 +1,8 @@
 package net.rafalohaki.veloauth.premium;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -9,13 +12,13 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Minimal helper for performing HTTP GET calls and extracting simple JSON string fields.
- * Keeps resolver code focused on business logic without introducing extra dependencies.
+ * HTTP GET client with Jackson-based JSON field extraction for premium resolver APIs.
  */
 final class HttpJsonClient {
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private HttpJsonClient() {
-        // Utility class
     }
 
     @SuppressWarnings("java:S5144") // Safe: URL constructed from trusted internal endpoint enum and encoded username
@@ -45,21 +48,16 @@ final class HttpJsonClient {
         if (body == null || body.isEmpty()) {
             return null;
         }
-        String token = '"' + field + '"';
-        int idx = body.indexOf(token);
-        if (idx == -1) {
+        try {
+            JsonNode node = MAPPER.readTree(body);
+            JsonNode value = node.get(field);
+            if (value == null || value.isNull()) {
+                return null;
+            }
+            return value.asText();
+        } catch (IOException e) {
             return null;
         }
-        int colon = body.indexOf(':', idx + token.length());
-        if (colon == -1) {
-            return null;
-        }
-        int quoteStart = body.indexOf('"', colon + 1);
-        int quoteEnd = body.indexOf('"', quoteStart + 1);
-        if (quoteStart == -1 || quoteEnd == -1) {
-            return null;
-        }
-        return body.substring(quoteStart + 1, quoteEnd);
     }
 
     private static String readBody(HttpURLConnection connection) throws IOException {

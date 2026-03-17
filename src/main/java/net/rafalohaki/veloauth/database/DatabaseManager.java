@@ -5,9 +5,7 @@ import com.j256.ormlite.dao.DaoManager;
 import com.j256.ormlite.jdbc.DataSourceConnectionSource;
 import com.j256.ormlite.jdbc.JdbcConnectionSource;
 import com.j256.ormlite.support.ConnectionSource;
-import com.j256.ormlite.support.DatabaseConnection;
 import net.rafalohaki.veloauth.i18n.Messages;
-import net.rafalohaki.veloauth.model.PremiumUuid;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,13 +14,13 @@ import org.slf4j.MarkerFactory;
 
 import java.lang.ref.WeakReference;
 import java.sql.SQLException;
-import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Supplier;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -56,13 +54,13 @@ public class DatabaseManager {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
 
     private static final String DATABASE_ERROR = "database.error";
-    private static final String WHERE_CLAUSE = " WHERE ";
 
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
     private static final Marker CACHE_MARKER = MarkerFactory.getMarker("CACHE");
 
     private static final String DATABASE_NOT_CONNECTED = "Database not connected";
     private static final String DATABASE_NOT_CONNECTED_PREMIUM_CHECK = "Database not connected - cannot check premium status for {}";
+    private static final String EXECUTOR_SHUTTING_DOWN = ": Executor is shutting down";
 
     private final ConcurrentHashMap<String, RegisteredPlayer> playerCache;
     private final ReentrantLock databaseLock;
@@ -71,6 +69,7 @@ public class DatabaseManager {
     private final ExecutorService dbExecutor;
     private final DatabaseHealthCheck healthCheck;
     private final DatabaseMigrationService migrationService;
+    private final DatabaseStatisticsQueryService statisticsQueryService;
 
     private ConnectionSource connectionSource;
     private Dao<RegisteredPlayer, String> playerDao;
@@ -100,10 +99,30 @@ public class DatabaseManager {
         this.jdbcAuthDao = new JdbcAuthDao(config);
         this.healthCheck = new DatabaseHealthCheck(jdbcAuthDao, messages);
         this.migrationService = new DatabaseMigrationService(config);
+        this.statisticsQueryService = new DatabaseStatisticsQueryService(
+            config,
+            () -> connectionSource,
+            () -> connected,
+            dbExecutor,
+            logger,
+            DB_MARKER
+        );
 
         if (logger.isDebugEnabled()) {
             logger.debug(DB_MARKER, messages.get("database.manager.created"), config.getStorageType());
         }
+    }
+
+    void setConnectedForTesting(boolean connected) {
+        this.connected = connected;
+    }
+
+    void setJdbcAuthDaoForTesting(JdbcAuthDao jdbcAuthDao) {
+        this.jdbcAuthDao = jdbcAuthDao;
+    }
+
+    void setPremiumUuidDaoForTesting(PremiumUuidDao premiumUuidDao) {
+        this.premiumUuidDao = premiumUuidDao;
     }
 
     /**
@@ -281,31 +300,18 @@ public class DatabaseManager {
      */
     public CompletableFuture<DbResult<RegisteredPlayer>> findPlayerByUuidOrNickname(
             String nickname, UUID premiumUuid) {
-        if (nickname == null || nickname.isEmpty()) {
+        String normalizedNickname = normalizeNickname(nickname);
+        if (normalizedNickname == null) {
             return CompletableFuture.completedFuture(DbResult.success(null));
         }
-        if (dbExecutor.isShutdown()) {
-            return CompletableFuture.completedFuture(
-                    DbResult.databaseError(messages.get(DATABASE_ERROR) + ": Executor is shutting down"));
-        }
-
-        String normalizedNickname = nickname.toLowerCase();
-
-        return CompletableFuture.supplyAsync(() -> {
-            DbResult<RegisteredPlayer> byNick = performPlayerLookup(normalizedNickname, nickname, true);
-            if (byNick.isDatabaseError() || byNick.getValue() != null) {
+        return lookupPlayer(nickname, true).thenApplyAsync(byNick -> {
+            if (byNick.isDatabaseError() || byNick.getValue() != null || premiumUuid == null) {
                 return byNick;
             }
-
-            if (premiumUuid == null) {
-                return DbResult.success(null);
-            }
-
             DbResult<Void> connectionResult = validateDatabaseConnection();
             if (connectionResult.isDatabaseError()) {
                 return DbResult.databaseError(connectionResult.getErrorMessage());
             }
-
             return findAndMigrateByPremiumUuid(normalizedNickname, nickname, premiumUuid);
         }, dbExecutor);
     }
@@ -335,25 +341,46 @@ public class DatabaseManager {
             return DbResult.success(byUuid);
         } catch (SQLException e) {
             if (logger.isErrorEnabled()) {
-                logger.error(DB_MARKER, "Error during UUID-based player lookup for {}: {}",
-                        premiumUuid, e.getMessage());
+                logger.error(DB_MARKER, "Error during UUID-based player lookup for {}",
+                        premiumUuid, e);
             }
-            return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+            return genericDatabaseErrorResult();
         }
     }
 
     private CompletableFuture<DbResult<RegisteredPlayer>> lookupPlayer(String nickname, boolean runtimeDetection) {
-        if (nickname == null || nickname.isEmpty()) {
-            return CompletableFuture.completedFuture(DbResult.success(null));
+        String normalizedNickname = normalizeNickname(nickname);
+        CompletableFuture<DbResult<RegisteredPlayer>> earlyExit = validateLookupPreconditions(normalizedNickname);
+        if (earlyExit != null) {
+            return earlyExit;
         }
-
-        if (dbExecutor.isShutdown()) {
-            return CompletableFuture.completedFuture(DbResult.databaseError(messages.get(DATABASE_ERROR) + ": Executor is shutting down"));
-        }
-
-        String normalizedNickname = nickname.toLowerCase();
 
         return CompletableFuture.supplyAsync(() -> performPlayerLookup(normalizedNickname, nickname, runtimeDetection), dbExecutor);
+    }
+
+    private <T> CompletableFuture<DbResult<T>> validateLookupPreconditions(String normalizedNickname) {
+        if (normalizedNickname == null) {
+            return CompletableFuture.completedFuture(DbResult.success(null));
+        }
+        DbResult<T> executorState = checkExecutorState();
+        if (executorState != null) {
+            return CompletableFuture.completedFuture(executorState);
+        }
+        return null;
+    }
+
+    private String normalizeNickname(String nickname) {
+        if (nickname == null || nickname.isEmpty()) {
+            return null;
+        }
+        return nickname.toLowerCase();
+    }
+
+    private <T> DbResult<T> checkExecutorState() {
+        if (dbExecutor.isShutdown()) {
+            return DbResult.databaseError(messages.get(DATABASE_ERROR) + EXECUTOR_SHUTTING_DOWN);
+        }
+        return null;
     }
 
     private DbResult<RegisteredPlayer> performPlayerLookup(String normalizedNickname, String originalNickname, boolean runtimeDetection) {
@@ -440,7 +467,15 @@ public class DatabaseManager {
         if (logger.isErrorEnabled()) {
             logger.error(DB_MARKER, "Error searching for player: {}", normalizedNickname, e);
         }
-        return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+        return genericDatabaseErrorResult();
+    }
+
+    private String genericDatabaseErrorMessage() {
+        return messages.get(DATABASE_ERROR);
+    }
+
+    private <T> DbResult<T> genericDatabaseErrorResult() {
+        return DbResult.databaseError(genericDatabaseErrorMessage());
     }
 
     /**
@@ -451,18 +486,7 @@ public class DatabaseManager {
             return CompletableFuture.completedFuture(DbResult.success(false));
         }
 
-        if (dbExecutor.isShutdown()) {
-            return CompletableFuture.completedFuture(DbResult.databaseError(messages.get(DATABASE_ERROR) + ": Executor is shutting down"));
-        }
-
-        return CompletableFuture.supplyAsync(() -> {
-            DbResult<Void> connectionResult = validateDatabaseConnection();
-            if (connectionResult.isDatabaseError()) {
-                return DbResult.databaseError(connectionResult.getErrorMessage());
-            }
-
-            return executePlayerSave(player);
-        }, dbExecutor);
+        return submitConnectedTask(() -> executePlayerSave(player));
     }
 
     private DbResult<Void> validateDatabaseConnection() {
@@ -491,13 +515,22 @@ public class DatabaseManager {
             if (logger.isErrorEnabled()) {
                 logger.error(DB_MARKER, "Error saving player: {}", player.getNickname(), e);
             }
-            return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+            return genericDatabaseErrorResult();
         }
     }
     
     private void notifyAuthCacheOfUpdate(RegisteredPlayer player) {
-        if (authCacheRef == null) {
+        net.rafalohaki.veloauth.cache.AuthCache authCache = resolveAuthCacheForUpdate();
+        if (authCache == null) {
             return;
+        }
+
+        invalidateAuthCachePlayerData(authCache, player);
+    }
+
+    private net.rafalohaki.veloauth.cache.AuthCache resolveAuthCacheForUpdate() {
+        if (authCacheRef == null) {
+            return null;
         }
 
         net.rafalohaki.veloauth.cache.AuthCache authCache = authCacheRef.get();
@@ -505,9 +538,14 @@ public class DatabaseManager {
             if (logger.isDebugEnabled()) {
                 logger.debug(DB_MARKER, "AuthCache reference is null (GC collected) - skipping cache invalidation");
             }
-            return;
+            return null;
         }
 
+        return authCache;
+    }
+
+    private void invalidateAuthCachePlayerData(net.rafalohaki.veloauth.cache.AuthCache authCache,
+                                               RegisteredPlayer player) {
         try {
             UUID playerUuid = UUID.fromString(player.getUuid());
             authCache.invalidatePlayerData(playerUuid);
@@ -532,11 +570,19 @@ public class DatabaseManager {
      * Usuwa gracza z bazy danych i odświeża cache.
      */
     public CompletableFuture<DbResult<Boolean>> deletePlayer(String nickname) {
-        if (nickname == null || nickname.isEmpty()) {
+        String normalizedNickname = normalizeNickname(nickname);
+        if (normalizedNickname == null) {
             return CompletableFuture.completedFuture(DbResult.success(false));
         }
 
-        String normalizedNickname = nickname.toLowerCase();
+        return submitConnectedTask(() -> executePlayerDelete(normalizedNickname));
+    }
+
+    private <T> CompletableFuture<DbResult<T>> submitConnectedTask(Supplier<DbResult<T>> task) {
+        DbResult<T> executorState = checkExecutorState();
+        if (executorState != null) {
+            return CompletableFuture.completedFuture(executorState);
+        }
 
         return CompletableFuture.supplyAsync(() -> {
             DbResult<Void> connectionResult = validateDatabaseConnection();
@@ -544,7 +590,7 @@ public class DatabaseManager {
                 return DbResult.databaseError(connectionResult.getErrorMessage());
             }
 
-            return executePlayerDelete(normalizedNickname);
+            return task.get();
         }, dbExecutor);
     }
 
@@ -568,7 +614,7 @@ public class DatabaseManager {
             if (logger.isErrorEnabled()) {
                 logger.error(DB_MARKER, "Error deleting player: {}", lowercaseNickname, e);
             }
-            return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+            return genericDatabaseErrorResult();
         }
     }
 
@@ -598,7 +644,7 @@ public class DatabaseManager {
                 if (logger.isErrorEnabled()) {
                     logger.error(DB_MARKER, "Runtime error checking premium status for player: {}", username, e);
                 }
-                return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+                return genericDatabaseErrorResult();
             }
         }, dbExecutor);
     }
@@ -696,64 +742,15 @@ public class DatabaseManager {
     // ===== Statistics Queries =====
 
     public CompletableFuture<Integer> getTotalNonPremiumAccounts() {
-        return CompletableFuture.supplyAsync(() -> {
-            if (!connected) {
-                return 0;
-            }
-            try {
-                boolean postgres = DatabaseType.POSTGRESQL.getName().equalsIgnoreCase(config.getStorageType());
-                String auth = postgres ? "\"AUTH\"" : "AUTH";
-                String hash = postgres ? "\"HASH\"" : "HASH";
-                String sql = "SELECT COUNT(*) FROM " + auth + WHERE_CLAUSE + hash + " IS NOT NULL";
-
-                return executeCountQuery(sql);
-            } catch (SQLException e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error(DB_MARKER, "Error counting non-premium accounts", e);
-                }
-                return 0;
-            }
-        }, dbExecutor);
-    }
-
-    @SuppressWarnings("java:S2077")
-    private int executeCountQuery(String sql) throws SQLException {
-        DatabaseConnection dbConnection = connectionSource.getReadWriteConnection(null);
-        try {
-            java.sql.Connection connection = dbConnection.getUnderlyingConnection();
-            try (java.sql.Statement stmt = connection.createStatement();
-                 java.sql.ResultSet rs = stmt.executeQuery(sql)) {
-                if (rs.next()) {
-                    return rs.getInt(1);
-                }
-                return 0;
-            }
-        } finally {
-            connectionSource.releaseConnection(dbConnection);
-        }
+        return statisticsQueryService.getTotalNonPremiumAccounts();
     }
 
     public CompletableFuture<Integer> getTotalRegisteredAccounts() {
-        return getAllPlayers().thenApply(Collection::size)
-                .exceptionally(e -> {
-                    if (logger.isErrorEnabled()) {
-                        logger.error(DB_MARKER, "Error getting total registered accounts", e);
-                    }
-                    return 0;
-                });
+        return statisticsQueryService.getTotalRegisteredAccounts();
     }
 
     public CompletableFuture<Integer> getTotalPremiumAccounts() {
-        return getAllPlayers().thenApply(players ->
-                (int) players.stream()
-                        .filter(player -> player.getPremiumUuid() != null || player.getHash() == null)
-                        .count()
-        ).exceptionally(e -> {
-            if (logger.isErrorEnabled()) {
-                logger.error(DB_MARKER, "Error getting total premium accounts", e);
-            }
-            return 0;
-        });
+        return statisticsQueryService.getTotalPremiumAccounts();
     }
 
     // ===== Runtime Detection =====

@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.listener;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.cache.AuthCache.PremiumCacheEntry;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -14,7 +15,8 @@ import org.slf4j.Logger;
 import java.net.InetAddress;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Handles pre-login validation and conflict detection logic.
@@ -27,26 +29,30 @@ public class PreLoginHandler {
     private final DatabaseManager databaseManager;
     private final Messages messages;
     private final Logger logger;
+    private final Settings settings;
 
     /**
      * Creates a new PreLoginHandler.
      *
      * @param authCache              Cache for authorization and premium status
      * @param premiumResolverService Service for resolving premium status
+         * @param settings               Plugin configuration
      * @param databaseManager        Manager for database operations
      * @param messages               i18n message system
      * @param logger                 Logger instance
      */
     public PreLoginHandler(AuthCache authCache,
-                          PremiumResolverService premiumResolverService,
-                          DatabaseManager databaseManager,
-                          Messages messages,
-                          Logger logger) {
-        this.authCache = authCache;
-        this.premiumResolverService = premiumResolverService;
-        this.databaseManager = databaseManager;
-        this.messages = messages;
-        this.logger = logger;
+                   PremiumResolverService premiumResolverService,
+                   Settings settings,
+                   DatabaseManager databaseManager,
+                   Messages messages,
+                   Logger logger) {
+        this.authCache = requireNonNull(authCache, "authCache");
+        this.premiumResolverService = requireNonNull(premiumResolverService, "premiumResolverService");
+        this.settings = requireNonNull(settings, "settings");
+        this.databaseManager = requireNonNull(databaseManager, "databaseManager");
+        this.messages = requireNonNull(messages, "messages");
+        this.logger = requireNonNull(logger, "logger");
     }
 
     /**
@@ -60,20 +66,35 @@ public class PreLoginHandler {
             return false;
         }
 
+        String validatedUsername = stripConfiguredFloodgatePrefix(username);
+
         // Minecraft username limit: 3-16 characters
-        if (username.length() < 3 || username.length() > 16) {
+        if (validatedUsername.length() < 3 || validatedUsername.length() > 16) {
             return false;
         }
 
         // Minecraft usernames: letters, numbers, underscore
-        for (int i = 0; i < username.length(); i++) {
-            char c = username.charAt(i);
+        for (int i = 0; i < validatedUsername.length(); i++) {
+            char c = validatedUsername.charAt(i);
             if (!Character.isLetterOrDigit(c) && c != '_') {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private String stripConfiguredFloodgatePrefix(String username) {
+        if (!settings.isFloodgateIntegrationEnabled()) {
+            return username;
+        }
+
+        String prefix = settings.getFloodgateUsernamePrefix();
+        if (prefix.isEmpty() || !username.startsWith(prefix)) {
+            return username;
+        }
+
+        return username.substring(prefix.length());
     }
 
     /**
@@ -90,34 +111,9 @@ public class PreLoginHandler {
     }
 
     /**
-     * Resolves premium status with caching, TTL, and background refresh (stale-while-revalidate).
-     *
-     * @param username Username to check
-     * @return PremiumResolutionResult with status and UUID
-     */
-    public PremiumResolutionResult resolvePremiumStatus(String username) {
-        PremiumCacheEntry cachedStatus = authCache.getPremiumStatus(username);
-        if (cachedStatus != null) {
-            logger.debug("Premium cache hit dla {} -> {} (age: {}ms, TTL: {}ms)", 
-                    username, cachedStatus.isPremium(), cachedStatus.getAgeMillis(), cachedStatus.getTtlMillis());
-            
-            // Background refresh if stale (but still use cached value - stale-while-revalidate)
-            if (cachedStatus.isStale()) {
-                triggerBackgroundRefresh(username);
-            }
-            
-            return new PremiumResolutionResult(cachedStatus.isPremium(), cachedStatus.getPremiumUuid());
-        }
-
-        // Cache miss - synchronous resolution
-        PremiumResolution resolution = resolveViaServiceWithTimeout(username);
-        return cacheFromResolution(username, resolution);
-    }
-
-    /**
      * Async version of resolvePremiumStatus — returns CompletableFuture to avoid blocking Netty IO thread.
      * On cache hit, returns immediately via completedFuture.
-     * On cache miss, resolves via API asynchronously with 1.5s timeout.
+        * On cache miss, resolves via PremiumResolverService asynchronously.
      *
      * @param username Username to check
      * @return CompletableFuture with PremiumResolutionResult (may be null on UNKNOWN/API failure)
@@ -125,7 +121,7 @@ public class PreLoginHandler {
     public CompletableFuture<PremiumResolutionResult> resolvePremiumStatusAsync(String username) {
         PremiumCacheEntry cachedStatus = authCache.getPremiumStatus(username);
         if (cachedStatus != null) {
-            logger.debug("Premium cache hit dla {} -> {} (age: {}ms, TTL: {}ms)",
+            logger.debug("Premium cache hit for {} -> {} (age: {}ms, TTL: {}ms)",
                     username, cachedStatus.isPremium(), cachedStatus.getAgeMillis(), cachedStatus.getTtlMillis());
 
             if (cachedStatus.isStale()) {
@@ -138,14 +134,26 @@ public class PreLoginHandler {
 
         // Cache miss — async resolution (does NOT block Netty IO thread)
         return CompletableFuture.supplyAsync(() -> premiumResolverService.resolve(username))
-                .orTimeout(1500, TimeUnit.MILLISECONDS)
                 .exceptionally(throwable -> {
-                    logger.warn("Premium resolution timeout/error for {} — fallback to offline: {}",
-                            username, throwable.getMessage());
+                    logger.warn("Premium resolution failed for {} - fallback to offline: {}",
+                            username, describeThrowable(throwable));
                     return PremiumResolution.offline(username, "VeloAuth-Timeout",
                             "Timeout - fallback to offline");
                 })
                 .thenApply(resolution -> cacheFromResolution(username, resolution));
+    }
+
+    private String describeThrowable(Throwable throwable) {
+        if (throwable == null) {
+            return "unknown cause";
+        }
+
+        String message = throwable.getMessage();
+        if (message != null && !message.isBlank()) {
+            return message;
+        }
+
+        return throwable.getClass().getSimpleName();
     }
 
     /**
@@ -161,7 +169,7 @@ public class PreLoginHandler {
                 PremiumResolution resolution = premiumResolverService.resolve(username);
                 cacheFromResolution(username, resolution);
                 logger.debug("Background refresh completed for {}", username);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 logger.warn("Background refresh failed for {}: {}", username, e.getMessage());
             }
         });
@@ -183,33 +191,42 @@ public class PreLoginHandler {
      */
     public boolean isNicknameConflict(RegisteredPlayer existingPlayer, boolean isPremium,
                                       boolean existingIsPremium, UUID currentPremiumUuid) {
-        // Conflict scenario 1: Premium player trying to use offline nickname
-        // Conflict scenario 2: Offline player trying to access account in conflict mode
-        if ((isPremium && !existingIsPremium) ||
-                (!isPremium && existingPlayer.getConflictMode())) {
+        if (hasBasicNicknameConflict(existingPlayer, isPremium, existingIsPremium)) {
             return true;
         }
 
-        // Conflict scenario 3: Name sniping — different premium UUID for same nickname
-        if (isPremium && existingIsPremium && currentPremiumUuid != null) {
-            String dbUuidStr = existingPlayer.getPremiumUuid();
-            if (dbUuidStr != null && !dbUuidStr.isEmpty()) {
-                try {
-                    UUID dbUuid = UUID.fromString(dbUuidStr);
-                    if (!dbUuid.equals(currentPremiumUuid)) {
-                        logger.warn("[SECURITY] Name snipe detected for {}: DB UUID={}, Current UUID={}",
-                                existingPlayer.getNickname(), dbUuid, currentPremiumUuid);
-                        return true;
-                    }
-                } catch (IllegalArgumentException e) {
-                    logger.error("[SECURITY] Invalid UUID in database for {}: {}",
-                            existingPlayer.getNickname(), dbUuidStr);
-                    return true;
-                }
-            }
+        return isNameSnipeConflict(existingPlayer, isPremium, existingIsPremium, currentPremiumUuid);
+    }
+
+    private boolean hasBasicNicknameConflict(RegisteredPlayer existingPlayer, boolean isPremium,
+                                             boolean existingIsPremium) {
+        return (isPremium && !existingIsPremium) || (!isPremium && existingPlayer.getConflictMode());
+    }
+
+    private boolean isNameSnipeConflict(RegisteredPlayer existingPlayer, boolean isPremium,
+                                        boolean existingIsPremium, UUID currentPremiumUuid) {
+        if (!isPremium || !existingIsPremium || currentPremiumUuid == null) {
+            return false;
         }
 
-        return false;
+        String dbUuidStr = existingPlayer.getPremiumUuid();
+        if (dbUuidStr == null || dbUuidStr.isEmpty()) {
+            return false;
+        }
+
+        try {
+            UUID dbUuid = UUID.fromString(dbUuidStr);
+            if (!dbUuid.equals(currentPremiumUuid)) {
+                logger.warn("[SECURITY] Name snipe detected for {}: DB UUID={}, Current UUID={}",
+                        existingPlayer.getNickname(), dbUuid, currentPremiumUuid);
+                return true;
+            }
+            return false;
+        } catch (IllegalArgumentException e) {
+            logger.error("[SECURITY] Invalid UUID in database for {}: {}",
+                    existingPlayer.getNickname(), dbUuidStr);
+            return true;
+        }
     }
 
     /**
@@ -245,76 +262,41 @@ public class PreLoginHandler {
                                        boolean isPremium, UUID currentPremiumUuid) {
         String username = event.getUsername();
 
-        // Case 1: Name sniping — premium player with DIFFERENT UUID than DB record
-        if (isPremium && currentPremiumUuid != null && existingPlayer.getPremiumUuid() != null) {
-            try {
-                UUID dbUuid = UUID.fromString(existingPlayer.getPremiumUuid());
-                if (!dbUuid.equals(currentPremiumUuid)) {
-                    logger.error("[SECURITY BREACH] Name snipe BLOCKED for {}: " +
-                                    "DB owner UUID={}, Attacker UUID={}",
-                            username, dbUuid, currentPremiumUuid);
-                    event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                            net.kyori.adventure.text.Component.text(
-                                    messages.get("security.name_snipe.denied"),
-                                    net.kyori.adventure.text.format.NamedTextColor.RED)));
-                    return;
-                }
-            } catch (IllegalArgumentException ignored) {
-                // Invalid UUID in DB — fall through to other conflict handling
-            }
+        if (shouldDenyNameSnipe(existingPlayer, isPremium, currentPremiumUuid)) {
+            denyNameSnipe(event, username, existingPlayer, currentPremiumUuid);
+            return;
         }
 
         if (isPremium && existingPlayer.getPremiumUuid() == null) {
-            // Case 2: Premium player trying to use offline nickname
             markAsConflicted(existingPlayer, username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+            return;
+        }
 
-        } else if (!isPremium && existingPlayer.getConflictMode()) {
-            // Case 3: Offline player accessing conflicted account
+        if (!isPremium && existingPlayer.getConflictMode()) {
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
             logger.debug("[NICKNAME CONFLICT] Offline player {} accessing conflicted account", username);
         }
     }
 
-    public void handleNicknameConflictNoEvent(String username, RegisteredPlayer existingPlayer,
-                                               boolean isPremium, UUID currentPremiumUuid) {
-        // Name sniping — log but can't deny without event
-        if (isPremium && currentPremiumUuid != null && existingPlayer.getPremiumUuid() != null) {
-            try {
-                UUID dbUuid = UUID.fromString(existingPlayer.getPremiumUuid());
-                if (!dbUuid.equals(currentPremiumUuid)) {
-                    logger.error("[SECURITY BREACH] Name snipe detected (no-event) for {}: " +
-                                    "DB owner UUID={}, Attacker UUID={}",
-                            username, dbUuid, currentPremiumUuid);
-                    return;
-                }
-            } catch (IllegalArgumentException ignored) {
-                // Invalid UUID in DB
-            }
-        }
-
-        if (isPremium && existingPlayer.getPremiumUuid() == null) {
-            markAsConflicted(existingPlayer, username);
-        } else if (!isPremium && existingPlayer.getConflictMode()) {
-            logger.debug("[NICKNAME CONFLICT] Offline player {} accessing conflicted account", username);
-        }
+    private boolean shouldDenyNameSnipe(RegisteredPlayer existingPlayer, boolean isPremium, UUID currentPremiumUuid) {
+        return isPremium && currentPremiumUuid != null && existingPlayer.getPremiumUuid() != null;
     }
 
-    /**
-     * Resolves premium status via service with timeout.
-     *
-     * @param username Username to resolve
-     * @return PremiumResolution result
-     */
-    private PremiumResolution resolveViaServiceWithTimeout(String username) {
+    private void denyNameSnipe(PreLoginEvent event, String username, RegisteredPlayer existingPlayer,
+                               UUID currentPremiumUuid) {
         try {
-            return CompletableFuture.supplyAsync(() -> premiumResolverService.resolve(username))
-                    .orTimeout(1500, TimeUnit.MILLISECONDS)
-                    .exceptionally(throwable -> PremiumResolution.offline(username, "VeloAuth-Timeout",
-                            "Timeout - fallback to offline"))
-                    .join();
-        } catch (Exception e) {
-            return PremiumResolution.offline(username, "VeloAuth-Error", "Error - fallback to offline");
+            UUID dbUuid = UUID.fromString(existingPlayer.getPremiumUuid());
+            if (!dbUuid.equals(currentPremiumUuid)) {
+                logger.error("[SECURITY BREACH] Name snipe BLOCKED for {}: DB owner UUID={}, Attacker UUID={}",
+                        username, dbUuid, currentPremiumUuid);
+                event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                        net.kyori.adventure.text.Component.text(
+                                messages.get("security.name_snipe.denied"),
+                                net.kyori.adventure.text.format.NamedTextColor.RED)));
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Invalid UUID in DB — fall through to other conflict handling
         }
     }
 
@@ -331,13 +313,14 @@ public class PreLoginHandler {
             String canonical = resolution.canonicalUsername() != null ? resolution.canonicalUsername() : username;
             authCache.addPremiumPlayer(canonical, premiumUuid);
             if (logger.isInfoEnabled()) {
-                logger.info(messages.get("player.premium.confirmed", username, resolution.source(), premiumUuid));
+                logger.info("Premium player {} confirmed (source: {}, UUID: {})",
+                        username, resolution.source(), premiumUuid);
             }
             return new PremiumResolutionResult(true, premiumUuid);
         }
         if (resolution.isOffline()) {
             authCache.addPremiumPlayer(username, null);
-            logger.debug("{} nie jest premium (resolver: {}, info: {})", username, resolution.source(),
+            logger.debug("{} is not premium (resolver: {}, info: {})", username, resolution.source(),
                     resolution.message());
             return new PremiumResolutionResult(false, null);
         }
@@ -346,7 +329,7 @@ public class PreLoginHandler {
         // Hybrid approach: DB cache was already checked in PremiumResolverService.resolve(),
         // so reaching here means this is a new player with no cached premium status.
         // Deny login for security — cannot verify premium status.
-        logger.error("[SECURITY] Cannot verify premium status for {} — all API resolvers failed " +
+        logger.error("[SECURITY] Cannot verify premium status for {} - all API resolvers failed " +
                 "(resolver: {}, info: {}). Login denied for safety.",
                 username, resolution.source(), resolution.message());
         return null;

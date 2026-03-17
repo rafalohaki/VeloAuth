@@ -21,6 +21,8 @@ import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.i18n.Messages;
+import net.rafalohaki.veloauth.util.FloodgateDetector;
+import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
@@ -132,6 +134,12 @@ public class AuthListener {
         return "UUID mismatch";
     }
 
+    private boolean isBedrockPlayer(Player player) {
+        return settings.isFloodgateIntegrationEnabled()
+                && settings.isFloodgateBypassAuthServerEnabled()
+                && FloodgateDetector.isBedrockPlayer(player.getUniqueId());
+    }
+
 
 
     /**
@@ -150,7 +158,7 @@ public class AuthListener {
     public EventTask onPreLogin(PreLoginEvent event) {
         String username = event.getUsername();
         if (logger.isDebugEnabled()) {
-            logger.debug("\uD83D\uDD0D PreLogin: {}", username);
+            logger.debug("PreLogin: {}", username);
         }
 
         if (!validatePreLoginConditions(event, username)) {
@@ -158,7 +166,7 @@ public class AuthListener {
         }
 
         if (!settings.isPremiumCheckEnabled()) {
-            logger.debug("Premium check wyłączony w konfiguracji - wymuszam offline mode dla {}", username);
+            logger.debug("Premium check disabled in config - forcing offline mode for {}", username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
             return null;
         }
@@ -181,7 +189,7 @@ public class AuthListener {
 
     private boolean validatePluginInitialized(PreLoginEvent event, String username) {
         if (!plugin.isInitialized()) {
-            logger.warn("🔒 STARTUP BLOCK: Player {} tried to connect before VeloAuth fully initialized - PreLogin block", username);
+            logger.warn("STARTUP BLOCK: Player {} tried to connect before VeloAuth fully initialized - PreLogin block", username);
             String msg = messages != null ? messages.get("system.starting") : "VeloAuth is starting. Please wait.";
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(Component.text(msg, NamedTextColor.RED)));
             return false;
@@ -232,48 +240,82 @@ public class AuthListener {
      */
     private CompletableFuture<Void> handlePremiumDetectionAsync(PreLoginEvent event, String username) {
         return preLoginHandler.resolvePremiumStatusAsync(username)
-                .thenCompose(result -> {
-                    // Hybrid API failure handling: null means all resolvers failed AND no DB cache
-                    if (result == null) {
-                        logger.error("[SECURITY] Login DENIED for {} — cannot verify premium status (all API resolvers failed)",
-                                username);
-                        event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                                Component.text(messages.get("security.api_failure.denied"), NamedTextColor.RED)));
-                        return CompletableFuture.completedFuture(null);
-                    }
-
-                    boolean premium = result.premium();
-                    UUID currentPremiumUuid = result.premiumUuid();
-
-                    // Async DB lookup — no .join(), chains via thenAccept
-                    return databaseManager.findPlayerByUuidOrNickname(username, currentPremiumUuid)
-                            .thenAccept(dbResult -> {
-                                RegisteredPlayer existingPlayer = dbResult.getValue();
-
-                                if (existingPlayer != null) {
-                                    boolean existingIsPremium = databaseManager.isPlayerPremiumRuntime(existingPlayer);
-
-                                    if (preLoginHandler.isNicknameConflict(existingPlayer, premium,
-                                            existingIsPremium, currentPremiumUuid)) {
-                                        preLoginHandler.handleNicknameConflict(event, existingPlayer,
-                                                premium, currentPremiumUuid);
-                                        return;
-                                    }
-                                }
-
-                                if (premium) {
-                                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
-                                } else {
-                                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-                                }
-                            });
-                })
+                .thenCompose(result -> handlePremiumResolutionResult(event, username, result))
                 .exceptionally(throwable -> {
-                    logger.error("[ASYNC] Error during premium detection for {}: {}",
-                            username, throwable.getMessage());
+                    logger.error("[ASYNC] Error during premium detection for {}",
+                            username, throwable);
                     event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
                     return null;
                 });
+    }
+
+    private CompletableFuture<Void> handlePremiumResolutionResult(
+            PreLoginEvent event, String username, PreLoginHandler.PremiumResolutionResult result) {
+        if (result == null) {
+            denyLoginOnApiFailure(event, username);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return databaseManager.findPlayerByUuidOrNickname(username, result.premiumUuid())
+                .thenAccept(dbResult -> applyPremiumDetectionResult(event, username, result, dbResult));
+    }
+
+    private void denyLoginOnApiFailure(PreLoginEvent event, String username) {
+        logger.error("[SECURITY] Login DENIED for {} - cannot verify premium status (all API resolvers failed)",
+                username);
+        event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                Component.text(messages.get("security.api_failure.denied"), NamedTextColor.RED)));
+    }
+
+    private void applyPremiumDetectionResult(
+            PreLoginEvent event,
+            String username,
+            PreLoginHandler.PremiumResolutionResult result,
+            DbResult<RegisteredPlayer> dbResult) {
+        if (dbResult == null || dbResult.isDatabaseError()) {
+            handlePremiumLookupDatabaseError(event, username, dbResult);
+            return;
+        }
+
+        if (hasNicknameConflict(event, result, dbResult.getValue())) {
+            return;
+        }
+
+        setPremiumLoginMode(event, result.premium());
+    }
+
+    private void handlePremiumLookupDatabaseError(
+            PreLoginEvent event, String username, DbResult<RegisteredPlayer> dbResult) {
+        logger.error("[DATABASE] Premium detection DB lookup failed for {}: {}",
+                username, dbResult != null ? dbResult.getErrorMessage() : "null result");
+        event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+    }
+
+    private boolean hasNicknameConflict(
+            PreLoginEvent event,
+            PreLoginHandler.PremiumResolutionResult result,
+            RegisteredPlayer existingPlayer) {
+        if (existingPlayer == null) {
+            return false;
+        }
+
+        boolean existingIsPremium = databaseManager.isPlayerPremiumRuntime(existingPlayer);
+        if (!preLoginHandler.isNicknameConflict(existingPlayer, result.premium(), existingIsPremium,
+                result.premiumUuid())) {
+            return false;
+        }
+
+        preLoginHandler.handleNicknameConflict(event, existingPlayer, result.premium(), result.premiumUuid());
+        return true;
+    }
+
+    private void setPremiumLoginMode(PreLoginEvent event, boolean premium) {
+        if (premium) {
+            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
+            return;
+        }
+
+        event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
     }
 
 
@@ -292,47 +334,34 @@ public class AuthListener {
         UUID playerUuid = player.getUniqueId();
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
 
-        boolean allowed = true;
-        try {
-            // CRITICAL SECURITY: Block login attempts until plugin is fully initialized
-            if (!plugin.isInitialized()) {
-                logger.warn(
-                        "🔒 STARTUP BLOCK: Player {} tried to login before VeloAuth fully initialized - login block",
-                        playerName);
-                // Use English fallback - Messages not available yet
-                event.setResult(ComponentResult.denied(
-                        Component.text(messages.get("system.starting"),
-                                NamedTextColor.RED)));
-                return;
-            }
+        // CRITICAL SECURITY: Block login attempts until plugin is fully initialized
+        if (!plugin.isInitialized()) {
+            logger.warn(
+                "STARTUP BLOCK: Player {} tried to login before VeloAuth fully initialized - login block",
+                playerName);
+            // Use English fallback - Messages not available yet
+            event.setResult(ComponentResult.denied(
+                Component.text(messages.get("system.starting"),
+                    NamedTextColor.RED)));
+            return;
+        }
 
-            logger.debug("LoginEvent dla gracza {} (UUID: {}) z IP {}",
-                    playerName, playerUuid, playerIp);
+        logger.debug("LoginEvent for player {} (UUID: {}) from IP {}",
+            playerName, playerUuid, playerIp);
 
-            // 1. Check brute force block
-            InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
-            if (playerAddress != null && authCache.isBlocked(playerAddress)) {
-                logger.warn(SECURITY_MARKER, "Blocked connection for player {} - too many failed login attempts",
-                        playerName);
-
-                event.setResult(ComponentResult.denied(
-                        Component.text(messages.get("security.brute_force.blocked"), NamedTextColor.RED)));
-                return;
-            }
-
-            // Premium check został przeniesiony do PreLoginEvent
-
-        } catch (Exception e) {
-            logger.error("Error handling LoginEvent for player: {}", event.getPlayer().getUsername(), e);
+        // 1. Check brute force block
+        InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
+        if (playerAddress != null && authCache.isBlocked(playerAddress)) {
+            logger.warn(SECURITY_MARKER, "Blocked connection for player {} - too many failed login attempts",
+                playerName);
 
             event.setResult(ComponentResult.denied(
-                    Component.text(messages.get("connection.error.generic"), NamedTextColor.RED)));
-            allowed = false;
+                Component.text(messages.get("security.brute_force.blocked"), NamedTextColor.RED)));
+            return;
         }
 
-        if (allowed) {
-            event.setResult(ComponentResult.allowed());
-        }
+        // Premium check został przeniesiony do PreLoginEvent
+        event.setResult(ComponentResult.allowed());
     }
 
     /**
@@ -341,22 +370,17 @@ public class AuthListener {
      */
     @Subscribe(priority = 0) // NORMAL priority
     public void onDisconnect(DisconnectEvent event) {
-        try {
-            Player player = event.getPlayer();
+        Player player = event.getPlayer();
 
-            // ✅ SESJE TRWAŁE: Nie kończ sesji przy rozłączeniu
-            // Sesje powinny być trwałe dla autoryzowanych graczy offline
-            // Kończymy tylko przy /logout, timeout lub banie
-            
-            // Cleanup retry attempts counter to prevent memory leak
-            connectionManager.clearRetryAttempts(player.getUniqueId());
+        // ✅ SESJE TRWAŁE: Nie kończ sesji przy rozłączeniu
+        // Sesje powinny być trwałe dla autoryzowanych graczy offline
+        // Kończymy tylko przy /logout, timeout lub banie
 
-            if (logger.isDebugEnabled()) {
-                logger.debug("Gracz {} rozłączył się - sesja pozostaje aktywna", player.getUsername());
-            }
+        // Cleanup retry attempts counter to prevent memory leak
+        connectionManager.clearRetryAttempts(player.getUniqueId());
 
-        } catch (Exception e) {
-            logger.error("Błąd podczas obsługi DisconnectEvent dla gracza: {}", event.getPlayer().getUsername(), e);
+        if (logger.isDebugEnabled()) {
+            logger.debug("Player {} disconnected - session remains active", player.getUsername());
         }
     }
 
@@ -369,7 +393,7 @@ public class AuthListener {
         Player player = event.getPlayer();
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
 
-        logger.debug("PostLoginEvent dla gracza {} z IP {}",
+        logger.debug("PostLoginEvent for player {} with IP {}",
                 player.getUsername(), playerIp);
 
         // DEFENSE-IN-DEPTH: Verify handlers are initialized
@@ -383,16 +407,16 @@ public class AuthListener {
 
         try {
             // 🔥 USE_OFFLINE: Check for conflict resolution messages - delegate to PostLoginHandler
-            // ASYNC: Run in separate task to avoid blocking event loop with DB operations
-            plugin.getServer().getScheduler().buildTask(plugin, () -> {
+            // ASYNC: Run on virtual thread to avoid blocking Netty IO threads
+            VirtualThreadExecutorProvider.submitTask(() -> {
                 try {
                     if (postLoginHandler.shouldShowConflictMessage(player)) {
                         postLoginHandler.showConflictResolutionMessage(player);
                     }
-                } catch (Exception e) {
+                } catch (java.util.concurrent.CompletionException e) {
                     logger.error("Error checking conflict message for {}", player.getUsername(), e);
                 }
-            }).schedule();
+            });
 
             // Delegate to PostLoginHandler based on player mode
             if (player.isOnlineMode()) {
@@ -403,7 +427,7 @@ public class AuthListener {
             // Handle offline player - delegate to PostLoginHandler
             postLoginHandler.handleOfflinePlayer(player, playerIp);
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Error handling PostLoginEvent for player: {}", event.getPlayer().getUsername(), e);
 
             event.getPlayer().disconnect(Component.text(
@@ -416,40 +440,47 @@ public class AuthListener {
      * Obsługuje event przed połączeniem z serwerem.
      * Blokuje nieautoryzowane połączenia z serwerami backend.
      * <p>
-     * KRYTYCZNE: Używamy async = false + maksymalny priorytet dla bezpieczeństwa
-     * Zapobiega obejściu autoryzacji przez race conditions
+     * KRYTYCZNE: Używamy maksymalny priorytet dla bezpieczeństwa.
+     * Zapobiega obejściu autoryzacji przez race conditions.
      * <p>
      * FLOW dla nowych graczy (pierwszego połączenia):
      * - Velocity próbuje połączyć z pierwszym serwerem z listy try (np. 2b2t)
      * - My przechwytujemy i przekierowujemy na auth server
      * - Po połączeniu z auth server, onServerConnected uruchomi auto-transfer
+     * <p>
+     * ASYNC: Returns {@link EventTask} (or null for synchronous fast-paths) to avoid
+     * blocking Netty IO threads. Backend connection verification performs a database
+     * UUID lookup and is therefore executed asynchronously via
+     * {@link EventTask#resumeWhenComplete(java.util.concurrent.CompletableFuture)}.
+     * Velocity suspends event processing until the returned future completes.
      */
     @Subscribe(priority = Short.MAX_VALUE)
-    public void onServerPreConnect(ServerPreConnectEvent event) {
+    public EventTask onServerPreConnect(ServerPreConnectEvent event) {
         try {
             Player player = event.getPlayer();
             // NAPRAWIONE: Używamy getOriginalServer() zamiast getTarget()
             // getOriginalServer() to INPUT field (dokąd gracz chce iść)
             String targetServerName = event.getOriginalServer().getServerInfo().getName();
 
-            logger.debug("ServerPreConnectEvent dla gracza {} -> serwer {}",
+                logger.debug("ServerPreConnectEvent for player {} -> server {}",
                     player.getUsername(), targetServerName);
 
             if (handleFirstConnection(event, player, targetServerName)) {
-                return;
+                return null;
             }
 
             // ✅ JEŚLI TO AUTH SERVER - SPRAWDŹ DODATKOWO AUTORYZACJĘ
             if (handleAuthServerConnection(event, player, targetServerName)) {
-                return;
+                return null;
             }
 
-            // ✅ JEŚLI TO BACKEND - SPRAWDŹ AUTORYZACJĘ + SESJĘ + CACHE
-            verifyBackendConnection(event, player, targetServerName);
+            // ✅ JEŚLI TO BACKEND - SPRAWDŹ AUTORYZACJĘ + SESJĘ + CACHE (async)
+            return EventTask.resumeWhenComplete(verifyBackendConnectionAsync(event, player, targetServerName));
 
-        } catch (Exception e) {
-            logger.error("Błąd w ServerPreConnect", e);
+        } catch (RuntimeException e) {
+            logger.error("Error in ServerPreConnect", e);
             event.setResult(ServerPreConnectEvent.ServerResult.denied());
+            return null;
         }
     }
 
@@ -462,7 +493,17 @@ public class AuthListener {
             
             // Jeśli cel to już auth server - pozwól
             if (targetServerName.equals(authServerName)) {
-                logger.debug("Pierwsze połączenie {} -> auth server - pozwalam", player.getUsername());
+                logger.debug("First connection {} -> auth server - allowing", player.getUsername());
+                return true;
+            }
+
+            // ✅ BEDROCK/FLOODGATE: Skip auth server for Bedrock players.
+            // Floodgate already authenticated the player via Xbox Live during the handshake
+            // phase, before this event fires. Redirecting to limbo causes
+            // ClientboundLevelChunkWithLightPacket translation failures in Geyser.
+            if (isBedrockPlayer(player)) {
+                logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
+                        player.getUsername(), targetServerName);
                 return true;
             }
             
@@ -474,7 +515,7 @@ public class AuthListener {
             // Przekieruj na auth server zamiast backend
             Optional<RegisteredServer> authServer = plugin.getServer().getServer(authServerName);
             if (authServer.isPresent()) {
-                logger.debug("Pierwsze połączenie {} -> {} - przekierowuję na auth server (forced host target saved)", 
+                logger.debug("First connection {} -> {} - redirecting to auth server (forced host target saved)",
                         player.getUsername(), targetServerName);
                 event.setResult(ServerPreConnectEvent.ServerResult.allowed(authServer.get()));
             } else {
@@ -495,19 +536,25 @@ public class AuthListener {
             boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
             if (isAuthorized) {
                 // AUTORYZOWANY GRACZ NA AUTH SERVER - przekieruj na backend
-                logger.debug("Autoryzowany gracz {} próbuje iść na auth server - przekierowuję na backend",
+                logger.debug("Authorized player {} tried to go to auth server - redirecting to backend",
                         player.getUsername());
                 event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                // Velocity automatycznie przekieruje na inny serwer
+                connectionManager.autoTransferFromAuthServerToBackend(player);
             } else {
-                logger.debug("Auth server - pozwól (gracz nie jest autoryzowany)");
+                logger.debug("Auth server - allowing unauthenticated player");
             }
             return true;
         }
         return false;
     }
 
-    private void verifyBackendConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
+    private CompletableFuture<Void> verifyBackendConnectionAsync(ServerPreConnectEvent event, Player player, String targetServerName) {
+        if (isBedrockPlayer(player)) {
+            logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
+                    player.getUsername(), targetServerName);
+            return CompletableFuture.completedFuture(null);
+        }
+
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
         boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
 
@@ -515,16 +562,17 @@ public class AuthListener {
         boolean hasActiveSession = authCache.hasActiveSession(player.getUniqueId(), player.getUsername(),
                 playerIp);
 
-        // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa - delegate to handler
-        boolean uuidMatches = uuidVerificationHandler.verifyPlayerUuid(player);
-
-        if (!isAuthorized || !hasActiveSession || !uuidMatches) {
-            handleUnauthorizedConnection(event, player, targetServerName, isAuthorized, hasActiveSession, uuidMatches, playerIp);
-        } else {
-            // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
-            logger.debug("\u2705 Autoryzowany gracz {} idzie na {} (sesja: OK, UUID: OK)",
-                    player.getUsername(), targetServerName);
-        }
+        // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa - async, no IO thread blocking
+        return uuidVerificationHandler.verifyPlayerUuid(player)
+                .thenAccept(uuidMatches -> {
+                    if (!isAuthorized || !hasActiveSession || !uuidMatches) {
+                        handleUnauthorizedConnection(event, player, targetServerName, isAuthorized, hasActiveSession, uuidMatches, playerIp);
+                    } else {
+                        // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
+                        logger.debug("Authorized player {} heading to {} (session: OK, UUID: OK)",
+                                player.getUsername(), targetServerName);
+                    }
+                });
     }
 
     private void handleUnauthorizedConnection(ServerPreConnectEvent event, Player player, String targetServerName,
@@ -533,7 +581,8 @@ public class AuthListener {
         String reason = resolveBlockReason(isAuthorized, hasActiveSession);
 
         if (logger.isDebugEnabled()) {
-            logger.debug(messages.get("player.blocked.unauthorized", player.getUsername(), targetServerName, reason, playerIp));
+            logger.debug("Blocked unauthorized backend access for {} -> {} (reason: {}, ip: {})",
+                    player.getUsername(), targetServerName, reason, playerIp);
         }
 
         event.setResult(ServerPreConnectEvent.ServerResult.denied());
@@ -571,7 +620,7 @@ public class AuthListener {
             } else {
                 handleAuthServerConnection(player);
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Error in ServerConnected", e);
         }
     }
@@ -600,7 +649,7 @@ public class AuthListener {
 
     private void triggerAutoTransfer(Player player) {
         if (logger.isDebugEnabled()) {
-            logger.debug("Gracz {} jest zweryfikowany w cache - uruchamiam auto-transfer na backend",
+                logger.debug("Player {} is verified in cache - starting auto-transfer to backend",
                     player.getUsername());
         }
         connectionManager.autoTransferFromAuthServerToBackend(player);

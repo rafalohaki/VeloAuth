@@ -181,7 +181,11 @@ public final class SimpleMessages {
     }
 
     public Component connectionErrorGameServer() {
-        return key("connection.error.game_server", NamedTextColor.RED);
+        return connectionErrorGameServer(messages.get("error.unknown"));
+    }
+
+    public Component connectionErrorGameServer(String reason) {
+        return key("connection.error.game_server", NamedTextColor.RED, reason);
     }
 
     public Component connectionErrorNoServers() {
