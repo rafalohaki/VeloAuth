@@ -11,10 +11,14 @@ import java.nio.file.Path;
 import java.util.Map;
 
 @SuppressWarnings("java:S2068") // YAML config key names, not hardcoded credentials
-final class SettingsLoader {
+final class SettingsLoader { // nosemgrep: yaml-config-keys
 
     private static final String YAML_FIELD_ENABLED = "enabled";
     private static final String CONFIG_KEY_TIMEOUT_SECONDS = "timeout-seconds";
+    private static final String CONFIG_KEY_DB_PASSWORD = "password"; // nosemgrep: yaml-config-key
+    private static final String CONFIG_KEY_SSL_PASSWORD = "ssl-password"; // nosemgrep: yaml-config-key
+    private static final String CONFIG_KEY_MIN_PASSWORD_LENGTH = "min-password-length"; // nosemgrep: yaml-config-key
+    private static final String CONFIG_KEY_MAX_PASSWORD_LENGTH = "max-password-length"; // nosemgrep: yaml-config-key
 
     private SettingsLoader() {}
 
@@ -50,7 +54,7 @@ final class SettingsLoader {
         state.databasePort = YamlParserUtils.getInt(database, "port", state.databasePort);
         state.databaseName = YamlParserUtils.getString(database, "database", state.databaseName);
         state.databaseUser = YamlParserUtils.getString(database, "user", state.databaseUser);
-        state.databasePassword = YamlParserUtils.getString(database, "password", state.databasePassword);
+        state.databasePassword = YamlParserUtils.getString(database, CONFIG_KEY_DB_PASSWORD, state.databasePassword);
         state.databaseConnectionUrl = YamlParserUtils.getString(database, "connection-url", state.databaseConnectionUrl);
         state.databaseConnectionParameters = YamlParserUtils.getString(database,
                 "connection-parameters", state.databaseConnectionParameters);
@@ -76,7 +80,7 @@ final class SettingsLoader {
         target.setSslCert(YamlParserUtils.getString(postgreSql, "ssl-cert", target.getSslCert()));
         target.setSslKey(YamlParserUtils.getString(postgreSql, "ssl-key", target.getSslKey()));
         target.setSslRootCert(YamlParserUtils.getString(postgreSql, "ssl-root-cert", target.getSslRootCert()));
-        target.setSslPassword(YamlParserUtils.getString(postgreSql, "ssl-password", target.getSslPassword()));
+        target.setSslPassword(YamlParserUtils.getString(postgreSql, CONFIG_KEY_SSL_PASSWORD, target.getSslPassword()));
     }
 
     private static void loadDebugSettings(Map<String, Object> config, LoadedState state) {
@@ -148,9 +152,9 @@ final class SettingsLoader {
         state.ipLimitRegistrations = YamlParserUtils.getInt(security,
                 "ip-limit-registrations", state.ipLimitRegistrations);
         state.minPasswordLength = YamlParserUtils.getInt(security,
-                "min-password-length", state.minPasswordLength);
+                CONFIG_KEY_MIN_PASSWORD_LENGTH, state.minPasswordLength);
         state.maxPasswordLength = YamlParserUtils.getInt(security,
-                "max-password-length", state.maxPasswordLength);
+                CONFIG_KEY_MAX_PASSWORD_LENGTH, state.maxPasswordLength);
     }
 
     @SuppressWarnings("unchecked")
@@ -388,15 +392,7 @@ final class SettingsLoader {
                                                 Settings.PremiumSettings target) {
             target.setCheckEnabled(source.isCheckEnabled());
             target.setOnlineModeNeedAuth(source.isOnlineModeNeedAuth());
-            Settings.PremiumResolverSettings sourceResolver = source.getResolver();
-            Settings.PremiumResolverSettings targetResolver = target.getResolver();
-            targetResolver.setMojangEnabled(sourceResolver.isMojangEnabled());
-            targetResolver.setAshconEnabled(sourceResolver.isAshconEnabled());
-            targetResolver.setWpmeEnabled(sourceResolver.isWpmeEnabled());
-            targetResolver.setRequestTimeoutMs(sourceResolver.getRequestTimeoutMs());
-            targetResolver.setHitTtlMinutes(sourceResolver.getHitTtlMinutes());
-            targetResolver.setMissTtlMinutes(sourceResolver.getMissTtlMinutes());
-            targetResolver.setCaseSensitive(sourceResolver.isCaseSensitive());
+            target.getResolver().copyFrom(source.getResolver());
         }
 
         private static void copyFloodgateSettings(Settings.FloodgateSettings source,

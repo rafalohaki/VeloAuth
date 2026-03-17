@@ -165,15 +165,7 @@ public class Settings {
     private void copyPremiumSettings(PremiumSettings source) {
         premiumSettings.setCheckEnabled(source.isCheckEnabled());
         premiumSettings.setOnlineModeNeedAuth(source.isOnlineModeNeedAuth());
-        PremiumResolverSettings sourceResolver = source.getResolver();
-        PremiumResolverSettings targetResolver = premiumSettings.getResolver();
-        targetResolver.setMojangEnabled(sourceResolver.isMojangEnabled());
-        targetResolver.setAshconEnabled(sourceResolver.isAshconEnabled());
-        targetResolver.setWpmeEnabled(sourceResolver.isWpmeEnabled());
-        targetResolver.setRequestTimeoutMs(sourceResolver.getRequestTimeoutMs());
-        targetResolver.setHitTtlMinutes(sourceResolver.getHitTtlMinutes());
-        targetResolver.setMissTtlMinutes(sourceResolver.getMissTtlMinutes());
-        targetResolver.setCaseSensitive(sourceResolver.isCaseSensitive());
+        premiumSettings.getResolver().copyFrom(source.getResolver());
     }
 
     private void copyFloodgateSettings(FloodgateSettings source) {
@@ -394,6 +386,16 @@ public class Settings {
         void setMissTtlMinutes(int value) { this.missTtlMinutes = value; }
         public boolean isCaseSensitive() { return caseSensitive; }
         void setCaseSensitive(boolean value) { this.caseSensitive = value; }
+
+        void copyFrom(PremiumResolverSettings source) {
+            this.mojangEnabled = source.mojangEnabled;
+            this.ashconEnabled = source.ashconEnabled;
+            this.wpmeEnabled = source.wpmeEnabled;
+            this.requestTimeoutMs = source.requestTimeoutMs;
+            this.hitTtlMinutes = source.hitTtlMinutes;
+            this.missTtlMinutes = source.missTtlMinutes;
+            this.caseSensitive = source.caseSensitive;
+        }
     }
 
     /**
