@@ -34,7 +34,7 @@ public class MetricsCollector {
     private final AtomicLong premiumChecks = new AtomicLong(0);
 
     // Database metrics
-    private volatile long lastDatabaseHealthCheck = 0;
+    private final AtomicLong lastDatabaseHealthCheck = new AtomicLong(0);
     private volatile boolean databaseHealthy = false;
 
     public MetricsCollector(VeloAuth plugin, DatabaseManager databaseManager, AuthCache authCache) {
@@ -80,7 +80,7 @@ public class MetricsCollector {
     // Database health tracking
     public void updateDatabaseHealth(boolean healthy) {
         this.databaseHealthy = healthy;
-        this.lastDatabaseHealthCheck = System.currentTimeMillis();
+        this.lastDatabaseHealthCheck.set(System.currentTimeMillis());
     }
 
     /**
@@ -162,7 +162,7 @@ public class MetricsCollector {
 
         metrics.append("# HELP veloauth_database_last_health_check_timestamp Timestamp of last database health check (Unix epoch milliseconds)\n");
         metrics.append("# TYPE veloauth_database_last_health_check_timestamp gauge\n");
-        metrics.append("veloauth_database_last_health_check_timestamp ").append(lastDatabaseHealthCheck).append("\n\n");
+        metrics.append("veloauth_database_last_health_check_timestamp ").append(lastDatabaseHealthCheck.get()).append("\n\n");
 
         metrics.append("# HELP veloauth_database_cache_size Current database cache size\n");
         metrics.append("# TYPE veloauth_database_cache_size gauge\n");

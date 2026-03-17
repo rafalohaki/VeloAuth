@@ -132,15 +132,24 @@ public class PostLoginHandler {
      * @return true if player is in conflict mode and is premium
      */
     public boolean shouldShowConflictMessage(Player player) {
-        RegisteredPlayer registeredPlayer = databaseManager.findPlayerWithRuntimeDetection(player.getUsername())
-                .join().getValue();
-        
-        if (registeredPlayer == null || !registeredPlayer.getConflictMode()) {
+        try {
+            var dbResult = databaseManager.findPlayerWithRuntimeDetection(player.getUsername()).join();
+            if (dbResult == null || dbResult.isDatabaseError()) {
+                logger.debug("Cannot check conflict message for {} - DB error", player.getUsername());
+                return false;
+            }
+
+            RegisteredPlayer registeredPlayer = dbResult.getValue();
+            if (registeredPlayer == null || !registeredPlayer.getConflictMode()) {
+                return false;
+            }
+
+            return Optional.ofNullable(authCache.getPremiumStatus(player.getUsername()))
+                    .map(PremiumCacheEntry::isPremium)
+                    .orElse(false);
+        } catch (Exception e) {
+            logger.error("Error checking conflict message for {}", player.getUsername(), e);
             return false;
         }
-
-        return Optional.ofNullable(authCache.getPremiumStatus(player.getUsername()))
-                .map(PremiumCacheEntry::isPremium)
-                .orElse(false);
     }
 }

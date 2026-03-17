@@ -249,6 +249,12 @@ public class AuthListener {
                     // Async DB lookup — no .join(), chains via thenAccept
                     return databaseManager.findPlayerByUuidOrNickname(username, currentPremiumUuid)
                             .thenAccept(dbResult -> {
+                                if (dbResult == null || dbResult.isDatabaseError()) {
+                                    logger.error("[DATABASE] Premium detection DB lookup failed for {}: {}",
+                                            username, dbResult != null ? dbResult.getErrorMessage() : "null result");
+                                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+                                    return;
+                                }
                                 RegisteredPlayer existingPlayer = dbResult.getValue();
 
                                 if (existingPlayer != null) {
@@ -270,8 +276,8 @@ public class AuthListener {
                             });
                 })
                 .exceptionally(throwable -> {
-                    logger.error("[ASYNC] Error during premium detection for {}: {}",
-                            username, throwable.getMessage());
+                    logger.error("[ASYNC] Error during premium detection for {}",
+                            username, throwable);
                     event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
                     return null;
                 });

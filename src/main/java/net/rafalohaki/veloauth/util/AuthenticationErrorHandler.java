@@ -67,7 +67,7 @@ public final class AuthenticationErrorHandler {
                 storedUuid != null ? storedUuid : "null",
                 storedPremiumUuid != null ? storedPremiumUuid : "null",
                 dbPlayer != null ? dbPlayer.getConflictMode() : "unknown",
-                player.getRemoteAddress().getAddress().getHostAddress());
+                PlayerAddressUtils.getPlayerIp(player));
         
         // Cache invalidation for security (Requirement 8.2)
         if (logger.isDebugEnabled()) {

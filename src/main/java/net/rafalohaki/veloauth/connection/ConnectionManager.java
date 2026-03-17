@@ -454,7 +454,7 @@ public class ConnectionManager {
         if (e.getCause() instanceof TimeoutException && handleTimeoutRetry(player, targetServer, serverName, attempts)) {
             return true;
         }
-        logger.error("Error transferring player {} to server {}: {}", player.getUsername(), serverName, e.getMessage());
+        logger.error("Error transferring player {} to server {}", player.getUsername(), serverName, e);
         sendErrorMessage(player);
         return false;
     }
