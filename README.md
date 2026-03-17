@@ -20,6 +20,7 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🔒 **Intelligent Nickname Protection** - Premium nicknames are reserved unless already registered by cracked players
 - ⚡ **Premium Auto-Login** - Mojang account owners skip authentication automatically  
 - 🛡️ **Secure Offline Auth** - BCrypt password hashing with brute-force protection
+- 📱 **Optional Floodgate Support** - Bedrock players can bypass the auth server when Floodgate integration is enabled
 - 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
 - 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are completely hidden from tab-completion once the player is logged in
 - 🚀 **High Performance** - Authorization cache with 24-hour premium status caching
@@ -45,8 +46,10 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 1. Download VeloAuth from Modrinth
 2. Place the file in your Velocity `plugins/` folder
 3. Start Velocity - the plugin will create a `config.yml` file
-4. Stop Velocity and configure your database and limbo name in `plugins/VeloAuth/config.yml` 
+4. Stop Velocity and configure your database and auth server name in `plugins/VeloAuth/config.yml`
 5. Restart Velocity
+
+**Note:** Floodgate support is disabled by default. Enable it only if you actually use Geyser/Floodgate.
 
 ### Velocity Config
 
@@ -68,6 +71,27 @@ try = ["lobby", "survival"]  # Order matters. Do NOT put 'limbo' here.
 ```
 
 **Important:** The `try` configuration controls where authenticated players are redirected by default. VeloAuth automatically skips the `limbo` server and selects the first available backend server, **unless** the player used a `forced-host` domain, in which case they are natively routed to their intended destination!
+
+### VeloAuth Config
+
+Minimal auth server configuration in `plugins/VeloAuth/config.yml`:
+
+```yaml
+auth-server:
+  server-name: limbo
+  timeout-seconds: 300
+```
+
+Optional Floodgate integration:
+
+```yaml
+floodgate:
+  enabled: true
+  username-prefix: "."
+  bypass-auth-server: true
+```
+
+Keep the Floodgate prefix aligned with your proxy-side Floodgate configuration.
 
 ### Discord Webhooks
 
@@ -100,7 +124,7 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 ### Authentication Flow
 1. **Player connects** to Velocity
 2. **VeloAuth checks** authorization cache
-3. If **not cached**, player is sent to the **auth server** (limbo)
+3. If **not cached**, player is sent to the **auth server** unless premium auto-login or Floodgate Bedrock bypass applies
 4. **Nickname protection** activates during registration
 5. Player types **/login** or **/register**
 6. **VeloAuth verifies** credentials with BCrypt
