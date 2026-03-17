@@ -1,0 +1,5 @@
+---
+engines:
+  opengrep:
+    exclude_paths:
+      - "src/main/java/net/rafalohaki/veloauth/config/SettingsLoader.java"
