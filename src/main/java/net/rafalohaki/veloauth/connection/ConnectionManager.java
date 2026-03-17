@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.CompletableFuture;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -22,7 +23,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.LockSupport;
 
 /**
  * Manager połączeń i transferów graczy między serwerami.
@@ -88,27 +88,30 @@ public class ConnectionManager {
      * @return true jeśli transfer się udał
      */
     public boolean transferToAuthServer(Player player) {
-        try {
-            RegisteredServer targetServer = validateAndGetAuthServer(player);
-            if (targetServer == null) {
-                return false;
-            }
-
-            if (logger.isDebugEnabled()) {
-                logger.debug(messages.get("player.transfer.attempt", player.getUsername()));
-            }
-
-            return executeAuthServerTransfer(player, targetServer);
-
-        } catch (Exception e) {
-            return handleTransferError(player, e);
-        }
+        return transferToAuthServerAsync(player).join();
     }
 
     /** @deprecated Use {@link #transferToAuthServer(Player)} instead. */
     @Deprecated(since = "1.1.0", forRemoval = true)
     public boolean transferToPicoLimbo(Player player) {
         return transferToAuthServer(player);
+    }
+
+    public CompletableFuture<Boolean> transferToAuthServerAsync(Player player) {
+        try {
+            RegisteredServer targetServer = validateAndGetAuthServer(player);
+            if (targetServer == null) {
+                return CompletableFuture.completedFuture(false);
+            }
+
+            if (logger.isDebugEnabled()) {
+                logger.debug(messages.get("player.transfer.attempt", player.getUsername()));
+            }
+
+            return executeAuthServerTransferAsync(player, targetServer);
+        } catch (Exception e) {
+            return CompletableFuture.completedFuture(handleTransferError(player, e));
+        }
     }
     
     private RegisteredServer validateAndGetAuthServer(Player player) {
@@ -144,41 +147,27 @@ public class ConnectionManager {
      * @param targetServer Serwer docelowy auth
      * @return true jeśli transfer się udał
      */
-    private boolean executeAuthServerTransfer(Player player, RegisteredServer targetServer) {
-        try {
-            // Ensure auth server is ready before connecting using Ping check
-            // This prevents race conditions better than a blind sleep
-            if (!waitForAuthServerReady(targetServer) && logger.isWarnEnabled()) {
-                logger.warn("Auth server not responding to ping after retries - attempting connection anyway...");
-            }
+    private CompletableFuture<Boolean> executeAuthServerTransferAsync(Player player, RegisteredServer targetServer) {
+        return waitForAuthServerReadyAsync(targetServer, 0)
+                .thenCompose(ready -> {
+                    if (!ready && logger.isWarnEnabled()) {
+                        logger.warn("Auth server not responding to ping after retries - attempting connection anyway...");
+                    }
 
-            var result = player.createConnectionRequest(targetServer)
-                    .connect()
-                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
-                    .join();  // Czekaj na zakończenie transferu
+                    return player.createConnectionRequest(targetServer)
+                            .connect()
+                            .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
+                            .handle((result, throwable) -> handleAuthServerTransferResult(player, result, throwable));
+                });
+    }
 
-            if (result.isSuccessful()) {
-                if (logger.isDebugEnabled()) {
-                    logger.debug(messages.get("player.transfer.success", player.getUsername()));
-                }
-                return true;
-            } else {
-                if (logger.isWarnEnabled()) {
-                    logger.warn("❌ Transfer {} to auth server FAILED: {}",
-                            player.getUsername(),
-                            result.getReasonComponent().orElse(createUnknownErrorComponent()));
-                }
-
-                player.sendMessage(Component.text(
-                        messages.get("connection.error.auth_connect"),
-                        NamedTextColor.RED
-                ));
-                return false;
-            }
-        } catch (Exception e) {
+    private boolean handleAuthServerTransferResult(Player player,
+                                                   com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result result,
+                                                   Throwable throwable) {
+        if (throwable != null) {
             if (logger.isErrorEnabled()) {
                 logger.error("Error transferring player {} to auth server: {}",
-                        player.getUsername(), e.getMessage(), e);
+                        player.getUsername(), throwable.getMessage(), throwable);
             }
 
             player.sendMessage(Component.text(
@@ -187,27 +176,61 @@ public class ConnectionManager {
             ));
             return false;
         }
+
+        if (result != null && result.isSuccessful()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug(messages.get("player.transfer.success", player.getUsername()));
+            }
+            return true;
+        }
+
+        if (logger.isWarnEnabled()) {
+            logger.warn("❌ Transfer {} to auth server FAILED: {}",
+                    player.getUsername(),
+                    result != null ? result.getReasonComponent().orElse(createUnknownErrorComponent()) : createUnknownErrorComponent());
+        }
+
+        player.sendMessage(Component.text(
+                messages.get("connection.error.auth_connect"),
+                NamedTextColor.RED
+        ));
+        return false;
     }
 
-    private boolean waitForAuthServerReady(RegisteredServer targetServer) {
-        // Attempt to ping server 3 times with small delays
-        for (int attempt = 0; attempt < 3; attempt++) {
-            try {
-                // Short timeout for ping check
-                var ping = targetServer.ping()
-                        .orTimeout(1, TimeUnit.SECONDS)
-                        .join();
-                if (ping != null) {
-                    return true;
-                }
-            } catch (Exception ignored) {
-                // Ping failed, retry
-            }
-            
-            // Small delay between attempts using LockSupport (thread-safe sleep)
-            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(50));
+    private CompletableFuture<Boolean> waitForAuthServerReadyAsync(RegisteredServer targetServer, int attempt) {
+        if (attempt >= 3) {
+            return CompletableFuture.completedFuture(false);
         }
-        return false;
+
+        return targetServer.ping()
+                .orTimeout(1, TimeUnit.SECONDS)
+                .handle((ping, throwable) -> ping != null)
+                .thenCompose(ready -> {
+                    if (ready) {
+                        return CompletableFuture.completedFuture(true);
+                    }
+                    if (attempt >= 2) {
+                        return CompletableFuture.completedFuture(false);
+                    }
+                    return scheduleAuthServerReadyRetry(targetServer, attempt + 1);
+                });
+    }
+
+    private CompletableFuture<Boolean> scheduleAuthServerReadyRetry(RegisteredServer targetServer, int nextAttempt) {
+        CompletableFuture<Boolean> retryFuture = new CompletableFuture<>();
+        plugin.getServer().getScheduler().buildTask(plugin, () ->
+                waitForAuthServerReadyAsync(targetServer, nextAttempt)
+                        .whenComplete((ready, throwable) -> completeAsyncResult(retryFuture, ready, throwable))
+        ).delay(50, TimeUnit.MILLISECONDS).schedule();
+        return retryFuture;
+    }
+
+    private <T> void completeAsyncResult(CompletableFuture<T> future, T value, Throwable throwable) {
+        if (throwable != null) {
+            future.completeExceptionally(throwable);
+            return;
+        }
+        future.complete(value);
     }
 
     /**
@@ -668,8 +691,8 @@ public class ConnectionManager {
             // Clear timeout retry flag
             timeoutRetryScheduled.remove(player.getUniqueId());
 
-            // Transfer na auth server
-            transferToAuthServer(player);
+            // Transfer na auth server bez blokowania wątku wywołującego.
+            transferToAuthServerAsync(player);
 
             player.sendMessage(Component.text(
                     messages.get("auth.logged_out"),

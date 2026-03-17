@@ -7,7 +7,6 @@ import com.j256.ormlite.jdbc.JdbcConnectionSource;
 import com.j256.ormlite.support.ConnectionSource;
 import com.j256.ormlite.support.DatabaseConnection;
 import net.rafalohaki.veloauth.i18n.Messages;
-import net.rafalohaki.veloauth.model.PremiumUuid;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -335,10 +334,10 @@ public class DatabaseManager {
             return DbResult.success(byUuid);
         } catch (SQLException e) {
             if (logger.isErrorEnabled()) {
-                logger.error(DB_MARKER, "Error during UUID-based player lookup for {}: {}",
-                        premiumUuid, e.getMessage());
+                logger.error(DB_MARKER, "Error during UUID-based player lookup for {}",
+                        premiumUuid, e);
             }
-            return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+            return genericDatabaseErrorResult();
         }
     }
 
@@ -440,7 +439,15 @@ public class DatabaseManager {
         if (logger.isErrorEnabled()) {
             logger.error(DB_MARKER, "Error searching for player: {}", normalizedNickname, e);
         }
-        return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+        return genericDatabaseErrorResult();
+    }
+
+    private String genericDatabaseErrorMessage() {
+        return messages.get(DATABASE_ERROR);
+    }
+
+    private <T> DbResult<T> genericDatabaseErrorResult() {
+        return DbResult.databaseError(genericDatabaseErrorMessage());
     }
 
     /**
@@ -491,7 +498,7 @@ public class DatabaseManager {
             if (logger.isErrorEnabled()) {
                 logger.error(DB_MARKER, "Error saving player: {}", player.getNickname(), e);
             }
-            return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+            return genericDatabaseErrorResult();
         }
     }
     
@@ -568,7 +575,7 @@ public class DatabaseManager {
             if (logger.isErrorEnabled()) {
                 logger.error(DB_MARKER, "Error deleting player: {}", lowercaseNickname, e);
             }
-            return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+            return genericDatabaseErrorResult();
         }
     }
 
@@ -598,7 +605,7 @@ public class DatabaseManager {
                 if (logger.isErrorEnabled()) {
                     logger.error(DB_MARKER, "Runtime error checking premium status for player: {}", username, e);
                 }
-                return DbResult.databaseError(messages.get(DATABASE_ERROR) + ": " + e.getMessage());
+                return genericDatabaseErrorResult();
             }
         }, dbExecutor);
     }
@@ -701,12 +708,7 @@ public class DatabaseManager {
                 return 0;
             }
             try {
-                boolean postgres = DatabaseType.POSTGRESQL.getName().equalsIgnoreCase(config.getStorageType());
-                String auth = postgres ? "\"AUTH\"" : "AUTH";
-                String hash = postgres ? "\"HASH\"" : "HASH";
-                String sql = "SELECT COUNT(*) FROM " + auth + WHERE_CLAUSE + hash + " IS NOT NULL";
-
-                return executeCountQuery(sql);
+                return executeCountQuery(buildCountQuery(quotedColumn("HASH") + " IS NOT NULL"));
             } catch (SQLException e) {
                 if (logger.isErrorEnabled()) {
                     logger.error(DB_MARKER, "Error counting non-premium accounts", e);
@@ -714,6 +716,26 @@ public class DatabaseManager {
                 return 0;
             }
         }, dbExecutor);
+    }
+
+    private String buildCountQuery(String whereClause) {
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ").append(quotedTable("AUTH"));
+        if (whereClause != null && !whereClause.isBlank()) {
+            sql.append(WHERE_CLAUSE).append(whereClause);
+        }
+        return sql.toString();
+    }
+
+    private String quotedTable(String tableName) {
+        return isPostgresStorage() ? '"' + tableName + '"' : tableName;
+    }
+
+    private String quotedColumn(String columnName) {
+        return isPostgresStorage() ? '"' + columnName + '"' : columnName;
+    }
+
+    private boolean isPostgresStorage() {
+        return DatabaseType.POSTGRESQL.getName().equalsIgnoreCase(config.getStorageType());
     }
 
     @SuppressWarnings("java:S2077")
@@ -734,26 +756,36 @@ public class DatabaseManager {
     }
 
     public CompletableFuture<Integer> getTotalRegisteredAccounts() {
-        return getAllPlayers().thenApply(Collection::size)
-                .exceptionally(e -> {
-                    if (logger.isErrorEnabled()) {
-                        logger.error(DB_MARKER, "Error getting total registered accounts", e);
-                    }
-                    return 0;
-                });
+        return CompletableFuture.supplyAsync(() -> {
+            if (!connected) {
+                return 0;
+            }
+            try {
+                return executeCountQuery(buildCountQuery(null));
+            } catch (SQLException e) {
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Error getting total registered accounts", e);
+                }
+                return 0;
+            }
+        }, dbExecutor);
     }
 
     public CompletableFuture<Integer> getTotalPremiumAccounts() {
-        return getAllPlayers().thenApply(players ->
-                (int) players.stream()
-                        .filter(player -> player.getPremiumUuid() != null || player.getHash() == null)
-                        .count()
-        ).exceptionally(e -> {
-            if (logger.isErrorEnabled()) {
-                logger.error(DB_MARKER, "Error getting total premium accounts", e);
+        return CompletableFuture.supplyAsync(() -> {
+            if (!connected) {
+                return 0;
             }
-            return 0;
-        });
+            try {
+                String whereClause = quotedColumn("PREMIUMUUID") + " IS NOT NULL OR " + quotedColumn("HASH") + " IS NULL";
+                return executeCountQuery(buildCountQuery(whereClause));
+            } catch (SQLException e) {
+                if (logger.isErrorEnabled()) {
+                    logger.error(DB_MARKER, "Error getting total premium accounts", e);
+                }
+                return 0;
+            }
+        }, dbExecutor);
     }
 
     // ===== Runtime Detection =====
