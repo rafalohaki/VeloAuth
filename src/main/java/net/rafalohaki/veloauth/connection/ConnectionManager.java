@@ -572,8 +572,7 @@ public class ConnectionManager {
             CompletableFuture<Boolean>[] pings = candidates.stream()
                     .map(server -> server.ping()
                             .orTimeout(2, TimeUnit.SECONDS)
-                            .thenApply(result -> true)
-                            .exceptionally(ex -> false))
+                        .handle((ignored, ex) -> ex == null))
                     .toArray(CompletableFuture[]::new);
 
             CompletableFuture.allOf(pings).join();

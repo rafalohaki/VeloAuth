@@ -272,24 +272,6 @@ public class PreLoginHandler {
     }
 
     /**
-     * Resolves premium status via service with timeout.
-     *
-     * @param username Username to resolve
-     * @return PremiumResolution result
-     */
-    private PremiumResolution resolveViaServiceWithTimeout(String username) {
-        try {
-            return CompletableFuture.supplyAsync(() -> premiumResolverService.resolve(username))
-                    .orTimeout(1500, TimeUnit.MILLISECONDS)
-                    .exceptionally(throwable -> PremiumResolution.offline(username, "VeloAuth-Timeout",
-                            "Timeout - fallback to offline"))
-                    .join();
-        } catch (Exception e) {
-            return PremiumResolution.offline(username, "VeloAuth-Error", "Error - fallback to offline");
-        }
-    }
-
-    /**
      * Caches premium resolution result.
      *
      * @param username   Username
