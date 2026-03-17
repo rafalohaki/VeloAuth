@@ -38,7 +38,7 @@ public class Settings {
     private final AlertSettings alertSettings = new AlertSettings();
     @SuppressWarnings("java:S2068")
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
-    private static final String CONFIG_KEY_ENABLED = "enabled";
+    private static final String YAML_FIELD_ENABLED = "enabled";
     @SuppressWarnings("java:S2068")
     private static final String CONFIG_KEY_TIMEOUT_SECONDS = "timeout-seconds";
     
@@ -275,7 +275,7 @@ public class Settings {
         if (alertSection instanceof Map<?, ?>) {
             @SuppressWarnings("unchecked")
             Map<String, Object> alerts = (Map<String, Object>) alertSection;
-            alertSettings.setEnabled(YamlParserUtils.getBoolean(alerts, CONFIG_KEY_ENABLED, alertSettings.isEnabled()));
+            alertSettings.setEnabled(YamlParserUtils.getBoolean(alerts, YAML_FIELD_ENABLED, alertSettings.isEnabled()));
             alertSettings.setFailureRateThreshold(YamlParserUtils.getDouble(alerts, "failure-rate-threshold", alertSettings.getFailureRateThreshold()));
             alertSettings.setMinRequestsForAlert(YamlParserUtils.getInt(alerts, "min-requests-for-alert", alertSettings.getMinRequestsForAlert()));
             alertSettings.setCheckIntervalMinutes(YamlParserUtils.getInt(alerts, "check-interval-minutes", alertSettings.getCheckIntervalMinutes()));
@@ -285,7 +285,7 @@ public class Settings {
             if (discordSection instanceof Map<?, ?>) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> discord = (Map<String, Object>) discordSection;
-                alertSettings.setDiscordEnabled(YamlParserUtils.getBoolean(discord, CONFIG_KEY_ENABLED, alertSettings.isDiscordEnabled()));
+                alertSettings.setDiscordEnabled(YamlParserUtils.getBoolean(discord, YAML_FIELD_ENABLED, alertSettings.isDiscordEnabled()));
                 alertSettings.setDiscordWebhookUrl(YamlParserUtils.getString(discord, "webhook-url", alertSettings.getDiscordWebhookUrl()));
             }
         }
@@ -296,7 +296,7 @@ public class Settings {
         if (floodgateSection instanceof Map<?, ?>) {
             @SuppressWarnings("unchecked")
             Map<String, Object> floodgate = (Map<String, Object>) floodgateSection;
-            floodgateSettings.setEnabled(YamlParserUtils.getBoolean(floodgate, CONFIG_KEY_ENABLED, floodgateSettings.isEnabled()));
+            floodgateSettings.setEnabled(YamlParserUtils.getBoolean(floodgate, YAML_FIELD_ENABLED, floodgateSettings.isEnabled()));
             floodgateSettings.setUsernamePrefix(YamlParserUtils.getString(floodgate, "username-prefix", floodgateSettings.getUsernamePrefix()));
             floodgateSettings.setBypassAuthServer(YamlParserUtils.getBoolean(floodgate,
                     "bypass-auth-server", floodgateSettings.isBypassAuthServer()));

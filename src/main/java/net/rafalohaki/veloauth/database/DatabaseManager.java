@@ -105,6 +105,18 @@ public class DatabaseManager {
         }
     }
 
+    void setConnectedForTesting(boolean connected) {
+        this.connected = connected;
+    }
+
+    void setJdbcAuthDaoForTesting(JdbcAuthDao jdbcAuthDao) {
+        this.jdbcAuthDao = jdbcAuthDao;
+    }
+
+    void setPremiumUuidDaoForTesting(PremiumUuidDao premiumUuidDao) {
+        this.premiumUuidDao = premiumUuidDao;
+    }
+
     /**
      * Inicjalizuje połączenie z bazą danych i tworzy tabele.
      *

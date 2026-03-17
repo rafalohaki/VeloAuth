@@ -6,7 +6,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.sql.SQLException;
 import java.util.UUID;
 
@@ -56,8 +55,8 @@ class DatabaseManagerTest {
         when(jdbcAuthDao.findPlayerByLowercaseNickname("alice"))
                 .thenThrow(new SQLException("sensitive SQL details"));
 
-        setField("connected", true);
-        setField("jdbcAuthDao", jdbcAuthDao);
+        manager.setConnectedForTesting(true);
+        manager.setJdbcAuthDaoForTesting(jdbcAuthDao);
 
         DatabaseManager.DbResult<RegisteredPlayer> result = manager.findPlayerByNickname("Alice").join();
 
@@ -72,8 +71,8 @@ class DatabaseManagerTest {
         when(jdbcAuthDao.upsertPlayer(org.mockito.ArgumentMatchers.any(RegisteredPlayer.class)))
                 .thenThrow(new SQLException("jdbc:h2:mem:secret"));
 
-        setField("connected", true);
-        setField("jdbcAuthDao", jdbcAuthDao);
+        manager.setConnectedForTesting(true);
+        manager.setJdbcAuthDaoForTesting(jdbcAuthDao);
 
         DatabaseManager.DbResult<Boolean> result = manager.savePlayer(player("SaveUser", "$2a$10$offlinehashvalueofflinehashvalueofflinehashval", null)).join();
 
@@ -88,8 +87,8 @@ class DatabaseManagerTest {
         when(premiumUuidDao.findByNickname("Alice"))
                 .thenThrow(new RuntimeException("org.h2.jdbc.JdbcSQLSyntaxErrorException: leaked details"));
 
-        setField("connected", true);
-        setField("premiumUuidDao", premiumUuidDao);
+        manager.setConnectedForTesting(true);
+        manager.setPremiumUuidDaoForTesting(premiumUuidDao);
 
         DatabaseManager.DbResult<Boolean> result = manager.isPremium("Alice").join();
 
@@ -115,9 +114,4 @@ class DatabaseManagerTest {
         assertEquals(Boolean.TRUE, result.getValue());
     }
 
-    private void setField(String fieldName, Object value) throws Exception {
-        Field field = DatabaseManager.class.getDeclaredField(fieldName);
-        field.setAccessible(true);
-        field.set(manager, value);
-    }
 }
