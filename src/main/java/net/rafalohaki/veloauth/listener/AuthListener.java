@@ -233,54 +233,82 @@ public class AuthListener {
      */
     private CompletableFuture<Void> handlePremiumDetectionAsync(PreLoginEvent event, String username) {
         return preLoginHandler.resolvePremiumStatusAsync(username)
-                .thenCompose(result -> {
-                    // Hybrid API failure handling: null means all resolvers failed AND no DB cache
-                    if (result == null) {
-                        logger.error("[SECURITY] Login DENIED for {} — cannot verify premium status (all API resolvers failed)",
-                                username);
-                        event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                                Component.text(messages.get("security.api_failure.denied"), NamedTextColor.RED)));
-                        return CompletableFuture.completedFuture(null);
-                    }
-
-                    boolean premium = result.premium();
-                    UUID currentPremiumUuid = result.premiumUuid();
-
-                    // Async DB lookup — no .join(), chains via thenAccept
-                    return databaseManager.findPlayerByUuidOrNickname(username, currentPremiumUuid)
-                            .thenAccept(dbResult -> {
-                                if (dbResult == null || dbResult.isDatabaseError()) {
-                                    logger.error("[DATABASE] Premium detection DB lookup failed for {}: {}",
-                                            username, dbResult != null ? dbResult.getErrorMessage() : "null result");
-                                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-                                    return;
-                                }
-                                RegisteredPlayer existingPlayer = dbResult.getValue();
-
-                                if (existingPlayer != null) {
-                                    boolean existingIsPremium = databaseManager.isPlayerPremiumRuntime(existingPlayer);
-
-                                    if (preLoginHandler.isNicknameConflict(existingPlayer, premium,
-                                            existingIsPremium, currentPremiumUuid)) {
-                                        preLoginHandler.handleNicknameConflict(event, existingPlayer,
-                                                premium, currentPremiumUuid);
-                                        return;
-                                    }
-                                }
-
-                                if (premium) {
-                                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
-                                } else {
-                                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-                                }
-                            });
-                })
+                .thenCompose(result -> handlePremiumResolutionResult(event, username, result))
                 .exceptionally(throwable -> {
                     logger.error("[ASYNC] Error during premium detection for {}",
                             username, throwable);
                     event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
                     return null;
                 });
+    }
+
+    private CompletableFuture<Void> handlePremiumResolutionResult(
+            PreLoginEvent event, String username, PreLoginHandler.PremiumResolutionResult result) {
+        if (result == null) {
+            denyLoginOnApiFailure(event, username);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return databaseManager.findPlayerByUuidOrNickname(username, result.premiumUuid())
+                .thenAccept(dbResult -> applyPremiumDetectionResult(event, username, result, dbResult));
+    }
+
+    private void denyLoginOnApiFailure(PreLoginEvent event, String username) {
+        logger.error("[SECURITY] Login DENIED for {} — cannot verify premium status (all API resolvers failed)",
+                username);
+        event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                Component.text(messages.get("security.api_failure.denied"), NamedTextColor.RED)));
+    }
+
+    private void applyPremiumDetectionResult(
+            PreLoginEvent event,
+            String username,
+            PreLoginHandler.PremiumResolutionResult result,
+            DbResult<RegisteredPlayer> dbResult) {
+        if (dbResult == null || dbResult.isDatabaseError()) {
+            handlePremiumLookupDatabaseError(event, username, dbResult);
+            return;
+        }
+
+        if (hasNicknameConflict(event, result, dbResult.getValue())) {
+            return;
+        }
+
+        setPremiumLoginMode(event, result.premium());
+    }
+
+    private void handlePremiumLookupDatabaseError(
+            PreLoginEvent event, String username, DbResult<RegisteredPlayer> dbResult) {
+        logger.error("[DATABASE] Premium detection DB lookup failed for {}: {}",
+                username, dbResult != null ? dbResult.getErrorMessage() : "null result");
+        event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+    }
+
+    private boolean hasNicknameConflict(
+            PreLoginEvent event,
+            PreLoginHandler.PremiumResolutionResult result,
+            RegisteredPlayer existingPlayer) {
+        if (existingPlayer == null) {
+            return false;
+        }
+
+        boolean existingIsPremium = databaseManager.isPlayerPremiumRuntime(existingPlayer);
+        if (!preLoginHandler.isNicknameConflict(existingPlayer, result.premium(), existingIsPremium,
+                result.premiumUuid())) {
+            return false;
+        }
+
+        preLoginHandler.handleNicknameConflict(event, existingPlayer, result.premium(), result.premiumUuid());
+        return true;
+    }
+
+    private void setPremiumLoginMode(PreLoginEvent event, boolean premium) {
+        if (premium) {
+            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
+            return;
+        }
+
+        event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
     }
 
 

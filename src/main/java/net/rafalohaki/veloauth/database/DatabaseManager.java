@@ -15,7 +15,6 @@ import org.slf4j.MarkerFactory;
 
 import java.lang.ref.WeakReference;
 import java.sql.SQLException;
-import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
