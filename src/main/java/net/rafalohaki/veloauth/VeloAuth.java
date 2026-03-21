@@ -1,6 +1,6 @@
 package net.rafalohaki.veloauth;
 
-import com.google.inject.Inject;
+import jakarta.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
@@ -196,9 +196,11 @@ public class VeloAuth {
         // Initialize bStats metrics
         metricsFactory.make(this, BSTATS_PLUGIN_ID);
 
-        // CRITICAL: Set initialized flag to TRUE only after ALL components are ready
-        initialized = true;
+        // CRITICAL: Complete future first so EarlyLoginBlocker queue can drain,
+        // then set flag. Order matters: future.complete() unblocks waiting connections,
+        // but they still go through AuthListener which checks isInitialized().
         initializationFuture.complete(null);
+        initialized = true;
         
         logStartupInfo(initializationDuration);
     }
@@ -472,6 +474,8 @@ public class VeloAuth {
     private void shutdown() {
         // CRITICAL: Set initialized flag to FALSE immediately to reject new operations
         initialized = false;
+        // Complete future exceptionally if still pending (shutdown during init)
+        initializationFuture.completeExceptionally(new IllegalStateException("Plugin shutting down"));
         logger.info("🔴 Initialization flag set to FALSE - blocking all new player connections");
 
         try {
@@ -665,7 +669,7 @@ public class VeloAuth {
      * @return CompletableFuture that completes on successful initialization
      */
     public CompletableFuture<Void> getInitializationFuture() {
-        return initializationFuture;
+        return initializationFuture.copy();
     }
 
     /**

@@ -28,7 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 import java.net.InetAddress;
 import java.util.Optional;
 import java.util.UUID;
@@ -347,9 +347,10 @@ public class AuthListener {
             logger.warn(
                 "STARTUP BLOCK: Player {} tried to login before VeloAuth fully initialized - login block",
                 playerName);
-            // Use English fallback - Messages not available yet
+            // Use English fallback - Messages may not be available yet
+            String msg = messages != null ? messages.get("system.starting") : "VeloAuth is starting. Please wait.";
             event.setResult(ComponentResult.denied(
-                Component.text(messages.get("system.starting"),
+                Component.text(msg,
                     NamedTextColor.RED)));
             return;
         }
