@@ -1,12 +1,16 @@
 package net.rafalohaki.veloauth.command;
 
 import com.velocitypowered.api.proxy.Player;
+import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
+
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Shared post-authentication flow used by both LoginCommand and RegisterCommand.
@@ -38,7 +42,21 @@ final class PostAuthFlow {
         }
 
         boolean isPremium = Boolean.TRUE.equals(premiumResult.getValue());
-        CachedAuthUser cachedUser = CachedAuthUser.fromRegisteredPlayer(player, isPremium);
+
+        // Defense-in-depth: persist PREMIUMUUID for premium players who ended up in offline path
+        UUID premiumUuid = resolvePremiumUuid(ctx, authContext.player());
+        if (isPremium && player.getPremiumUuid() == null && premiumUuid != null) {
+            player.setPremiumUuid(premiumUuid.toString());
+            ctx.databaseManager().savePlayer(player)
+                    .exceptionally(throwable -> {
+                        ctx.logger().error("[PREMIUM] Failed to persist PREMIUMUUID for {}: {}",
+                                authContext.username(), throwable.getMessage());
+                        return null;
+                    });
+            ctx.logger().info("[PREMIUM] Persisted PREMIUMUUID for {} in AUTH table", authContext.username());
+        }
+
+        CachedAuthUser cachedUser = CachedAuthUser.fromRegisteredPlayer(player, isPremium, premiumUuid);
 
         Player p = authContext.player();
         ctx.authCache().addAuthorizedPlayer(p.getUniqueId(), cachedUser);
@@ -53,5 +71,16 @@ final class PostAuthFlow {
 
         ctx.plugin().getConnectionManager().transferToBackend(p);
         return true;
+    }
+
+    /**
+     * Resolves premium UUID from AuthCache for the given player.
+     *
+     * @return premium UUID if available, null otherwise
+     */
+    private static UUID resolvePremiumUuid(CommandContext ctx, Player player) {
+        return Optional.ofNullable(ctx.authCache().getPremiumStatus(player.getUsername()))
+                .map(AuthCache.PremiumCacheEntry::getPremiumUuid)
+                .orElse(null);
     }
 }

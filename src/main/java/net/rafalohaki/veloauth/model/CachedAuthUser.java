@@ -90,6 +90,19 @@ public final class CachedAuthUser {
      * @return CachedAuthUser object
      */
     public static CachedAuthUser fromRegisteredPlayer(RegisteredPlayer player, boolean isPremium) {
+        return fromRegisteredPlayer(player, isPremium, null);
+    }
+
+    /**
+     * Tworzy CachedAuthUser z RegisteredPlayer z opcjonalnym premium UUID.
+     *
+     * @param player      Zarejestrowany gracz
+     * @param isPremium   Status premium gracza
+     * @param premiumUuid Premium UUID z cache (może być null)
+     * @return CachedAuthUser object
+     */
+    public static CachedAuthUser fromRegisteredPlayer(RegisteredPlayer player, boolean isPremium,
+                                                       UUID premiumUuid) {
         if (player == null) {
             throw new IllegalArgumentException("Player nie może być null");
         }
@@ -105,7 +118,7 @@ public final class CachedAuthUser {
                 player.getLoginIp(),
                 player.getLoginDate(),
                 isPremium,
-                null // Premium UUID is now handled separately in PREMIUM_UUIDS table
+                premiumUuid
         );
     }
 

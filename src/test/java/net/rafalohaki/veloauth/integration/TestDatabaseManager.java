@@ -7,6 +7,7 @@ import net.rafalohaki.veloauth.model.RegisteredPlayer;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -20,6 +21,7 @@ class TestDatabaseManager extends DatabaseManager {
     private final Map<String, CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>>> findResults = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<DatabaseManager.DbResult<Boolean>>> premiumResults = new ConcurrentHashMap<>();
     private CompletableFuture<Boolean> initResult = CompletableFuture.completedFuture(true);
+    private CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> uuidOrNicknameResult;
 
     TestDatabaseManager(DatabaseConfig config, Messages messages) {
         super(config, messages);
@@ -72,5 +74,18 @@ class TestDatabaseManager extends DatabaseManager {
     public CompletableFuture<DatabaseManager.DbResult<Boolean>> savePlayer(RegisteredPlayer player) {
         // Mock save operation - always succeeds in tests
         return CompletableFuture.completedFuture(DatabaseManager.DbResult.success(true));
+    }
+
+    void setUuidOrNicknameResult(CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> result) {
+        this.uuidOrNicknameResult = result;
+    }
+
+    @Override
+    public CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> findPlayerByUuidOrNickname(
+            String nickname, UUID premiumUuid) {
+        if (uuidOrNicknameResult != null) {
+            return uuidOrNicknameResult;
+        }
+        return super.findPlayerByUuidOrNickname(nickname, premiumUuid);
     }
 }

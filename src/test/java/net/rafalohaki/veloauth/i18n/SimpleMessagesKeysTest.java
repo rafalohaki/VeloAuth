@@ -85,6 +85,7 @@ class SimpleMessagesKeysTest {
             "connection.error.auth_connect",
             "connection.error.game_server",
             "connection.error.no_servers",
+            "connection.waiting_for_server",
             "connection.connecting",
             "connection.retry",
             "connection.commands.registered",

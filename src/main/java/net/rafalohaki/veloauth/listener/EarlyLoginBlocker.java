@@ -1,5 +1,6 @@
 package net.rafalohaki.veloauth.listener;
 
+import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
 import net.kyori.adventure.text.Component;
@@ -7,49 +8,48 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.VeloAuth;
 import org.slf4j.Logger;
 
+import java.util.concurrent.TimeUnit;
+
 /**
- * Simple early login blocker that prevents connections during VeloAuth initialization.
- * This class is registered BEFORE any other components to ensure players cannot
- * connect before the authentication system is fully ready.
+ * Startup queue for connections arriving before VeloAuth finishes initialization.
+ * Instead of kicking players, holds their PreLogin event until the plugin is ready,
+ * then allows normal processing to continue.
+ * <p>
+ * Timeout: 30 seconds. If init takes longer, the player is denied with a retry message.
  */
 public class EarlyLoginBlocker {
+
+    private static final long INIT_WAIT_TIMEOUT_SECONDS = 30;
 
     private final VeloAuth plugin;
     private final Logger logger;
 
-    /**
-     * Creates a new early login blocker.
-     *
-     * @param plugin VeloAuth plugin instance
-     */
     public EarlyLoginBlocker(VeloAuth plugin) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
     }
 
-    /**
-     * Blocks PreLogin attempts until VeloAuth is fully initialized.
-     * This has the highest priority to ensure it runs before any other handlers.
-     *
-     * @param event PreLoginEvent to potentially block
-     */
     @Subscribe(priority = 100)
-    public void onPreLogin(PreLoginEvent event) {
-        String username = event.getUsername();
-
-        // CRITICAL: Block connections until plugin is fully initialized
-        if (!plugin.isInitialized()) {
-            logger.warn("STARTUP BLOCK: Player {} tried to connect before VeloAuth fully initialized - EarlyLoginBlocker",
-                    username);
-            // Use English fallback - Messages not available during startup
-            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    Component.text("VeloAuth is starting. Please try connecting again in a moment.",
-                            NamedTextColor.RED)
-            ));
-            return;
+    public EventTask onPreLogin(PreLoginEvent event) {
+        if (plugin.isInitialized()) {
+            return null;
         }
 
-        // If initialized, allow normal processing by other handlers
-        logger.debug("EarlyLoginBlocker: VeloAuth initialized, allowing connection for {}", username);
+        String username = event.getUsername();
+        logger.info("STARTUP QUEUE: Player {} is waiting for VeloAuth initialization...", username);
+
+        return EventTask.resumeWhenComplete(
+                plugin.getInitializationFuture()
+                        .orTimeout(INIT_WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        .thenRun(() -> logger.info("STARTUP QUEUE: VeloAuth initialized, releasing {}", username))
+                        .exceptionally(throwable -> {
+                            logger.warn("STARTUP QUEUE: Timed out or init failed for {} - denying connection",
+                                    username);
+                            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                                    Component.text("VeloAuth is starting. Please try connecting again in a moment.",
+                                            NamedTextColor.RED)));
+                            return null;
+                        })
+        );
     }
 }

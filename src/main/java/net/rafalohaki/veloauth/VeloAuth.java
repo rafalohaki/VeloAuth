@@ -72,6 +72,9 @@ public class VeloAuth {
     // - Set to FALSE during shutdown to reject new operations
     private volatile boolean initialized = false;
 
+    // Startup queue: connections arriving during init wait on this future instead of getting kicked
+    private final CompletableFuture<Void> initializationFuture = new CompletableFuture<>();
+
     /**
      * Konstruktor VeloAuth.
      *
@@ -174,6 +177,7 @@ public class VeloAuth {
             logger.error("❌ VeloAuth initialization FAILED after {} ms", initializationDuration, throwable);
             // CRITICAL: Keep initialized flag as FALSE to prevent connections to broken plugin
             logger.warn("⚠️ Initialization flag remains FALSE - all player connections will be blocked");
+            initializationFuture.completeExceptionally(throwable);
             shutdown();
         } else {
             finalizeInitialization(initializationDuration);
@@ -194,6 +198,7 @@ public class VeloAuth {
 
         // CRITICAL: Set initialized flag to TRUE only after ALL components are ready
         initialized = true;
+        initializationFuture.complete(null);
         
         logStartupInfo(initializationDuration);
     }
@@ -651,6 +656,16 @@ public class VeloAuth {
      */
     public boolean isInitialized() {
         return initialized;
+    }
+
+    /**
+     * Returns a future that completes when the plugin is fully initialized.
+     * Used by EarlyLoginBlocker to queue connections during startup.
+     *
+     * @return CompletableFuture that completes on successful initialization
+     */
+    public CompletableFuture<Void> getInitializationFuture() {
+        return initializationFuture;
     }
 
     /**

@@ -1,10 +1,13 @@
 package net.rafalohaki.veloauth.integration;
 
+import com.velocitypowered.api.event.connection.PreLoginEvent;
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
+import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
+import net.rafalohaki.veloauth.listener.AuthListener;
 import net.rafalohaki.veloauth.listener.PostLoginHandler;
 import net.rafalohaki.veloauth.listener.PreLoginHandler;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
@@ -491,5 +494,108 @@ class AuthenticationFlowIntegrationTest {
                         "Player " + i + " should be authorized");
             }
         }, "Concurrent operations should not cause exceptions");
+    }
+
+    /**
+     * Test: Premium player with DB error during pre-login should be DENIED, not forced offline.
+     * Reproduces the bug where a premium player gets forceOfflineMode on DB error,
+     * then registers with a wrong (offline) UUID, permanently corrupting their account.
+     */
+    @Test
+    void testPremiumPlayer_dbErrorDuringPreLogin_shouldDenyNotForceOffline() throws Exception {
+        // Setup: premium player confirmed by resolver
+        String username = "PremiumDBError";
+        UUID premiumUuid = UUID.randomUUID();
+        authCache.addPremiumPlayer(username, premiumUuid);
+
+        // DB lookup returns error (simulating timeout/connection failure)
+        databaseManager.setUuidOrNicknameResult(
+                CompletableFuture.completedFuture(
+                        DatabaseManager.DbResult.databaseError("Connection timeout")));
+
+        // Create AuthListener with full dependencies
+        ConnectionManager connectionManager = mock(ConnectionManager.class);
+        PostLoginHandler plHandler = new PostLoginHandler(authCache, databaseManager, messages, logger);
+        setPluginInitialized(true);
+        AuthListener authListener = new AuthListener(
+                plugin, authCache, settings, preLoginHandler, plHandler,
+                connectionManager, databaseManager, messages);
+
+        // Simulate PreLoginEvent
+        com.velocitypowered.api.proxy.InboundConnection connection =
+                mock(com.velocitypowered.api.proxy.InboundConnection.class);
+        when(connection.getRemoteAddress()).thenReturn(
+                new java.net.InetSocketAddress("127.0.0.1", 25565));
+        PreLoginEvent event = new PreLoginEvent(connection, username);
+
+        // Execute pre-login and wait for async completion
+        awaitPreLoginEvent(authListener, event);
+
+        // CRITICAL ASSERTION: Premium player must be DENIED, not forced offline
+        PreLoginEvent.PreLoginComponentResult result = event.getResult();
+        assertFalse(result.isForceOfflineMode(),
+                "Premium player with DB error must NOT be forced to offline mode - this causes UUID corruption");
+        assertFalse(result.isAllowed(),
+                "Premium player with DB error should be denied (not just allowed/offline)");
+    }
+
+    /**
+     * Test: Offline player with DB error during pre-login can still use forceOfflineMode.
+     * Only premium players should be denied on DB error - offline players are already offline.
+     */
+    @Test
+    void testOfflinePlayer_dbErrorDuringPreLogin_shouldForceOffline() throws Exception {
+        // Setup: offline player (not premium)
+        String username = "OfflineDBError";
+        authCache.addPremiumPlayer(username, null); // null UUID = offline
+
+        // DB lookup returns error
+        databaseManager.setUuidOrNicknameResult(
+                CompletableFuture.completedFuture(
+                        DatabaseManager.DbResult.databaseError("Connection timeout")));
+
+        // Create AuthListener
+        ConnectionManager connectionManager = mock(ConnectionManager.class);
+        PostLoginHandler plHandler = new PostLoginHandler(authCache, databaseManager, messages, logger);
+        setPluginInitialized(true);
+        AuthListener authListener = new AuthListener(
+                plugin, authCache, settings, preLoginHandler, plHandler,
+                connectionManager, databaseManager, messages);
+
+        // Simulate PreLoginEvent
+        com.velocitypowered.api.proxy.InboundConnection connection =
+                mock(com.velocitypowered.api.proxy.InboundConnection.class);
+        when(connection.getRemoteAddress()).thenReturn(
+                new java.net.InetSocketAddress("127.0.0.1", 25565));
+        PreLoginEvent event = new PreLoginEvent(connection, username);
+
+        // Execute pre-login and wait for async completion
+        awaitPreLoginEvent(authListener, event);
+
+        // Offline player can safely use forceOfflineMode (they're already offline)
+        PreLoginEvent.PreLoginComponentResult result = event.getResult();
+        assertTrue(result.isForceOfflineMode(),
+                "Offline player with DB error should still use forceOfflineMode - it's safe for them");
+    }
+
+    private void setPluginInitialized(boolean value) throws Exception {
+        java.lang.reflect.Field field = net.rafalohaki.veloauth.VeloAuth.class.getDeclaredField("initialized");
+        field.setAccessible(true);
+        field.set(plugin, value);
+    }
+
+    private void awaitPreLoginEvent(AuthListener authListener, PreLoginEvent event) {
+        com.velocitypowered.api.event.EventTask task = authListener.onPreLogin(event);
+        if (task != null) {
+            try {
+                java.lang.reflect.Field futureField = task.getClass().getDeclaredField("future");
+                futureField.setAccessible(true);
+                ((CompletableFuture<?>) futureField.get(task)).join();
+            } catch (ReflectiveOperationException e) {
+                try { Thread.sleep(500); } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
     }
 }

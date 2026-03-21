@@ -8,6 +8,7 @@
     "kiroAgent.configureMCP": "Enabled",
     "chat.tools.terminal.autoApprove": {
         "jar": true,
-        "mvnd": true
+        "mvnd": true,
+        "javap": true
     }
 }

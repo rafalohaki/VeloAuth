@@ -242,9 +242,10 @@ public class AuthListener {
         return preLoginHandler.resolvePremiumStatusAsync(username)
                 .thenCompose(result -> handlePremiumResolutionResult(event, username, result))
                 .exceptionally(throwable -> {
-                    logger.error("[ASYNC] Error during premium detection for {}",
+                    logger.error("[ASYNC] Error during premium detection for {} - denying login for safety",
                             username, throwable);
-                    event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+                    event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                            Component.text(messages.get("connection.error.database"), NamedTextColor.RED)));
                     return null;
                 });
     }
@@ -273,7 +274,7 @@ public class AuthListener {
             PreLoginHandler.PremiumResolutionResult result,
             DbResult<RegisteredPlayer> dbResult) {
         if (dbResult == null || dbResult.isDatabaseError()) {
-            handlePremiumLookupDatabaseError(event, username, dbResult);
+            handlePremiumLookupDatabaseError(event, username, result.premium(), dbResult);
             return;
         }
 
@@ -285,10 +286,17 @@ public class AuthListener {
     }
 
     private void handlePremiumLookupDatabaseError(
-            PreLoginEvent event, String username, DbResult<RegisteredPlayer> dbResult) {
+            PreLoginEvent event, String username, boolean isPremium, DbResult<RegisteredPlayer> dbResult) {
         logger.error("[DATABASE] Premium detection DB lookup failed for {}: {}",
                 username, dbResult != null ? dbResult.getErrorMessage() : "null result");
-        event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+        if (isPremium) {
+            logger.warn("[SECURITY] Denying premium player {} - DB error would corrupt UUID in offline mode",
+                    username);
+            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                    Component.text(messages.get("connection.error.database"), NamedTextColor.RED)));
+        } else {
+            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+        }
     }
 
     private boolean hasNicknameConflict(

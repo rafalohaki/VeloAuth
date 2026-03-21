@@ -49,6 +49,13 @@ public class ConnectionManager {
     /** Pending transfer tasks per player - allows cancellation on disconnect to prevent race conditions */
     private final Map<UUID, ScheduledTask> pendingTransfers = new ConcurrentHashMap<>();
     
+    /** Backend wait retry tasks per player - allows cancellation on disconnect */
+    private final Map<UUID, ScheduledTask> backendWaitTasks = new ConcurrentHashMap<>();
+    
+    /** Max number of backend wait retries before giving up (5s interval × 60 = 5 minutes) */
+    private static final int MAX_BACKEND_WAIT_RETRIES = 60;
+    private static final long BACKEND_WAIT_INTERVAL_SECONDS = 5;
+    
     /** Forced host targets per player - preserves original intended server through auth flow */
     private final Map<UUID, String> forcedHostTargets = new ConcurrentHashMap<>();
 
@@ -244,12 +251,9 @@ public class ConnectionManager {
             }
 
             if (backendServer.isEmpty()) {
-                logger.error("No available backend servers!");
-
-                player.sendMessage(Component.text(
-                        messages.get("connection.error.no_servers"),
-                        NamedTextColor.RED
-                ));
+                logger.warn("No available backend servers for {} - starting background retry",
+                        player.getUsername());
+                scheduleBackendWaitRetry(player, 0);
                 return false;
             }
 
@@ -422,6 +426,57 @@ public class ConnectionManager {
         plugin.getServer().getScheduler().buildTask(plugin, () ->
                 executeBackendRetryAfterLimbo(player, targetServer, serverName)
         ).delay(300, TimeUnit.MILLISECONDS).schedule();
+    }
+
+    /**
+     * Schedules periodic retries when no backend server is available after authentication.
+     * Player stays on auth/limbo server and gets notified. Retries every 5 seconds up to 5 minutes.
+     */
+    private void scheduleBackendWaitRetry(Player player, int attempt) {
+        UUID playerUuid = player.getUniqueId();
+
+        if (attempt == 0) {
+            player.sendMessage(Component.text(
+                    messages.get("connection.waiting_for_server"),
+                    NamedTextColor.YELLOW));
+        }
+
+        if (attempt >= MAX_BACKEND_WAIT_RETRIES) {
+            backendWaitTasks.remove(playerUuid);
+            logger.warn("Backend wait timeout for {} after {} attempts", player.getUsername(), attempt);
+            player.sendMessage(Component.text(
+                    messages.get("connection.error.no_servers"),
+                    NamedTextColor.RED));
+            return;
+        }
+
+        ScheduledTask task = plugin.getServer().getScheduler().buildTask(plugin, () -> {
+            backendWaitTasks.remove(playerUuid);
+
+            if (!player.isActive()) {
+                return;
+            }
+
+            Optional<RegisteredServer> server = findAvailableBackendServer();
+            if (server.isPresent()) {
+                logger.info("Backend server available for {} after waiting - transferring to {}",
+                        player.getUsername(), server.get().getServerInfo().getName());
+                player.sendMessage(Component.text(
+                        messages.get("connection.connecting"),
+                        NamedTextColor.GREEN));
+                executeBackendTransfer(player, server.get(), server.get().getServerInfo().getName());
+            } else {
+                if (attempt % 6 == 5) {
+                    // Remind every 30 seconds
+                    player.sendMessage(Component.text(
+                            messages.get("connection.waiting_for_server"),
+                            NamedTextColor.YELLOW));
+                }
+                scheduleBackendWaitRetry(player, attempt + 1);
+            }
+        }).delay(BACKEND_WAIT_INTERVAL_SECONDS, TimeUnit.SECONDS).schedule();
+
+        backendWaitTasks.put(playerUuid, task);
     }
 
     private void executeBackendRetryAfterLimbo(Player player, RegisteredServer targetServer, String serverName) {
@@ -788,6 +843,16 @@ public class ConnectionManager {
             }
         }
     }
+
+    private void cancelBackendWaitTask(UUID playerUuid) {
+        ScheduledTask task = backendWaitTasks.remove(playerUuid);
+        if (task != null) {
+            task.cancel();
+            if (logger.isDebugEnabled()) {
+                logger.debug("Anulowano backend wait task dla gracza UUID: {}", playerUuid);
+            }
+        }
+    }
     
     /**
      * Czyści licznik prób i anuluje pending transfers dla gracza (np. przy rozłączeniu).
@@ -800,6 +865,7 @@ public class ConnectionManager {
         timeoutRetryScheduled.remove(playerUuid);
         forcedHostTargets.remove(playerUuid);
         cancelPendingTransfer(playerUuid);
+        cancelBackendWaitTask(playerUuid);
     }
     
     /**
@@ -810,6 +876,10 @@ public class ConnectionManager {
         // Anuluj wszystkie pending transfers
         pendingTransfers.values().forEach(ScheduledTask::cancel);
         pendingTransfers.clear();
+        
+        // Anuluj wszystkie backend wait tasks
+        backendWaitTasks.values().forEach(ScheduledTask::cancel);
+        backendWaitTasks.clear();
         
         // Wyczyść wszystkie mapy stanu
         retryAttempts.clear();
