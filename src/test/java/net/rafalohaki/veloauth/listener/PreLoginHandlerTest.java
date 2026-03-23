@@ -192,8 +192,8 @@ class PreLoginHandlerTest {
         // When: Checking null IP address
         boolean result = handler.isBruteForceBlocked(null);
 
-        // Then: Should not be blocked (safe default)
-        assertFalse(result, "Should handle null IP safely");
+        // Then: Should be blocked (fail-secure: unknown address is suspicious)
+        assertTrue(result, "Should block null IP (fail-secure)");
         verify(authCache, never()).isBlocked(null);
     }
 
