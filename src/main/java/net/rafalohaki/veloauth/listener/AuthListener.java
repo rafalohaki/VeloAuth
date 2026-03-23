@@ -33,6 +33,9 @@ import java.net.InetAddress;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import net.rafalohaki.veloauth.model.CachedAuthUser;
+import net.rafalohaki.veloauth.cache.AuthCache.PremiumCacheEntry;
 
 /**
  * Listener eventów autoryzacji VeloAuth.
@@ -63,6 +66,9 @@ public class AuthListener {
     // Markery SLF4J dla kategoryzowanego logowania
     private static final Marker AUTH_MARKER = MarkerFactory.getMarker("AUTH");
     private static final Marker SECURITY_MARKER = MarkerFactory.getMarker("SECURITY");
+
+    // M8: Guard against duplicate concurrent PreLogin events for the same username
+    private final ConcurrentHashMap<String, Boolean> pendingLogins = new ConcurrentHashMap<>();
 
     private final VeloAuth plugin;
     private final AuthCache authCache;
@@ -140,6 +146,37 @@ public class AuthListener {
                 && FloodgateDetector.isBedrockPlayer(player.getUniqueId());
     }
 
+    /**
+     * Re-authorizes a premium player whose cache entry expired.
+     * Premium players are cryptographically verified by Velocity (Mojang handshake),
+     * so {@code player.isOnlineMode()} is trustworthy and we can safely re-create the cache entry.
+     *
+     * @param player   The premium player to re-authorize
+     * @param playerIp Player's current IP address
+     */
+    private void refreshPremiumAuthorization(Player player, String playerIp) {
+        UUID playerUuid = player.getUniqueId();
+        UUID premiumUuid = Optional.ofNullable(authCache.getPremiumStatus(player.getUsername()))
+                .map(PremiumCacheEntry::getPremiumUuid)
+                .orElse(playerUuid);
+
+        CachedAuthUser cachedUser = new CachedAuthUser(
+                playerUuid,
+                player.getUsername(),
+                playerIp,
+                System.currentTimeMillis(),
+                true,
+                premiumUuid);
+
+        authCache.addAuthorizedPlayer(playerUuid, cachedUser);
+        authCache.startSession(playerUuid, player.getUsername(), playerIp);
+
+        if (logger.isDebugEnabled()) {
+            logger.debug(AUTH_MARKER, "Refreshed premium authorization for {} (expired cache re-created)",
+                    player.getUsername());
+        }
+    }
+
 
 
     /**
@@ -161,17 +198,28 @@ public class AuthListener {
             logger.debug("PreLogin: {}", username);
         }
 
+        // M8: Prevent duplicate concurrent PreLogin events for the same username
+        if (pendingLogins.putIfAbsent(username.toLowerCase(), Boolean.TRUE) != null) {
+            logger.warn(SECURITY_MARKER, "[DUPLICATE PRELOGIN] {} - already connecting, denying", username);
+            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                    Component.text(messages.get("connection.already_connecting"), NamedTextColor.RED)));
+            return null;
+        }
+
         if (!validatePreLoginConditions(event, username)) {
+            pendingLogins.remove(username.toLowerCase());
             return null;
         }
 
         if (!settings.isPremiumCheckEnabled()) {
             logger.debug("Premium check disabled in config - forcing offline mode for {}", username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+            pendingLogins.remove(username.toLowerCase());
             return null;
         }
 
-        return EventTask.resumeWhenComplete(handlePremiumDetectionAsync(event, username));
+        return EventTask.resumeWhenComplete(handlePremiumDetectionAsync(event, username)
+                .whenComplete((result, throwable) -> pendingLogins.remove(username.toLowerCase())));
     }
 
     private boolean validatePreLoginConditions(PreLoginEvent event, String username) {
@@ -549,6 +597,13 @@ public class AuthListener {
                         player.getUsername());
                 event.setResult(ServerPreConnectEvent.ServerResult.denied());
                 connectionManager.autoTransferFromAuthServerToBackend(player);
+            } else if (player.isOnlineMode()) {
+                // H1: Premium player with expired cache — re-authorize and redirect to backend
+                refreshPremiumAuthorization(player, playerIp);
+                logger.debug("Premium player {} re-authorized (expired cache) - redirecting to backend",
+                        player.getUsername());
+                event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                connectionManager.autoTransferFromAuthServerToBackend(player);
             } else {
                 logger.debug("Auth server - allowing unauthenticated player");
             }
@@ -561,6 +616,15 @@ public class AuthListener {
         if (isBedrockPlayer(player)) {
             logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
                     player.getUsername(), targetServerName);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        // H1: Premium players are cryptographically verified by Mojang — never block on expired cache
+        if (player.isOnlineMode()) {
+            String playerIp = PlayerAddressUtils.getPlayerIp(player);
+            if (!authCache.isPlayerAuthorized(player.getUniqueId(), playerIp)) {
+                refreshPremiumAuthorization(player, playerIp);
+            }
             return CompletableFuture.completedFuture(null);
         }
 
@@ -649,6 +713,13 @@ public class AuthListener {
 
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
         if (authCache.isPlayerAuthorized(player.getUniqueId(), playerIp)) {
+            triggerAutoTransfer(player);
+            return;
+        }
+
+        // H1: Premium player landed on auth server with expired cache — re-authorize and transfer
+        if (player.isOnlineMode()) {
+            refreshPremiumAuthorization(player, playerIp);
             triggerAutoTransfer(player);
             return;
         }

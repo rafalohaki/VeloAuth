@@ -91,6 +91,7 @@ class SimpleMessagesKeysTest {
             "connection.commands.registered",
             "connection.manager.initialized",
             "connection.listener.registered",
+            "connection.already_connecting",
             "connection.servers.available",
             "connection.picolimbo.server",
             "connection.picolimbo.found",
