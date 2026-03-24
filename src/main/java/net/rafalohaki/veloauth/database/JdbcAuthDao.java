@@ -24,7 +24,7 @@ import java.util.Objects;
  * directly into SQL queries.
  * </p>
  */
-public final class JdbcAuthDao {
+final class JdbcAuthDao {
 
     private static final Logger logger = LoggerFactory.getLogger(JdbcAuthDao.class);
 
@@ -60,7 +60,7 @@ public final class JdbcAuthDao {
     private String updatePlayerSql;
     private String deletePlayerSql;
 
-    public JdbcAuthDao(DatabaseConfig config) {
+    JdbcAuthDao(DatabaseConfig config) {
         this.config = Objects.requireNonNull(config, "config nie może być null");
         this.postgres = DatabaseType.POSTGRESQL.getName().equalsIgnoreCase(config.getStorageType());
         

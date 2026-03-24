@@ -17,7 +17,7 @@ import java.util.Locale;
  * Handles database schema creation, migration, and index management.
  * Extracted from DatabaseManager for single-responsibility.
  */
-public class DatabaseMigrationService {
+class DatabaseMigrationService {
 
     private static final Logger logger = LoggerFactory.getLogger(DatabaseMigrationService.class);
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
@@ -28,7 +28,7 @@ public class DatabaseMigrationService {
 
     private final DatabaseConfig config;
 
-    public DatabaseMigrationService(DatabaseConfig config) {
+    DatabaseMigrationService(DatabaseConfig config) {
         this.config = config;
     }
 

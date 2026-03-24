@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
  * Manages periodic database health checks (connectivity monitoring).
  * Extracted from DatabaseManager for single-responsibility.
  */
-public class DatabaseHealthCheck {
+class DatabaseHealthCheck {
 
     private static final Logger logger = LoggerFactory.getLogger(DatabaseHealthCheck.class);
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
@@ -26,7 +26,7 @@ public class DatabaseHealthCheck {
     private volatile long lastHealthCheckTime;
     private volatile boolean lastHealthCheckPassed;
 
-    public DatabaseHealthCheck(JdbcAuthDao jdbcAuthDao, Messages messages) {
+    DatabaseHealthCheck(JdbcAuthDao jdbcAuthDao, Messages messages) {
         this.jdbcAuthDao = jdbcAuthDao;
         this.messages = messages;
         this.healthCheckExecutor = Executors.newSingleThreadScheduledExecutor(

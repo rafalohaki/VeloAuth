@@ -7,6 +7,7 @@ import com.j256.ormlite.jdbc.JdbcConnectionSource;
 import com.j256.ormlite.support.ConnectionSource;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
+import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Marker;
@@ -20,8 +21,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -63,7 +62,7 @@ public class DatabaseManager {
     private static final String DATABASE_NOT_CONNECTED = "Database not connected";
     private static final String EXECUTOR_SHUTTING_DOWN = ": Executor is shutting down";
     private static final long FAIL_SECURE_IP_REGISTRATION_COUNT = Long.MAX_VALUE;
-    private static final long EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS = 30L;
+
 
     private final ConcurrentHashMap<String, RegisteredPlayer> playerCache;
     private final ReentrantLock databaseLock;
@@ -98,7 +97,7 @@ public class DatabaseManager {
         this.playerCache = new ConcurrentHashMap<>();
         this.databaseLock = new ReentrantLock();
         this.connected = false;
-        this.dbExecutor = Executors.newVirtualThreadPerTaskExecutor();
+        this.dbExecutor = VirtualThreadExecutorProvider.getVirtualExecutor();
         this.jdbcAuthDao = new JdbcAuthDao(config);
         this.healthCheck = new DatabaseHealthCheck(jdbcAuthDao, messages);
         this.migrationService = new DatabaseMigrationService(config);
@@ -246,8 +245,6 @@ public class DatabaseManager {
         try {
             healthCheck.stop();
             connected = false;
-            dbExecutor.shutdown();
-            awaitExecutorShutdown();
 
             databaseLock.lock();
             try {
@@ -258,21 +255,6 @@ public class DatabaseManager {
         } catch (RuntimeException e) {
             if (logger.isErrorEnabled()) {
                 logger.error(DB_MARKER, "Error during database shutdown", e);
-            }
-        }
-    }
-
-    private void awaitExecutorShutdown() {
-        try {
-            if (!dbExecutor.awaitTermination(EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                    && logger.isWarnEnabled()) {
-                logger.warn(DB_MARKER, "Database executor did not terminate within {} seconds",
-                        EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            if (logger.isWarnEnabled()) {
-                logger.warn(DB_MARKER, "Interrupted while waiting for database executor shutdown");
             }
         }
     }

@@ -27,7 +27,7 @@ import java.util.UUID;
  * 
  * @since 2.1.0
  */
-public class UuidVerificationHandler {
+class UuidVerificationHandler {
 
     private static final Marker SECURITY_MARKER = MarkerFactory.getMarker("SECURITY");
 
@@ -42,7 +42,7 @@ public class UuidVerificationHandler {
      * @param authCache       Authorization cache
      * @param logger          Logger instance
      */
-    public UuidVerificationHandler(DatabaseManager databaseManager, AuthCache authCache, Logger logger) {
+    UuidVerificationHandler(DatabaseManager databaseManager, AuthCache authCache, Logger logger) {
         this.databaseManager = databaseManager;
         this.authCache = authCache;
         this.logger = logger;
