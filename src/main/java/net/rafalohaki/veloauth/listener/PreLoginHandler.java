@@ -102,16 +102,17 @@ public class PreLoginHandler {
     }
 
     /**
-     * Checks if IP address is blocked due to brute force attempts.
+     * Checks if IP address or username is blocked due to brute force attempts.
      *
-     * @param address IP address to check
+     * @param address  IP address to check
+     * @param username Username to check (nullable)
      * @return true if blocked, false otherwise
      */
-    public boolean isBruteForceBlocked(InetAddress address) {
+    public boolean isBruteForceBlocked(InetAddress address, String username) {
         if (address == null) {
             return true; // fail-secure: block when address is unknown
         }
-        return authCache.isBlocked(address);
+        return authCache.isBlocked(address, username);
     }
 
     /**
@@ -313,6 +314,9 @@ public class PreLoginHandler {
                         net.kyori.adventure.text.Component.text(
                                 messages.get("security.name_snipe.denied"),
                                 net.kyori.adventure.text.format.NamedTextColor.RED)));
+            } else {
+                logger.debug("Premium UUID verified for {} — forcing online mode", username);
+                event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
             }
         } catch (IllegalArgumentException ex) {
             logger.error(SECURITY_MARKER, "Malformed UUID for {} in database: {}", username, ex.getMessage());
@@ -352,8 +356,7 @@ public class PreLoginHandler {
         // Hybrid approach: DB cache was already checked in PremiumResolverService.resolve(),
         // so reaching here means this is a new player with no cached premium status.
         // Deny login for security — cannot verify premium status.
-        logger.error("[SECURITY] Cannot verify premium status for {} - all API resolvers failed " +
-                "(resolver: {}, info: {}). Login denied for safety.",
+        logger.error(SECURITY_MARKER, "[SECURITY] Cannot verify premium status for {} - all API resolvers failed (resolver: {}, info: {}). Login denied for safety.",
                 username, resolution.source(), resolution.message());
         return null;
     }

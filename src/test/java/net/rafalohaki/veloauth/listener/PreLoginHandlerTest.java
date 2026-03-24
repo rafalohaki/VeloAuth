@@ -163,38 +163,38 @@ class PreLoginHandlerTest {
     void shouldBlockBruteForceIP() throws UnknownHostException {
         // Given: IP address blocked by brute force protection
         InetAddress blockedIP = InetAddress.getByName("192.168.1.100");
-        when(authCache.isBlocked(blockedIP)).thenReturn(true);
+        when(authCache.isBlocked(blockedIP, null)).thenReturn(true);
 
         // When: Checking if IP is blocked
-        boolean result = handler.isBruteForceBlocked(blockedIP);
+        boolean result = handler.isBruteForceBlocked(blockedIP, null);
 
         // Then: Should be blocked
         assertTrue(result, "Should block brute force IP");
-        verify(authCache, times(1)).isBlocked(blockedIP);
+        verify(authCache, times(1)).isBlocked(blockedIP, null);
     }
 
     @Test
     void shouldAllowNonBlockedIP() throws UnknownHostException {
         // Given: IP address not blocked
         InetAddress allowedIP = InetAddress.getByName("10.0.0.1");
-        when(authCache.isBlocked(allowedIP)).thenReturn(false);
+        when(authCache.isBlocked(allowedIP, null)).thenReturn(false);
 
         // When: Checking if IP is blocked
-        boolean result = handler.isBruteForceBlocked(allowedIP);
+        boolean result = handler.isBruteForceBlocked(allowedIP, null);
 
         // Then: Should not be blocked
         assertFalse(result, "Should allow non-blocked IP");
-        verify(authCache, times(1)).isBlocked(allowedIP);
+        verify(authCache, times(1)).isBlocked(allowedIP, null);
     }
 
     @Test
     void shouldHandleNullIPAddress() {
         // When: Checking null IP address
-        boolean result = handler.isBruteForceBlocked(null);
+        boolean result = handler.isBruteForceBlocked(null, null);
 
         // Then: Should be blocked (fail-secure: unknown address is suspicious)
         assertTrue(result, "Should block null IP (fail-secure)");
-        verify(authCache, never()).isBlocked(null);
+        verify(authCache, never()).isBlocked(null, null);
     }
 
     // ==================== PREMIUM STATUS RESOLUTION TESTS ====================

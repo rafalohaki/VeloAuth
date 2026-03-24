@@ -11,13 +11,16 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Manages brute-force login attempt tracking and IP blocking.
+ * Tracks both per-IP and per-username failed login attempts.
  * Extracted from AuthCache for single-responsibility.
  */
 class BruteForceTracker {
 
     private static final Logger logger = LoggerFactory.getLogger(BruteForceTracker.class);
+    private static final int MAX_USERNAME_MAP_SIZE = 10000;
 
     private final ConcurrentHashMap<InetAddress, BruteForceEntry> bruteForceAttempts;
+    private final ConcurrentHashMap<String, BruteForceEntry> usernameAttempts;
     private final ReentrantLock lock;
     private final int maxLoginAttempts;
     private final int bruteForceTimeoutMinutes;
@@ -25,6 +28,7 @@ class BruteForceTracker {
 
     BruteForceTracker(int maxLoginAttempts, int bruteForceTimeoutMinutes, Messages messages) {
         this.bruteForceAttempts = new ConcurrentHashMap<>();
+        this.usernameAttempts = new ConcurrentHashMap<>();
         this.lock = new ReentrantLock();
         this.maxLoginAttempts = maxLoginAttempts;
         this.bruteForceTimeoutMinutes = bruteForceTimeoutMinutes;
@@ -34,12 +38,14 @@ class BruteForceTracker {
     /**
      * Rejestruje nieudaną próbę logowania.
      *
-     * @param address IP adres
-     * @return true jeśli przekroczono limit prób
+     * @param address  IP adres
+     * @param username nazwa gracza (nullable — skips username tracking when null)
+     * @return true jeśli przekroczono limit prób (IP or username)
      */
-    boolean registerFailedLogin(InetAddress address) {
+    boolean registerFailedLogin(InetAddress address, String username) {
         if (address == null) {
-            return false;
+            logger.warn("Null IP address in registerFailedLogin - treating as blocked");
+            return true;
         }
 
         try {
@@ -56,7 +62,26 @@ class BruteForceTracker {
 
                 entry.incrementAttempts();
 
-                boolean blocked = entry.getAttempts() >= maxLoginAttempts;
+                boolean ipBlocked = entry.getAttempts() >= maxLoginAttempts;
+                boolean usernameBlocked = false;
+
+                if (username != null) {
+                    String lowerUsername = username.toLowerCase(java.util.Locale.ROOT);
+                    enforceUsernameMapSizeLimit();
+                    BruteForceEntry usernameEntry = usernameAttempts.computeIfAbsent(
+                            lowerUsername,
+                            k -> new BruteForceEntry()
+                    );
+
+                    if (usernameEntry.isExpired(bruteForceTimeoutMinutes)) {
+                        usernameEntry.reset();
+                    }
+
+                    usernameEntry.incrementAttempts();
+                    usernameBlocked = usernameEntry.getAttempts() >= maxLoginAttempts;
+                }
+
+                boolean blocked = ipBlocked || usernameBlocked;
                 if (blocked) {
                     if (logger.isWarnEnabled()) {
                         logger.warn(messages.get("cache.warn.ip.blocked"),
@@ -83,48 +108,77 @@ class BruteForceTracker {
     }
 
     /**
-     * Sprawdza czy IP jest zablokowany za brute force.
+     * Sprawdza czy IP lub username jest zablokowany za brute force.
+     *
+     * @param address  IP adres
+     * @param username nazwa gracza (nullable — skips username check when null)
+     * @return true jeśli zablokowany
      */
-    boolean isBlocked(InetAddress address) {
+    boolean isBlocked(InetAddress address, String username) {
         if (address == null) {
-            return false;
+            return true; // fail-closed: unknown IP is blocked
         }
 
         lock.lock();
         try {
-            BruteForceEntry entry = bruteForceAttempts.get(address);
-            if (entry == null) {
-                return false;
+            boolean ipBlocked = isIpBlocked(address);
+
+            if (username != null) {
+                String lowerUsername = username.toLowerCase(java.util.Locale.ROOT);
+                BruteForceEntry usernameEntry = usernameAttempts.get(lowerUsername);
+                if (usernameEntry != null) {
+                    if (usernameEntry.isExpired(bruteForceTimeoutMinutes)) {
+                        usernameAttempts.remove(lowerUsername);
+                    } else if (usernameEntry.getAttempts() >= maxLoginAttempts) {
+                        return true;
+                    }
+                }
             }
 
-            if (entry.isExpired(bruteForceTimeoutMinutes)) {
-                bruteForceAttempts.remove(address);
-                return false;
-            }
-
-            return entry.getAttempts() >= maxLoginAttempts;
+            return ipBlocked;
         } finally {
             lock.unlock();
         }
     }
 
+    private boolean isIpBlocked(InetAddress address) {
+        BruteForceEntry entry = bruteForceAttempts.get(address);
+        if (entry == null) {
+            return false;
+        }
+
+        if (entry.isExpired(bruteForceTimeoutMinutes)) {
+            bruteForceAttempts.remove(address);
+            return false;
+        }
+
+        return entry.getAttempts() >= maxLoginAttempts;
+    }
+
     /**
-     * Resetuje próby logowania dla IP.
+     * Resetuje próby logowania dla IP i username.
+     *
+     * @param address  IP adres
+     * @param username nazwa gracza (nullable — skips username reset when null)
      */
-    void resetLoginAttempts(InetAddress address) {
+    void resetLoginAttempts(InetAddress address, String username) {
         if (address == null) {
             return;
         }
 
         BruteForceEntry removed;
+        BruteForceEntry usernameRemoved = null;
         lock.lock();
         try {
             removed = bruteForceAttempts.remove(address);
+            if (username != null) {
+                usernameRemoved = usernameAttempts.remove(username.toLowerCase(java.util.Locale.ROOT));
+            }
         } finally {
             lock.unlock();
         }
 
-        if (removed != null && logger.isDebugEnabled()) {
+        if ((removed != null || usernameRemoved != null) && logger.isDebugEnabled()) {
             logger.debug(messages.get("cache.debug.reset.attempts"), address.getHostAddress());
         }
     }
@@ -142,13 +196,44 @@ class BruteForceTracker {
         lock.lock();
         try {
             bruteForceAttempts.clear();
+            usernameAttempts.clear();
         } finally {
             lock.unlock();
         }
     }
 
     /**
-     * Cleans up expired brute-force entries.
+     * Enforces size limit on username attempts map.
+     * Must be called while holding the lock.
+     */
+    private void enforceUsernameMapSizeLimit() {
+        if (usernameAttempts.size() <= MAX_USERNAME_MAP_SIZE) {
+            return;
+        }
+
+        // First pass: remove expired entries
+        var iterator = usernameAttempts.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            if (entry.getValue().isExpired(bruteForceTimeoutMinutes)) {
+                iterator.remove();
+            }
+        }
+
+        // Second pass: if still over limit, evict oldest entries
+        if (usernameAttempts.size() > MAX_USERNAME_MAP_SIZE) {
+            int toRemove = usernameAttempts.size() - MAX_USERNAME_MAP_SIZE;
+            var evictIterator = usernameAttempts.entrySet().iterator();
+            while (evictIterator.hasNext() && toRemove > 0) {
+                evictIterator.next();
+                evictIterator.remove();
+                toRemove--;
+            }
+        }
+    }
+
+    /**
+     * Cleans up expired brute-force entries (both IP and username maps).
      *
      * @return number of removed entries
      */
@@ -164,6 +249,16 @@ class BruteForceTracker {
                     removed++;
                 }
             }
+
+            var usernameIterator = usernameAttempts.entrySet().iterator();
+            while (usernameIterator.hasNext()) {
+                var entry = usernameIterator.next();
+                if (entry.getValue().isExpired(bruteForceTimeoutMinutes)) {
+                    usernameIterator.remove();
+                    removed++;
+                }
+            }
+
             return removed;
         } finally {
             lock.unlock();

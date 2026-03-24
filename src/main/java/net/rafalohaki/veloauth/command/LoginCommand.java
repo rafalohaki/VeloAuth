@@ -128,7 +128,7 @@ class LoginCommand implements SimpleCommand {
     }
 
     private void handleFailedLogin(AuthenticationContext authContext) {
-        boolean blocked = SecurityUtils.registerFailedLogin(authContext.playerAddress(), ctx.authCache());
+        boolean blocked = SecurityUtils.registerFailedLogin(authContext.playerAddress(), authContext.username(), ctx.authCache());
 
         InetAddress playerAddress = authContext.playerAddress();
         if (playerAddress != null) {

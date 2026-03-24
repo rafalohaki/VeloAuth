@@ -110,7 +110,7 @@ class ChangePasswordCommand implements SimpleCommand {
         BCrypt.Result result = BCrypt.verifyer().verify(oldPassword.toCharArray(), authCtx.registeredPlayer().getHash());
         if (!result.verified) {
             authCtx.player().sendMessage(ctx.sm().incorrectOldPassword());
-            SecurityUtils.registerFailedLogin(authCtx.playerAddress(), ctx.authCache());
+            SecurityUtils.registerFailedLogin(authCtx.playerAddress(), authCtx.username(), ctx.authCache());
             return false;
         }
         return true;

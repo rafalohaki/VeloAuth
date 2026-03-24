@@ -5,6 +5,8 @@ import com.velocitypowered.api.proxy.Player;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.Marker;
+import org.slf4j.MarkerFactory;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -17,7 +19,8 @@ import java.net.InetSocketAddress;
  */
 public final class PlayerAddressUtils {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(PlayerAddressUtils.class);
+    private static final Logger logger = LoggerFactory.getLogger(PlayerAddressUtils.class);
+    private static final Marker AUTH_MARKER = MarkerFactory.getMarker("AUTH");
 
     private PlayerAddressUtils() {
         // Utility class - prevent instantiation
@@ -68,8 +71,8 @@ public final class PlayerAddressUtils {
             @javax.annotation.Nullable InetSocketAddress address,
             String identifier) {
         if (address == null) {
-            if (LOGGER.isWarnEnabled()) {
-                LOGGER.warn("Player {} has null remote address", identifier);
+            if (logger.isWarnEnabled()) {
+                logger.warn(AUTH_MARKER, "Player {} has null remote address", identifier);
             }
             return null;
         }
@@ -93,8 +96,8 @@ public final class PlayerAddressUtils {
         try {
             return extractAddressFromConnection(event);
         } catch (Exception e) { // NOSONAR - defensive catch for connection edge cases
-            if (LOGGER.isErrorEnabled()) {
-                LOGGER.error("Error extracting address from PreLoginEvent", e);
+            if (logger.isErrorEnabled()) {
+                logger.error(AUTH_MARKER, "Error extracting address from PreLoginEvent", e);
             }
             return null;
         }
@@ -110,8 +113,8 @@ public final class PlayerAddressUtils {
     private static InetAddress extractAddressFromConnection(PreLoginEvent event) {
         com.velocitypowered.api.proxy.InboundConnection connection = event.getConnection();
         if (connection == null) {
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("PreLoginEvent has null connection");
+            if (logger.isDebugEnabled()) {
+                logger.debug(AUTH_MARKER, "PreLoginEvent has null connection");
             }
             return null;
         }

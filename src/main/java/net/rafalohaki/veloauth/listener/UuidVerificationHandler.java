@@ -110,6 +110,16 @@ public class UuidVerificationHandler {
 
         if (dbPlayer.getConflictMode()) {
             logConflictModeActive(player, dbPlayer);
+            UUID playerUuid = player.getUniqueId();
+            UUID storedUuid = UuidUtils.parseUuidSafely(dbPlayer.getUuid());
+            UUID storedPremiumUuid = UuidUtils.parseUuidSafely(dbPlayer.getPremiumUuid());
+            boolean uuidMatches = (storedUuid != null && playerUuid.equals(storedUuid))
+                    || (storedPremiumUuid != null && playerUuid.equals(storedPremiumUuid));
+            if (!uuidMatches) {
+                logger.warn(SECURITY_MARKER,
+                        "[CONFLICT_MODE] UUID mismatch for {} - player UUID: {}, stored: {}, premium: {}",
+                        player.getUsername(), playerUuid, storedUuid, storedPremiumUuid);
+            }
             return true;
         }
 

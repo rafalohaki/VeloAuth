@@ -359,16 +359,16 @@ public class AuthCache {
 
     // ===== Brute Force Delegation =====
 
-    public boolean registerFailedLogin(InetAddress address) {
-        return bruteForceTracker.registerFailedLogin(address);
+    public boolean registerFailedLogin(InetAddress address, String username) {
+        return bruteForceTracker.registerFailedLogin(address, username);
     }
 
-    public boolean isBlocked(InetAddress address) {
-        return bruteForceTracker.isBlocked(address);
+    public boolean isBlocked(InetAddress address, String username) {
+        return bruteForceTracker.isBlocked(address, username);
     }
 
-    public void resetLoginAttempts(InetAddress address) {
-        bruteForceTracker.resetLoginAttempts(address);
+    public void resetLoginAttempts(InetAddress address, String username) {
+        bruteForceTracker.resetLoginAttempts(address, username);
     }
 
     // ===== Session Delegation =====

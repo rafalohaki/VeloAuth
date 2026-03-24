@@ -53,7 +53,7 @@ public class IPRateLimiter {
      */
     public boolean isRateLimited(InetAddress address) {
         if (address == null) {
-            return false;
+            return true; // fail-closed: unknown IP is rate limited
         }
 
         RateLimitEntry entry = rateLimits.get(address);
@@ -78,7 +78,7 @@ public class IPRateLimiter {
      */
     public int incrementAttempts(InetAddress address) {
         if (address == null) {
-            return 0;
+            return Integer.MAX_VALUE; // fail-closed: unknown IP treated as max attempts
         }
 
         RateLimitEntry entry = rateLimits.compute(address, (k, existing) -> {

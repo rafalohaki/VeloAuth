@@ -285,7 +285,7 @@ public class AuthListener {
 
     private boolean checkBruteForceBlocked(PreLoginEvent event) {
         InetAddress playerAddress = PlayerAddressUtils.getAddressFromPreLogin(event);
-        if (preLoginHandler.isBruteForceBlocked(playerAddress)) {
+        if (preLoginHandler.isBruteForceBlocked(playerAddress, event.getUsername())) {
             if (logger.isWarnEnabled()) {
                 String playerIp = playerAddress != null ? playerAddress.getHostAddress() : "unknown";
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} blocked", playerIp);
@@ -427,7 +427,7 @@ public class AuthListener {
 
         // 1. Check brute force block
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
-        if (preLoginHandler.isBruteForceBlocked(playerAddress)) {
+        if (preLoginHandler.isBruteForceBlocked(playerAddress, playerName)) {
             String playerAddressText = playerAddress != null ? playerAddress.getHostAddress() : "unknown";
             logger.warn(SECURITY_MARKER,
                     "Blocked connection for player {} from {} - too many failed login attempts",

@@ -55,7 +55,7 @@ final class PostAuthFlow {
         ctx.authCache().addAuthorizedPlayer(p.getUniqueId(), cachedUser);
         ctx.authCache().startSession(p.getUniqueId(), authContext.username(),
                 PlayerAddressUtils.getPlayerIp(p));
-        ctx.resetSecurityCounters(authContext.playerAddress());
+        ctx.resetSecurityCounters(authContext.playerAddress(), authContext.username());
 
         if (ctx.logger().isDebugEnabled()) {
             ctx.logger().debug(AUTH_MARKER, "Player {} {} successfully from IP {}",

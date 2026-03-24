@@ -78,7 +78,7 @@ class CommandContext {
 
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
 
-        if (playerAddress != null && authCache.isBlocked(playerAddress)) {
+        if (playerAddress != null && authCache.isBlocked(playerAddress, player.getUsername())) {
             player.sendMessage(sm.bruteForceBlocked());
             if (logger.isWarnEnabled()) {
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} attempted {}", playerAddress.getHostAddress(), commandName);
@@ -126,10 +126,10 @@ class CommandContext {
     }
 
     /**
-     * Resets brute-force and rate-limit counters for the given IP address.
+     * Resets brute-force and rate-limit counters for the given IP address and username.
      */
-    void resetSecurityCounters(InetAddress playerAddress) {
-        SecurityUtils.resetSecurityCounters(playerAddress, authCache, ipRateLimiter);
+    void resetSecurityCounters(InetAddress playerAddress, String username) {
+        SecurityUtils.resetSecurityCounters(playerAddress, username, authCache, ipRateLimiter);
     }
 
     /**

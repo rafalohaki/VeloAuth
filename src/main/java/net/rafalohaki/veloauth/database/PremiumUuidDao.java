@@ -225,9 +225,13 @@ public class PremiumUuidDao {
     }
 
     private List<PremiumUuid> queryByNicknameIgnoreCase(String normalizedNickname) throws SQLException {
+        StringBuilder sb = new StringBuilder();
+        connectionSource.getDatabaseType().appendEscapedEntityName(sb, "NICKNAME");
+        String quotedNickname = sb.toString();
+
         List<PremiumUuid> results = dao.queryBuilder()
                 .where()
-                .raw("LOWER(NICKNAME) = ?", new SelectArg(SqlType.STRING, normalizedNickname))
+                .raw("LOWER(" + quotedNickname + ") = ?", new SelectArg(SqlType.STRING, normalizedNickname))
                 .query();
         List<PremiumUuid> validatedResults = new ArrayList<>(results.size());
         for (PremiumUuid result : results) {

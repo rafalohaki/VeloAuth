@@ -9,6 +9,7 @@ import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
+import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.slf4j.Logger;
 
 import com.velocitypowered.api.scheduler.ScheduledTask;
@@ -22,6 +23,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Manager połączeń i transferów graczy między serwerami.
@@ -39,9 +41,12 @@ public class ConnectionManager {
     private static final String CONNECTION_ERROR_GAME_SERVER = "connection.error.game_server";
     private static final String MSG_ERROR_UNKNOWN = "error.unknown";
     private static final int MAX_RETRY_ATTEMPTS = 3;
+    private static final int MAX_AUTH_SERVER_WAIT_ATTEMPTS = 3;
+    private static final int BACKEND_WAIT_REMINDER_INTERVAL = 6;
+    private static final long AUTO_TRANSFER_DELAY_MS = 300;
     
     /** Retry attempt counter per player to prevent infinite fallback loops */
-    private final Map<UUID, Integer> retryAttempts = new ConcurrentHashMap<>();
+    private final Map<UUID, AtomicInteger> retryAttempts = new ConcurrentHashMap<>();
     
     /** One-shot timeout retry flag per player to avoid repeated scheduling */
     private final Map<UUID, Boolean> timeoutRetryScheduled = new ConcurrentHashMap<>();
@@ -202,7 +207,7 @@ public class ConnectionManager {
     }
 
     private CompletableFuture<Boolean> waitForAuthServerReadyAsync(RegisteredServer targetServer, int attempt) {
-        if (attempt >= 3) {
+        if (attempt >= MAX_AUTH_SERVER_WAIT_ATTEMPTS) {
             return CompletableFuture.completedFuture(false);
         }
 
@@ -291,7 +296,7 @@ public class ConnectionManager {
             return false;
         }
 
-        int attempts = retryAttempts.getOrDefault(player.getUniqueId(), 0);
+        int attempts = retryAttempts.computeIfAbsent(player.getUniqueId(), k -> new AtomicInteger(0)).get();
         if (!validateRetryLimit(player, attempts)) {
             return false;
         }
@@ -386,7 +391,7 @@ public class ConnectionManager {
         }
 
         resetTransferState(player.getUniqueId(), false);
-        retryAttempts.put(player.getUniqueId(), attempts + 1);
+        retryAttempts.computeIfAbsent(player.getUniqueId(), k -> new AtomicInteger(0)).incrementAndGet();
         if (logger.isInfoEnabled()) {
             logger.info("Attempting fallback for player {} (attempt {}/{}): send to auth server then retry backend {}",
                     player.getUsername(), attempts + 1, MAX_RETRY_ATTEMPTS, serverName);
@@ -438,7 +443,7 @@ public class ConnectionManager {
                 return;
             }
             executeBackendRetryAfterLimbo(player, targetServer, serverName);
-        }).delay(300, TimeUnit.MILLISECONDS).schedule();
+        }).delay(AUTO_TRANSFER_DELAY_MS, TimeUnit.MILLISECONDS).schedule();
 
         pendingTransfers.put(playerUuid, task);
     }
@@ -483,7 +488,7 @@ public class ConnectionManager {
                         NamedTextColor.GREEN));
                 executeBackendTransfer(player, server.get(), server.get().getServerInfo().getName());
             } else {
-                if (attempt % 6 == 5) {
+                if (attempt % BACKEND_WAIT_REMINDER_INTERVAL == BACKEND_WAIT_REMINDER_INTERVAL - 1) {
                     // Remind every 30 seconds
                     player.sendMessage(Component.text(
                             messages.get("connection.waiting_for_server"),
@@ -548,7 +553,7 @@ public class ConnectionManager {
             return false;
         }
 
-        retryAttempts.put(player.getUniqueId(), attempts + 1);
+        retryAttempts.computeIfAbsent(player.getUniqueId(), k -> new AtomicInteger(0)).incrementAndGet();
         player.sendMessage(Component.text(messages.get("connection.retry"), NamedTextColor.YELLOW));
 
         scheduleTimeoutRetry(player, targetServer, serverName);
@@ -841,16 +846,18 @@ public class ConnectionManager {
                         return;
                     }
                     
-                    // Wykonaj transfer
-                    boolean success = transferToBackend(player);
-                    if (success) {
-                        logger.debug("Auto-transfer: gracz {} przeniesiony na backend", player.getUsername());
-                    } else {
-                        logger.warn("Auto-transfer: nie udało się przenieść gracza {} na backend", 
-                                player.getUsername());
-                    }
+                    // Wykonaj transfer na virtual thread aby nie blokować scheduler
+                    VirtualThreadExecutorProvider.submitTask(() -> {
+                        boolean success = transferToBackend(player);
+                        if (success) {
+                            logger.debug("Auto-transfer: gracz {} przeniesiony na backend", player.getUsername());
+                        } else {
+                            logger.warn("Auto-transfer: nie udało się przenieść gracza {} na backend", 
+                                    player.getUsername());
+                        }
+                    });
                 })
-                .delay(300, TimeUnit.MILLISECONDS)
+                .delay(AUTO_TRANSFER_DELAY_MS, TimeUnit.MILLISECONDS)
                 .schedule();
         
         pendingTransfers.put(playerUuid, task);

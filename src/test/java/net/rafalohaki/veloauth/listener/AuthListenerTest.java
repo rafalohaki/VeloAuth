@@ -95,7 +95,7 @@ class AuthListenerTest {
         when(settings.isFloodgateBypassAuthServerEnabled()).thenReturn(false);
         when(settings.getAuthServerName()).thenReturn("auth");
         when(preLoginHandler.isValidUsername(anyString())).thenReturn(true);
-        when(preLoginHandler.isBruteForceBlocked(nullable(InetAddress.class))).thenReturn(false);
+        when(preLoginHandler.isBruteForceBlocked(nullable(InetAddress.class), anyString())).thenReturn(false);
         when(databaseManager.findPlayerByUuidOrNickname(anyString(), nullable(UUID.class)))
                 .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
 
@@ -120,7 +120,7 @@ class AuthListenerTest {
         String username = "NullIpPlayer";
         InboundConnection connection = org.mockito.Mockito.mock(InboundConnection.class);
         when(connection.getRemoteAddress()).thenReturn(null);
-        when(preLoginHandler.isBruteForceBlocked(null)).thenReturn(true);
+        when(preLoginHandler.isBruteForceBlocked(null, "NullIpPlayer")).thenReturn(true);
 
         PreLoginEvent event = new PreLoginEvent(connection, username);
 
@@ -128,7 +128,7 @@ class AuthListenerTest {
 
         assertNull(task, "Null IP should be denied synchronously");
         assertFalse(event.getResult().isAllowed(), "Null IP must not fail open");
-        verify(preLoginHandler).isBruteForceBlocked(null);
+        verify(preLoginHandler).isBruteForceBlocked(null, "NullIpPlayer");
     }
 
     @Test

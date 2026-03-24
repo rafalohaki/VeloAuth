@@ -2,6 +2,8 @@ package net.rafalohaki.veloauth.util;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.Marker;
+import org.slf4j.MarkerFactory;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -39,7 +41,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class VirtualThreadExecutorProvider {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(VirtualThreadExecutorProvider.class);
+    private static final Logger logger = LoggerFactory.getLogger(VirtualThreadExecutorProvider.class);
+    private static final Marker EXECUTOR_MARKER = MarkerFactory.getMarker("EXECUTOR");
 
     /**
      * Shared Virtual Thread executor for async operations.
@@ -125,7 +128,7 @@ public final class VirtualThreadExecutorProvider {
      */
     public static void shutdown() {
         if (!SHUTDOWN_INITIATED.compareAndSet(false, true)) {
-            LOGGER.warn("Shutdown already initiated");
+            logger.warn(EXECUTOR_MARKER, "Shutdown already initiated");
             return;
         }
 
@@ -134,26 +137,26 @@ public final class VirtualThreadExecutorProvider {
         } catch (InterruptedException e) {
             handleInterruptedException(e);
         } catch (SecurityException e) {
-            if (LOGGER.isErrorEnabled()) {
-                LOGGER.error("Error during Virtual Thread executor shutdown", e);
+            if (logger.isErrorEnabled()) {
+                logger.error(EXECUTOR_MARKER, "Error during Virtual Thread executor shutdown", e);
             }
         }
     }
 
     private static void executeGracefulShutdown() throws InterruptedException {
-        LOGGER.info("Initiating graceful shutdown of Virtual Thread executor...");
+        logger.info(EXECUTOR_MARKER, "Initiating graceful shutdown of Virtual Thread executor...");
         VIRTUAL_EXECUTOR.shutdown();
 
         if (VIRTUAL_EXECUTOR.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
-            LOGGER.info("Virtual Thread executor shutdown completed successfully");
+            logger.info(EXECUTOR_MARKER, "Virtual Thread executor shutdown completed successfully");
         } else {
             executeForceShutdown();
         }
     }
 
     private static void executeForceShutdown() throws InterruptedException {
-        if (LOGGER.isWarnEnabled()) {
-            LOGGER.warn("Executor did not terminate within 10 seconds, forcing shutdown...");
+        if (logger.isWarnEnabled()) {
+            logger.warn(EXECUTOR_MARKER, "Executor did not terminate within 10 seconds, forcing shutdown...");
         }
         
         java.util.List<Runnable> droppedTasks = VIRTUAL_EXECUTOR.shutdownNow();
@@ -162,19 +165,19 @@ public final class VirtualThreadExecutorProvider {
     }
 
     private static void logDroppedTasks(java.util.List<Runnable> droppedTasks) {
-        if (LOGGER.isWarnEnabled()) {
-            LOGGER.warn("Forced shutdown - {} tasks were dropped", droppedTasks.size());
+        if (logger.isWarnEnabled()) {
+            logger.warn(EXECUTOR_MARKER, "Forced shutdown - {} tasks were dropped", droppedTasks.size());
         }
     }
 
     private static void waitForForcedTermination() throws InterruptedException {
-        if (!VIRTUAL_EXECUTOR.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS) && LOGGER.isErrorEnabled()) {
-            LOGGER.error("Executor did not terminate after forced shutdown");
+        if (!VIRTUAL_EXECUTOR.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS) && logger.isErrorEnabled()) {
+            logger.error(EXECUTOR_MARKER, "Executor did not terminate after forced shutdown");
         }
     }
 
     private static void handleInterruptedException(InterruptedException e) {
-        LOGGER.error("Shutdown interrupted", e);
+        logger.error(EXECUTOR_MARKER, "Shutdown interrupted", e);
         VIRTUAL_EXECUTOR.shutdownNow();
         Thread.currentThread().interrupt();
     }

@@ -223,16 +223,16 @@ class AuthenticationFlowIntegrationTest {
         InetAddress attackerIp = InetAddress.getByName("10.0.0.1");
         
         // Initially not blocked
-        assertFalse(preLoginHandler.isBruteForceBlocked(attackerIp),
+        assertFalse(preLoginHandler.isBruteForceBlocked(attackerIp, "attacker"),
                 "IP should not be blocked initially");
         
         // Simulate failed login attempts
         for (int i = 0; i < 5; i++) {
-            authCache.registerFailedLogin(attackerIp);
+            authCache.registerFailedLogin(attackerIp, "attacker");
         }
         
         // Should be blocked after threshold
-        assertTrue(preLoginHandler.isBruteForceBlocked(attackerIp),
+        assertTrue(preLoginHandler.isBruteForceBlocked(attackerIp, "attacker"),
                 "IP should be blocked after multiple failed attempts");
     }
 

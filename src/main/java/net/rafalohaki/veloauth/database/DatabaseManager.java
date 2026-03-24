@@ -355,7 +355,7 @@ public class DatabaseManager {
             }
 
             String oldNick = byUuid.getNickname();
-            logger.info("[NICK CHANGE] Premium player {} changed nickname: {} → {}",
+            logger.info(DB_MARKER, "[NICK CHANGE] Premium player {} changed nickname: {} → {}",
                     premiumUuid, oldNick, originalNickname);
 
             playerCache.remove(byUuid.getLowercaseNickname());
@@ -749,7 +749,7 @@ public class DatabaseManager {
         if (lowercaseNickname != null) {
             playerCache.remove(lowercaseNickname);
             if (logger.isDebugEnabled()) {
-                logger.debug("Removed player from cache: {}", lowercaseNickname);
+                logger.debug(DB_MARKER, "Removed player from cache: {}", lowercaseNickname);
             }
         }
     }
@@ -865,14 +865,14 @@ public class DatabaseManager {
         // Keeps isPlayerPremiumRuntime consistent with getTotalPremiumAccounts() SQL:
         //   PREMIUMUUID IS NOT NULL OR HASH IS NULL OR HASH = ''
         String hash = player.getHash();
-        return hash == null || hash.isBlank();
+        return hash == null || hash.isEmpty();
     }
 
     private void logRuntimeDetection(String nickname, boolean isPremium, String hash) {
         if (logger.isDebugEnabled()) {
-            logger.debug("[RUNTIME DETECTION] {} -> {} (hash empty: {})", 
+            logger.debug(DB_MARKER, "[RUNTIME DETECTION] {} -> {} (hash empty: {})", 
                        nickname, isPremium ? "PREMIUM" : "OFFLINE", 
-                       hash == null || hash.isBlank());
+                       hash == null || hash.isEmpty());
         }
     }
 
@@ -883,7 +883,7 @@ public class DatabaseManager {
             try {
                 return jdbcAuthDao.findAllPlayersInConflictMode();
             } catch (SQLException e) {
-                logger.error("Database error while finding players in conflict mode", e);
+                logger.error(DB_MARKER, "Database error while finding players in conflict mode", e);
                 return List.of();
             }
         }, dbExecutor);

@@ -37,12 +37,12 @@ class BruteForceTrackerTest {
         getEntries(tracker).put(address, entry);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            Future<Boolean> registerFuture = executor.submit(() -> tracker.registerFailedLogin(address));
+            Future<Boolean> registerFuture = executor.submit(() -> tracker.registerFailedLogin(address, null));
 
             assertTrue(entry.awaitIncrementStarted());
 
             Future<?> resetFuture = executor.submit(() -> {
-                tracker.resetLoginAttempts(address);
+                tracker.resetLoginAttempts(address, null);
                 return null;
             });
 
@@ -55,7 +55,7 @@ class BruteForceTrackerTest {
         }
 
         assertEquals(0, tracker.size());
-        assertFalse(tracker.isBlocked(address));
+        assertFalse(tracker.isBlocked(address, null));
     }
 
     @Test
@@ -67,7 +67,7 @@ class BruteForceTrackerTest {
         getEntries(tracker).put(address, entry);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            Future<Boolean> blockedFuture = executor.submit(() -> tracker.isBlocked(address));
+            Future<Boolean> blockedFuture = executor.submit(() -> tracker.isBlocked(address, null));
 
             assertTrue(entry.awaitExpiryCheckStarted());
 
@@ -82,7 +82,7 @@ class BruteForceTrackerTest {
         }
 
         assertEquals(1, tracker.size());
-        assertFalse(tracker.isBlocked(address));
+        assertFalse(tracker.isBlocked(address, null));
     }
 
     @SuppressWarnings("unchecked")
