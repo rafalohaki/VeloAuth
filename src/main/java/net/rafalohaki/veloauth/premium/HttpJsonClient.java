@@ -28,6 +28,7 @@ final class HttpJsonClient {
         URL url = URI.create(endpoint + encodedUsername).toURL();
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setRequestMethod("GET");
+        connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(timeoutMs);
         connection.setReadTimeout(timeoutMs);
         connection.setUseCaches(false);

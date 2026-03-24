@@ -9,6 +9,8 @@ import net.rafalohaki.veloauth.util.SecurityUtils;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
+import java.util.concurrent.CompletionException;
+
 /**
  * Handles the /changepassword command.
  * Verifies old password, validates new one, and updates the database.
@@ -17,6 +19,7 @@ class ChangePasswordCommand implements SimpleCommand {
 
     private static final String ERROR_DATABASE_QUERY = "error.database.query";
     private static final Marker AUTH_MARKER = MarkerFactory.getMarker("AUTH");
+    private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
 
     private final CommandContext ctx;
 
@@ -120,16 +123,22 @@ class ChangePasswordCommand implements SimpleCommand {
         String newHashedPassword = BCrypt.with(BCrypt.Version.VERSION_2Y)
                 .hashToString(ctx.settings().getBcryptCost(), newPassword.toCharArray());
         authCtx.registeredPlayer().setHash(newHashedPassword);
-        var saveResult = ctx.databaseManager().savePlayer(authCtx.registeredPlayer()).join();
-        if (ctx.handleDatabaseError(saveResult, authCtx.player(), "Password change save failed for")) {
-            return false;
-        }
-        boolean saved = Boolean.TRUE.equals(saveResult.getValue());
-        if (!saved) {
+        try {
+            var saveResult = ctx.databaseManager().savePlayer(authCtx.registeredPlayer()).join();
+            if (ctx.handleDatabaseError(saveResult, authCtx.player(), "Password change save failed for")) {
+                return false;
+            }
+            boolean saved = Boolean.TRUE.equals(saveResult.getValue());
+            if (!saved) {
+                ctx.sendDatabaseErrorMessage(authCtx.player());
+                return false;
+            }
+            return true;
+        } catch (CompletionException e) {
+            ctx.logger().error(DB_MARKER, "Failed to save password change for player {}", authCtx.username(), e);
             ctx.sendDatabaseErrorMessage(authCtx.player());
             return false;
         }
-        return true;
     }
 
     private void finalizePasswordChange(AuthenticationContext authCtx) {

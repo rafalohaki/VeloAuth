@@ -9,6 +9,9 @@ import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 
 import java.net.InetAddress;
+import java.util.concurrent.CompletionException;
+import org.slf4j.Marker;
+import org.slf4j.MarkerFactory;
 
 /**
  * Handles the /register command.
@@ -20,6 +23,7 @@ import java.net.InetAddress;
 class RegisterCommand implements SimpleCommand {
 
     private static final String ERROR_DATABASE_QUERY = "error.database.query";
+    private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
 
     private final CommandContext ctx;
 
@@ -133,6 +137,9 @@ class RegisterCommand implements SimpleCommand {
             if (PostAuthFlow.execute(ctx, authContext, newPlayer, "registered")) {
                 authContext.player().sendMessage(ctx.sm().registerSuccess());
             }
+        } catch (CompletionException e) {
+            ctx.logger().error(DB_MARKER, "Database error during registration for player {}", player.getUsername(), e);
+            ctx.sendDatabaseErrorMessage(player);
         } finally {
             ctx.releaseCommandLock(player.getUniqueId());
         }

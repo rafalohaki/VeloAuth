@@ -1,5 +1,6 @@
 package net.rafalohaki.veloauth.cache;
 
+import net.rafalohaki.veloauth.command.IPRateLimiter;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
@@ -85,6 +86,12 @@ public class AuthCache {
     private final Messages messages;
 
     /**
+     * Optional IP rate limiter for periodic cleanup.
+     * Set after construction because IPRateLimiter is created later in CommandContext.
+     */
+    private volatile IPRateLimiter ipRateLimiter;
+
+    /**
      * Configuration parameters for AuthCache.
      */
     public record AuthCacheConfig(
@@ -154,6 +161,16 @@ public class AuthCache {
             logger.debug(messages.get("cache.auth.created"),
                     this.ttlMinutes, this.maxSize, config.maxLoginAttempts(), config.bruteForceTimeoutMinutes());
         }
+    }
+
+    /**
+     * Sets the IP rate limiter for periodic cleanup integration.
+     * Called after CommandContext creates the IPRateLimiter instance.
+     *
+     * @param ipRateLimiter the IP rate limiter to clean up periodically
+     */
+    public void setIpRateLimiter(IPRateLimiter ipRateLimiter) {
+        this.ipRateLimiter = ipRateLimiter;
     }
 
     private static String validateParams(int ttlMinutes, int maxSize, int maxSessions, int maxPremiumCache,
@@ -412,10 +429,17 @@ public class AuthCache {
             int removedBrute = bruteForceTracker.cleanupExpired();
             int removedPremium = cleanupPremium();
             int removedSessions = sessionManager.cleanupExpired();
+            int removedRateLimits = 0;
 
-            if (removedAuth > 0 || removedBrute > 0 || removedPremium > 0 || removedSessions > 0) {
-                logger.debug("Cleanup: usunięto {} auth, {} brute force, {} premium, {} sessions",
-                        removedAuth, removedBrute, removedPremium, removedSessions);
+            IPRateLimiter limiter = this.ipRateLimiter;
+            if (limiter != null) {
+                removedRateLimits = limiter.cleanupExpired();
+            }
+
+            if (removedAuth > 0 || removedBrute > 0 || removedPremium > 0
+                    || removedSessions > 0 || removedRateLimits > 0) {
+                logger.debug("Cleanup: usunięto {} auth, {} brute force, {} premium, {} sessions, {} rate limits",
+                        removedAuth, removedBrute, removedPremium, removedSessions, removedRateLimits);
             }
         } catch (Exception e) {
             logger.error("Błąd podczas czyszczenia cache", e);

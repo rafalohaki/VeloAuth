@@ -11,6 +11,7 @@ import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.listener.AuthListener;
+import net.rafalohaki.veloauth.listener.ListenerFactory;
 import net.rafalohaki.veloauth.listener.PostLoginHandler;
 import net.rafalohaki.veloauth.listener.PreLoginHandler;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
@@ -82,13 +83,13 @@ class AuthenticationFlowIntegrationTest {
         Metrics.Factory metricsFactory = mock(Metrics.Factory.class);
         plugin = new net.rafalohaki.veloauth.VeloAuth(proxyServer, logger, tempDir, metricsFactory);
 
-        preLoginHandler = new PreLoginHandler(
+        preLoginHandler = ListenerFactory.createPreLoginHandler(
                 authCache, premiumResolverService, settings, databaseManager, messages, logger
         );
 
         configureSchedulerMocks();
 
-        postLoginHandler = new PostLoginHandler(authCache, databaseManager, messages, logger);
+        postLoginHandler = ListenerFactory.createPostLoginHandler(authCache, databaseManager, messages, logger);
     }
 
     private java.nio.file.Path createTempDirectory() {
@@ -518,7 +519,7 @@ class AuthenticationFlowIntegrationTest {
 
         // Create AuthListener with full dependencies
         ConnectionManager connectionManager = mock(ConnectionManager.class);
-        PostLoginHandler plHandler = new PostLoginHandler(authCache, databaseManager, messages, logger);
+        PostLoginHandler plHandler = ListenerFactory.createPostLoginHandler(authCache, databaseManager, messages, logger);
         setPluginInitialized(true);
         AuthListener authListener = new AuthListener(
                 plugin, authCache, settings, preLoginHandler, plHandler,
@@ -559,7 +560,7 @@ class AuthenticationFlowIntegrationTest {
 
         // Create AuthListener
         ConnectionManager connectionManager = mock(ConnectionManager.class);
-        PostLoginHandler plHandler = new PostLoginHandler(authCache, databaseManager, messages, logger);
+        PostLoginHandler plHandler = ListenerFactory.createPostLoginHandler(authCache, databaseManager, messages, logger);
         setPluginInitialized(true);
         AuthListener authListener = new AuthListener(
                 plugin, authCache, settings, preLoginHandler, plHandler,

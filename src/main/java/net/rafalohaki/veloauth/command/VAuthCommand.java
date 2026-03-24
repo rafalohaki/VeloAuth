@@ -7,6 +7,10 @@ import net.rafalohaki.veloauth.model.RegisteredPlayer;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
+import net.rafalohaki.veloauth.database.DatabaseManager;
+import org.slf4j.Marker;
+import org.slf4j.MarkerFactory;
 
 /**
  * Komenda /vauth - komendy administratora.
@@ -17,6 +21,7 @@ class VAuthCommand implements SimpleCommand {
     private static final String ERROR_DATABASE_QUERY = "error.database.query";
     private static final String CONFLICT_PREFIX = "   §7";
     private static final String RELOAD_WARNING_KEY = "admin.reload.warning";
+    private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
 
     private final CommandContext ctx;
 
@@ -105,7 +110,14 @@ class VAuthCommand implements SimpleCommand {
             return;
         }
 
-        List<RegisteredPlayer> conflicts = ctx.databaseManager().findPlayersInConflictMode().join();
+        List<RegisteredPlayer> conflicts;
+        try {
+            conflicts = ctx.databaseManager().findPlayersInConflictMode().join();
+        } catch (CompletionException e) {
+            ctx.logger().error(DB_MARKER, "Failed to fetch conflict players", e);
+            ctx.sendDatabaseErrorMessage(source);
+            return;
+        }
         if (conflicts == null || !ctx.ensureDatabaseConnected(source, "Admin conflicts command")) {
             return;
         }
@@ -188,7 +200,13 @@ class VAuthCommand implements SimpleCommand {
         var premiumF = ctx.databaseManager().getTotalPremiumAccounts();
         var nonPremiumF = ctx.databaseManager().getTotalNonPremiumAccounts();
 
-        java.util.concurrent.CompletableFuture.allOf(totalF, premiumF, nonPremiumF).join();
+        try {
+            java.util.concurrent.CompletableFuture.allOf(totalF, premiumF, nonPremiumF).join();
+        } catch (CompletionException e) {
+            ctx.logger().error(DB_MARKER, "Failed to fetch player statistics", e);
+            ctx.sendDatabaseErrorMessage(source);
+            return;
+        }
         if (!ctx.ensureDatabaseConnected(source, "Admin stats command")) {
             return;
         }
@@ -225,7 +243,14 @@ class VAuthCommand implements SimpleCommand {
     }
 
     private PlayerLookupResult resolveRegisteredPlayerUuid(CommandSource source, String nickname) {
-        var dbResult = ctx.databaseManager().findPlayerByNickname(nickname).join();
+        DatabaseManager.DbResult<RegisteredPlayer> dbResult;
+        try {
+            dbResult = ctx.databaseManager().findPlayerByNickname(nickname).join();
+        } catch (CompletionException e) {
+            ctx.logger().error(DB_MARKER, "Failed to look up player {} for cache reset", nickname, e);
+            ctx.sendDatabaseErrorMessage(source);
+            return new PlayerLookupResult(null, true);
+        }
         if (ctx.handleDatabaseError(dbResult, source, nickname, "Admin cache reset lookup")) {
             return new PlayerLookupResult(null, true);
         }

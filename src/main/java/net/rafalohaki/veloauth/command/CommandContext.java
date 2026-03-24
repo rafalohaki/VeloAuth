@@ -17,6 +17,7 @@ import org.slf4j.MarkerFactory;
 
 import java.net.InetAddress;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -26,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 class CommandContext {
 
     private static final Marker SECURITY_MARKER = MarkerFactory.getMarker("SECURITY");
+    private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
 
     private final VeloAuth plugin;
     private final DatabaseManager databaseManager;
@@ -48,6 +50,7 @@ class CommandContext {
         this.ipRateLimiter = new IPRateLimiter(
                 settings.getBruteForceMaxAttempts(),
                 settings.getBruteForceTimeoutMinutes());
+        authCache.setIpRateLimiter(this.ipRateLimiter);
         this.sm = new SimpleMessages(messages);
     }
 
@@ -87,7 +90,14 @@ class CommandContext {
         }
 
         String username = player.getUsername();
-        var dbResult = databaseManager.findPlayerByNickname(username).join();
+        DatabaseManager.DbResult<net.rafalohaki.veloauth.model.RegisteredPlayer> dbResult;
+        try {
+            dbResult = databaseManager.findPlayerByNickname(username).join();
+        } catch (CompletionException e) {
+            logger.error(DB_MARKER, "Database error during {} for player {}", commandName, username, e);
+            player.sendMessage(sm.errorDatabase());
+            return null;
+        }
 
         if (handleDatabaseError(dbResult, player, commandName + " lookup for")) {
             return null;
@@ -100,7 +110,14 @@ class CommandContext {
      * Checks premium status with error handling and logging.
      */
     DatabaseManager.DbResult<Boolean> checkPremiumStatus(Player player, String operation) {
-        DatabaseManager.DbResult<Boolean> result = databaseManager.isPremium(player.getUsername()).join();
+        DatabaseManager.DbResult<Boolean> result;
+        try {
+            result = databaseManager.isPremium(player.getUsername()).join();
+        } catch (CompletionException e) {
+            logger.error(DB_MARKER, "[DATABASE ERROR] {} failed for {}", operation, player.getUsername(), e);
+            player.sendMessage(sm.errorDatabase());
+            return DatabaseManager.DbResult.databaseError("CompletionException: " + e.getMessage());
+        }
         if (result.isDatabaseError()) {
             if (logger.isErrorEnabled()) {
                 logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}", operation, player.getUsername(), result.getErrorMessage());

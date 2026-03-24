@@ -3,6 +3,8 @@ package net.rafalohaki.veloauth.cache;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.Marker;
+import org.slf4j.MarkerFactory;
 
 import java.net.InetAddress;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,6 +19,7 @@ import java.util.concurrent.locks.ReentrantLock;
 class BruteForceTracker {
 
     private static final Logger logger = LoggerFactory.getLogger(BruteForceTracker.class);
+    private static final Marker SECURITY_MARKER = MarkerFactory.getMarker("SECURITY");
     private static final int MAX_USERNAME_MAP_SIZE = 10000;
 
     private final ConcurrentHashMap<InetAddress, BruteForceEntry> bruteForceAttempts;
@@ -99,11 +102,11 @@ class BruteForceTracker {
                 lock.unlock();
             }
         } catch (IllegalStateException e) {
-            logger.error(messages.get("cache.error.state.register_failed") + address, e);
-            return false;
+            logger.error(SECURITY_MARKER, "{} {}", messages.get("cache.error.state.register_failed"), address, e);
+            return true;
         } catch (IllegalArgumentException e) {
-            logger.error(messages.get("cache.error.args.register_failed") + address, e);
-            return false;
+            logger.error(SECURITY_MARKER, "{} {}", messages.get("cache.error.args.register_failed"), address, e);
+            return true;
         }
     }
 

@@ -341,7 +341,7 @@ public class PremiumResolverService {
             return null;
         }
         if (entry.isExpired(premiumTtlMillis, missTtlMillis)) {
-            cache.remove(key);
+            cache.remove(key, entry);
             return null;
         }
         return entry.resolution();
@@ -375,6 +375,18 @@ public class PremiumResolverService {
             cache.put(key, new CachedEntry(resolution, System.currentTimeMillis()));
         } finally {
             cacheSizeLock.unlock();
+        }
+    }
+
+    /**
+     * Clears the in-memory premium resolution cache and releases resources.
+     * Must be called during plugin shutdown before DatabaseManager is closed.
+     */
+    public void shutdown() {
+        int size = cache.size();
+        cache.clear();
+        if (logger.isDebugEnabled()) {
+            logger.debug("[PremiumResolver] Shutdown complete — cleared {} cached entries", size);
         }
     }
 

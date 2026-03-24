@@ -19,9 +19,7 @@ import net.rafalohaki.veloauth.database.HikariConfigParams;
 import net.rafalohaki.veloauth.exception.VeloAuthException;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.listener.AuthListener;
-import net.rafalohaki.veloauth.listener.EarlyLoginBlocker;
-import net.rafalohaki.veloauth.listener.PreLoginHandler;
-import net.rafalohaki.veloauth.listener.PostLoginHandler;
+import net.rafalohaki.veloauth.listener.ListenerFactory;
 import net.rafalohaki.veloauth.premium.PremiumResolverService;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.bstats.velocity.Metrics;
@@ -167,7 +165,7 @@ public class VeloAuth {
             logger.debug("Registering early PreLogin blocker for initialization protection...");
         }
         try {
-            EarlyLoginBlocker earlyBlocker = new EarlyLoginBlocker(this);
+            var earlyBlocker = ListenerFactory.createEarlyLoginBlocker(this);
             server.getEventManager().register(this, earlyBlocker);
             if (logger.isDebugEnabled()) {
                 logger.debug("✅ EarlyLoginBlocker registered BEFORE initialization - PreLogin protection active");
@@ -456,12 +454,12 @@ public class VeloAuth {
         long startTime = System.currentTimeMillis();
         
         // CRITICAL: Create handlers BEFORE AuthListener
-        PreLoginHandler preLoginHandler = new PreLoginHandler(
+        var preLoginHandler = ListenerFactory.createPreLoginHandler(
             authCache, premiumResolverService, settings, databaseManager,
             messages, logger);
         logger.debug("PreLoginHandler created successfully");
         
-        PostLoginHandler postLoginHandler = new PostLoginHandler(
+        var postLoginHandler = ListenerFactory.createPostLoginHandler(
             authCache, databaseManager,
             messages, logger);
         logger.debug("PostLoginHandler created successfully");
@@ -567,6 +565,11 @@ public class VeloAuth {
 
             shutdownCleanupScheduler(premiumCacheCleanupScheduler, "Premium cache cleanup scheduler");
             shutdownCleanupScheduler(premiumDbCleanupScheduler, "Premium DB cleanup scheduler");
+
+            if (premiumResolverService != null) {
+                premiumResolverService.shutdown();
+                logger.debug("PremiumResolverService zamknięty");
+            }
 
             if (authCache != null) {
                 authCache.shutdown();

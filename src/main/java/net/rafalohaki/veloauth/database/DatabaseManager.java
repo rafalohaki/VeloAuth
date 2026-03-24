@@ -341,6 +341,9 @@ public class DatabaseManager {
                     premiumUuid, oldNick, originalNickname);
 
             playerCache.remove(byUuid.getLowercaseNickname());
+            // updateId() must be called BEFORE setNickname() — lowercaseNickname is the @id field,
+            // and update() cannot change the id (it uses id in WHERE). See ORMLite Dao.updateId().
+            playerDao.updateId(byUuid, normalizedNickname);
             byUuid.setNickname(originalNickname);
             playerDao.update(byUuid);
             playerCache.put(normalizedNickname, byUuid);

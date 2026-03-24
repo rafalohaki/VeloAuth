@@ -1,5 +1,10 @@
 package net.rafalohaki.veloauth.command;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Marker;
+import org.slf4j.MarkerFactory;
+
 import java.net.InetAddress;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -7,9 +12,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * IP-based rate limiting for authentication commands.
  * Thread-safe: uses ConcurrentHashMap and atomic operations.
- * Simple implementation without over-engineering.
+ * Enforces a maximum entry count to prevent memory exhaustion under sustained attack.
  */
 public class IPRateLimiter {
+
+    private static final Logger logger = LoggerFactory.getLogger(IPRateLimiter.class);
+    private static final Marker SECURITY_MARKER = MarkerFactory.getMarker("SECURITY");
+
+    /**
+     * Maximum number of tracked IPs to prevent unbounded memory growth.
+     */
+    private static final int MAX_ENTRIES = 10_000;
 
     /**
      * IP-based rate limiting entries - ALWAYS ConcurrentHashMap for thread-safety.
@@ -63,7 +76,7 @@ public class IPRateLimiter {
 
         // Clean up expired entries
         if (entry.isExpired(timeoutMinutes)) {
-            rateLimits.remove(address);
+            rateLimits.remove(address, entry);
             return false;
         }
 
@@ -79,6 +92,16 @@ public class IPRateLimiter {
     public int incrementAttempts(InetAddress address) {
         if (address == null) {
             return Integer.MAX_VALUE; // fail-closed: unknown IP treated as max attempts
+        }
+
+        if (rateLimits.size() >= MAX_ENTRIES && !rateLimits.containsKey(address)) {
+            cleanupExpired();
+            if (rateLimits.size() >= MAX_ENTRIES) {
+                logger.warn(SECURITY_MARKER,
+                        "IP rate limiter at capacity ({} entries), rejecting new IP {}",
+                        rateLimits.size(), address.getHostAddress());
+                return Integer.MAX_VALUE; // fail-closed: treat as rate limited
+            }
         }
 
         RateLimitEntry entry = rateLimits.compute(address, (k, existing) -> {
@@ -123,11 +146,35 @@ public class IPRateLimiter {
 
         // Clean up expired entries
         if (entry.isExpired(timeoutMinutes)) {
-            rateLimits.remove(address);
+            rateLimits.remove(address, entry);
             return 0;
         }
 
         return entry.getAttempts();
+    }
+
+    /**
+     * Removes all expired rate-limit entries.
+     * Called periodically by AuthCache cleanup and on-demand when capacity is reached.
+     *
+     * @return number of removed entries
+     */
+    public int cleanupExpired() {
+        int removed = 0;
+        var iterator = rateLimits.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            if (entry.getValue().isExpired(timeoutMinutes)) {
+                iterator.remove();
+                removed++;
+            }
+        }
+        if (removed > 0 && logger.isDebugEnabled()) {
+            logger.debug(SECURITY_MARKER,
+                    "IP rate limiter cleanup: removed {} expired entries, {} remaining",
+                    removed, rateLimits.size());
+        }
+        return removed;
     }
 
     /**

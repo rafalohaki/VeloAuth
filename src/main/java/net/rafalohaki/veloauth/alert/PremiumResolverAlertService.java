@@ -16,6 +16,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * Alert service for premium resolver failures.
  * Monitors failure rates and sends Discord alerts when thresholds exceeded.
  * Thread-safe implementation with configurable thresholds.
+ *
+ * TODO: This class is never instantiated — wire it into PremiumResolverService
+ *       or VeloAuth initialization to enable Discord failure alerts.
  */
 public class PremiumResolverAlertService implements AutoCloseable {
 
@@ -109,20 +112,23 @@ public class PremiumResolverAlertService implements AutoCloseable {
             return;
         }
 
-        // Check cooldown (avoid alert spam)
+        // Check cooldown (avoid alert spam) — atomic CAS to prevent duplicate alerts
         long now = System.currentTimeMillis();
-        long timeSinceLastAlert = now - lastAlertTime.get();
+        long last = lastAlertTime.get();
         long cooldownMs = alertSettings.getAlertCooldownMinutes() * 60_000L;
 
-        if (timeSinceLastAlert < cooldownMs) {
+        if (now - last < cooldownMs) {
             logger.debug("Alert cooldown active, skipping ({}s remaining)",
-                    (cooldownMs - timeSinceLastAlert) / 1000);
+                    (cooldownMs - (now - last)) / 1000);
             return;
+        }
+
+        if (!lastAlertTime.compareAndSet(last, now)) {
+            return; // Another thread won the race
         }
 
         // Send alert
         sendFailureAlert(total, failed, failureRate);
-        lastAlertTime.set(now);
     }
 
     /**

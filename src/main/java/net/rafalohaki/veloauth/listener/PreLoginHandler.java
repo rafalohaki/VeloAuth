@@ -45,7 +45,7 @@ public class PreLoginHandler {
      * @param messages               i18n message system
      * @param logger                 Logger instance
      */
-    public PreLoginHandler(AuthCache authCache,
+    PreLoginHandler(AuthCache authCache,
                    PremiumResolverService premiumResolverService,
                    Settings settings,
                    DatabaseManager databaseManager,

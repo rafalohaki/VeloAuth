@@ -18,7 +18,7 @@ public class EarlyLoginBlocker {
     private final VeloAuth plugin;
     private final Logger logger;
 
-    public EarlyLoginBlocker(VeloAuth plugin) {
+    EarlyLoginBlocker(VeloAuth plugin) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
     }

@@ -35,7 +35,7 @@ public class PostLoginHandler {
      * @param messages          i18n message system
      * @param logger            Logger instance
      */
-    public PostLoginHandler(AuthCache authCache,
+    PostLoginHandler(AuthCache authCache,
                            DatabaseManager databaseManager,
                            Messages messages,
                            Logger logger) {
