@@ -27,10 +27,15 @@ public enum ResolverConfig {
             false
     ),
 
+    /**
+     * Mojang API returns BOTH 204 and 404 for non-existent players.
+     * wiki.vg: "Mojang likes to change what this endpoint returns somewhat frequently."
+     * Using -1 as sentinel to indicate "accept both 204 AND 404".
+     */
     MOJANG(
             "mojang",
             "https://api.mojang.com/users/profiles/minecraft/",
-            HttpURLConnection.HTTP_NO_CONTENT,
+            -1,
             "id",
             "name",
             true

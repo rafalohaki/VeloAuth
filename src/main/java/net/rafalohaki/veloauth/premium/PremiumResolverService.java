@@ -223,14 +223,15 @@ public class PremiumResolverService {
         }
 
         if (results.offline() != null) {
-            if (results.hasUnknown()) {
-                if (logger.isDebugEnabled()) {
-                    logger.debug("[PARALLEL] OFFLINE overridden by UNKNOWN for {} - not all resolvers confirmed offline", trimmed);
-                }
-                return PremiumResolution.unknown(RESOLVER_SERVICE, "offline not confirmed by all resolvers");
+            // At least one resolver explicitly confirmed "player not found" (API responded correctly).
+            // Trust that result — UNKNOWN from other resolvers means timeout/rate-limit/error,
+            // NOT that the player might be premium. A premium player would be found by at least
+            // one working resolver. Blocking offline players due to API failures is too strict.
+            if (results.hasUnknown() && logger.isDebugEnabled()) {
+                logger.debug("[PARALLEL] OFFLINE confirmed for {} (some resolvers returned unknown, but at least one confirmed offline)", trimmed);
             }
             if (logger.isDebugEnabled()) {
-                logger.debug("[PARALLEL] All resolvers returned offline for {}", trimmed);
+                logger.debug("[PARALLEL] Player {} resolved as offline", trimmed);
             }
             return results.offline();
         }

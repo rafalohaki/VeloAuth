@@ -29,7 +29,13 @@ class ConfigurablePremiumResolver extends AbstractPremiumResolver {
 
     @Override
     protected boolean isNotFoundResponse(int code) {
-        return code == config.notFoundResponseCode();
+        int expected = config.notFoundResponseCode();
+        if (expected == -1) {
+            // Mojang API: accept both 204 (No Content) and 404 (Not Found)
+            return code == java.net.HttpURLConnection.HTTP_NO_CONTENT
+                    || code == java.net.HttpURLConnection.HTTP_NOT_FOUND;
+        }
+        return code == expected;
     }
 
     @Override
