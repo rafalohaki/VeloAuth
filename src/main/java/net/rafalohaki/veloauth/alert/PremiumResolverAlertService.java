@@ -16,9 +16,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * Alert service for premium resolver failures.
  * Monitors failure rates and sends Discord alerts when thresholds exceeded.
  * Thread-safe implementation with configurable thresholds.
- *
- * TODO: This class is never instantiated — wire it into PremiumResolverService
- *       or VeloAuth initialization to enable Discord failure alerts.
+ * <p>
+ * Wired via {@code VeloAuth.initializePremiumResolver()} when {@code alerts.enabled}
+ * is true in {@code config.yml}; {@link PremiumResolverService#recordResolution} flows
+ * through here on every API attempt.
  */
 public class PremiumResolverAlertService implements AutoCloseable {
 

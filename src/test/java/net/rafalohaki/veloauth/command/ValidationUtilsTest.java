@@ -106,6 +106,76 @@ class ValidationUtilsTest {
     }
 
     @Test
+    void testValidatePassword_PolicyDisabled_AcceptsAnyShape() {
+        // mockSettings has all policy counters = 0, so any length-valid password passes
+        Settings noPolicy = new TestValidationSettings(java.nio.file.Path.of(".test"), 6, 32);
+        ValidationUtils.ValidationResult result =
+                ValidationUtils.validatePassword("alllowercase", noPolicy, messages);
+        assertTrue(result.valid());
+    }
+
+    @Test
+    void testValidatePassword_PolicyRequiresDigit_RejectsAlphaOnly() {
+        Settings policy = new TestValidationSettings(
+                java.nio.file.Path.of(".test"), 6, 32, 1, 0, 0, 0);
+        ValidationUtils.ValidationResult result =
+                ValidationUtils.validatePassword("noDigitsHere", policy, messages);
+        assertFalse(result.valid());
+        assertEquals(messages.get("validation.password.needs_digit", 1), result.getErrorMessage());
+    }
+
+    @Test
+    void testValidatePassword_PolicyRequiresUpper_RejectsLowerOnly() {
+        Settings policy = new TestValidationSettings(
+                java.nio.file.Path.of(".test"), 6, 32, 0, 1, 0, 0);
+        ValidationUtils.ValidationResult result =
+                ValidationUtils.validatePassword("alllower123", policy, messages);
+        assertFalse(result.valid());
+        assertEquals(messages.get("validation.password.needs_upper", 1), result.getErrorMessage());
+    }
+
+    @Test
+    void testValidatePassword_PolicyRequiresLower_RejectsUpperOnly() {
+        Settings policy = new TestValidationSettings(
+                java.nio.file.Path.of(".test"), 6, 32, 0, 0, 1, 0);
+        ValidationUtils.ValidationResult result =
+                ValidationUtils.validatePassword("ALLUPPER123", policy, messages);
+        assertFalse(result.valid());
+        assertEquals(messages.get("validation.password.needs_lower", 1), result.getErrorMessage());
+    }
+
+    @Test
+    void testValidatePassword_PolicyRequiresSpecial_RejectsAlnumOnly() {
+        Settings policy = new TestValidationSettings(
+                java.nio.file.Path.of(".test"), 6, 32, 0, 0, 0, 2);
+        ValidationUtils.ValidationResult result =
+                ValidationUtils.validatePassword("OnlyAlnum123", policy, messages);
+        assertFalse(result.valid());
+        assertEquals(messages.get("validation.password.needs_special", 2), result.getErrorMessage());
+    }
+
+    @Test
+    void testValidatePassword_PolicyAllSatisfied_ReturnsSuccess() {
+        Settings policy = new TestValidationSettings(
+                java.nio.file.Path.of(".test"), 6, 32, 1, 1, 1, 1);
+        ValidationUtils.ValidationResult result =
+                ValidationUtils.validatePassword("Strong#Pass1", policy, messages);
+        assertTrue(result.valid());
+        assertNull(result.getErrorMessage());
+    }
+
+    @Test
+    void testValidatePassword_PolicyChecked_AfterLengthLimits() {
+        // Password too short: should fail on length, not on policy
+        Settings policy = new TestValidationSettings(
+                java.nio.file.Path.of(".test"), 10, 32, 5, 0, 0, 0);
+        ValidationUtils.ValidationResult result =
+                ValidationUtils.validatePassword("short", policy, messages);
+        assertFalse(result.valid());
+        assertEquals(messages.get("validation.password.too_short", 10), result.getErrorMessage());
+    }
+
+    @Test
     @SuppressWarnings("java:S2068") // Test passwords are test data, not production credentials
     void testValidatePasswordMatch_MatchingPasswords_ReturnsSuccess() {
         String password = "test123"; // NOSONAR - Test data

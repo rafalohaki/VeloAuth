@@ -128,7 +128,7 @@ public final class DatabaseConfig {
     public static DatabaseConfig forLocalDatabase(String storageType, String database) {
         DatabaseType dbType = DatabaseType.fromName(storageType);
         if (dbType == null || !dbType.isLocalDatabase()) {
-            throw new IllegalArgumentException("Nieprawidłowy typ lokalnej bazy danych: " + storageType);
+            throw new IllegalArgumentException("Invalid local database type: " + storageType);
         }
         String jdbcUrl = buildJdbcUrl(dbType, null, 0, database, null, null);
         return new DatabaseConfig(new InternalParams(dbType.getName(), null, 0, database, null, null, 1, null, jdbcUrl));
@@ -153,7 +153,7 @@ public final class DatabaseConfig {
     public static DatabaseConfig forRemoteWithHikari(HikariConfigParams params) {
         DatabaseType dbType = DatabaseType.fromName(params.getStorageType());
         if (dbType == null) {
-            throw new IllegalArgumentException("Nieobsługiwany typ bazy danych: " + params.getStorageType());
+            throw new IllegalArgumentException("Unsupported database type: " + params.getStorageType());
         }
 
         String jdbcUrl = buildJdbcUrl(dbType, params.getHostname(), params.getPort(), 
@@ -347,7 +347,7 @@ public final class DatabaseConfig {
                                                    int connectionPoolSize) {
         DatabaseType dbType = DatabaseType.fromName(storageType);
         if (dbType == null) {
-            throw new IllegalArgumentException("Nieobsługiwany typ bazy danych: " + storageType);
+            throw new IllegalArgumentException("Unsupported database type: " + storageType);
         }
         String jdbcUrl = buildJdbcUrl(dbType, hostname, port, database, null, null);
         return new DatabaseConfig(new InternalParams(dbType.getName(), hostname, port, database, user, password, connectionPoolSize, null, jdbcUrl));
@@ -543,7 +543,7 @@ public final class DatabaseConfig {
             try {
                 autoCloseable.close();
             } catch (Exception e) {
-                throw new IllegalStateException("Nie udało się zamknąć DataSource", e);
+                throw new IllegalStateException("Failed to close DataSource", e);
             }
         }
     }

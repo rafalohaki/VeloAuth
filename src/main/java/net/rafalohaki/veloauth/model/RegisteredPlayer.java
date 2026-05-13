@@ -17,9 +17,9 @@ import java.util.UUID;
 @DatabaseTable(tableName = "AUTH")
 public class RegisteredPlayer {
 
-    private static final String NICKNAME_EMPTY_ERROR = "Nickname nie może być pusty";
-    private static final String UUID_INVALID_ERROR = "UUID gracza musi być prawidłowy";
-    private static final String PREMIUM_UUID_INVALID_ERROR = "Premium UUID gracza musi być prawidłowy";
+    private static final String NICKNAME_EMPTY_ERROR = "Nickname must not be empty";
+    private static final String UUID_INVALID_ERROR = "Player UUID must be valid";
+    private static final String PREMIUM_UUID_INVALID_ERROR = "Player premium UUID must be valid";
 
     /**
      * Oryginalny nickname gracza (może zawierać duże/małe litery).

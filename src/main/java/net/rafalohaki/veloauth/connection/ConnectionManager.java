@@ -196,7 +196,7 @@ public class ConnectionManager {
         if (logger.isWarnEnabled()) {
             logger.warn("❌ Transfer {} to auth server FAILED: {}",
                     player.getUsername(),
-                    result != null ? result.getReasonComponent().orElse(createUnknownErrorComponent()) : createUnknownErrorComponent());
+                    KickReasonRenderer.renderPlain(result));
         }
 
         player.sendMessage(Component.text(
@@ -264,7 +264,9 @@ public class ConnectionManager {
                 logger.warn("No available backend servers for {} - starting background retry",
                         player.getUsername());
                 scheduleBackendWaitRetry(player, 0);
-                return false;
+                // Player stays on auth server; background retry is the success path.
+                // Caller should NOT treat this as a hard failure requiring auth rollback.
+                return true;
             }
 
             RegisteredServer targetServer = backendServer.get();
@@ -307,7 +309,7 @@ public class ConnectionManager {
     private boolean validatePlayerActive(Player player, String serverName) {
         if (!player.isActive()) {
             if (logger.isDebugEnabled()) {
-                logger.debug("Gracz {} nie jest już aktywny - pomijam transfer do {}",
+                logger.debug("Player {} is no longer active - skipping transfer to {}",
                         player.getUsername(), serverName);
             }
             return false;
@@ -317,7 +319,7 @@ public class ConnectionManager {
 
     private boolean validateRetryLimit(Player player, int attempts) {
         if (attempts >= MAX_RETRY_ATTEMPTS) {
-            logger.warn("Gracz {} przekroczył limit prób transferu ({}) - przerywam",
+            logger.warn("Player {} exceeded transfer retry limit ({}) - aborting",
                     player.getUsername(), MAX_RETRY_ATTEMPTS);
             retryAttempts.remove(player.getUniqueId());
             sendErrorMessage(player);
@@ -329,7 +331,7 @@ public class ConnectionManager {
     private boolean performTransfer(Player player, RegisteredServer targetServer, String serverName, int attempts) {
         try {
             if (!player.isActive()) {
-                logger.debug("Gracz {} rozłączył się przed rozpoczęciem transferu", player.getUsername());
+                logger.debug("Player {} disconnected before transfer started", player.getUsername());
                 return false;
             }
 
@@ -370,16 +372,14 @@ public class ConnectionManager {
         if (logger.isWarnEnabled()) {
             logger.warn("Failed to transfer player {} to server {} (Status: {}): {}",
                     player.getUsername(), serverName, result.getStatus(),
-                    result.getReasonComponent().orElse(createUnknownErrorComponent()));
+                    KickReasonRenderer.renderPlain(result));
         }
 
         if (attemptAuthServerFallback(player, targetServer, serverName, attempts)) {
             return true;
         }
 
-        String reason = result.getReasonComponent()
-                .map(net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()::serialize)
-                .orElse(messages.get(MSG_ERROR_UNKNOWN));
+        String reason = KickReasonRenderer.renderPlain(result);
         sendErrorMessage(player, reason);
         return false;
     }
@@ -428,7 +428,7 @@ public class ConnectionManager {
         } else if (limboResult == null) {
             reason = "null result";
         } else {
-            reason = limboResult.getReasonComponent().map(Component::toString).orElse("unknown");
+            reason = KickReasonRenderer.renderPlain(limboResult);
         }
         logger.warn("Fallback to auth server for {} failed: {}", player.getUsername(), reason);
     }
@@ -456,17 +456,13 @@ public class ConnectionManager {
         UUID playerUuid = player.getUniqueId();
 
         if (attempt == 0) {
-            player.sendMessage(Component.text(
-                    messages.get("connection.waiting_for_server"),
-                    NamedTextColor.YELLOW));
+            sendIfNotEmpty(player, "connection.waiting_for_server", NamedTextColor.YELLOW);
         }
 
         if (attempt >= MAX_BACKEND_WAIT_RETRIES) {
             backendWaitTasks.remove(playerUuid);
             logger.warn("Backend wait timeout for {} after {} attempts", player.getUsername(), attempt);
-            player.sendMessage(Component.text(
-                    messages.get("connection.error.no_servers"),
-                    NamedTextColor.RED));
+            sendIfNotEmpty(player, "connection.error.no_servers", NamedTextColor.RED);
             return;
         }
 
@@ -483,22 +479,34 @@ public class ConnectionManager {
             if (server.isPresent()) {
                 logger.info("Backend server available for {} after waiting - transferring to {}",
                         player.getUsername(), server.get().getServerInfo().getName());
-                player.sendMessage(Component.text(
-                        messages.get("connection.connecting"),
-                        NamedTextColor.GREEN));
+                sendIfNotEmpty(player, "connection.connecting", NamedTextColor.GREEN);
                 executeBackendTransfer(player, server.get(), server.get().getServerInfo().getName());
             } else {
                 if (attempt % BACKEND_WAIT_REMINDER_INTERVAL == BACKEND_WAIT_REMINDER_INTERVAL - 1) {
-                    // Remind every 30 seconds
-                    player.sendMessage(Component.text(
-                            messages.get("connection.waiting_for_server"),
-                            NamedTextColor.YELLOW));
+                    // Remind every 30 seconds (suppressed if message key resolves to empty)
+                    sendIfNotEmpty(player, "connection.waiting_for_server", NamedTextColor.YELLOW);
                 }
                 scheduleBackendWaitRetry(player, attempt + 1);
             }
         }).delay(BACKEND_WAIT_INTERVAL_SECONDS, TimeUnit.SECONDS).schedule();
 
         backendWaitTasks.put(playerUuid, task);
+    }
+
+    /**
+     * Sends a localized message to a player only if the resolved message body is non-empty.
+     * <p>
+     * Operators can suppress noisy backend-wait notifications (e.g. "No available servers…")
+     * by setting the corresponding key to an empty value in {@code messages_*.properties}
+     * without forking the plugin. This is the deliberate opt-out mechanism — empty value
+     * means "do not send", any non-empty value sends as before.
+     */
+    private void sendIfNotEmpty(Player player, String messageKey, NamedTextColor color) {
+        String resolved = messages.get(messageKey);
+        if (resolved == null || resolved.isEmpty()) {
+            return;
+        }
+        player.sendMessage(Component.text(resolved, color));
     }
 
     private void executeBackendRetryAfterLimbo(Player player, RegisteredServer targetServer, String serverName) {
@@ -509,7 +517,7 @@ public class ConnectionManager {
                     .join();
             if (!retry.isSuccessful()) {
                 logger.warn("Retry to connect {} to {} after auth server failed: {}",
-                        player.getUsername(), serverName, retry.getReasonComponent().orElse(createUnknownErrorComponent()));
+                        player.getUsername(), serverName, KickReasonRenderer.renderPlain(retry));
                 sendErrorMessage(player);
             }
         } catch (java.util.concurrent.CompletionException retryEx) {
@@ -619,12 +627,7 @@ public class ConnectionManager {
                 logger.debug("Retry after timeout succeeded for {} -> {}", player.getUsername(), serverName);
             }
         } else {
-            Component reason;
-            if (result != null) {
-                reason = result.getReasonComponent().orElse(createUnknownErrorComponent());
-            } else {
-                reason = createUnknownErrorComponent();
-            }
+            String reason = KickReasonRenderer.renderPlain(result);
             logger.warn("Retry after timeout not successful for {} -> {}: {}", player.getUsername(), serverName, reason);
             sendErrorMessage(player);
         }
@@ -669,14 +672,14 @@ public class ConnectionManager {
             for (int i = 0; i < candidates.size(); i++) {
                 if (Boolean.TRUE.equals(pings[i].join())) {
                     RegisteredServer available = candidates.get(i);
-                    logger.debug("Znaleziono dostępny serwer: {}", available.getServerInfo().getName());
+                    logger.debug("Found available server: {}", available.getServerInfo().getName());
                     return Optional.of(available);
                 }
             }
         }
         
         // Fallback: jeśli żaden try server nie jest dostępny, spróbuj dowolny inny
-        logger.warn("Żaden serwer z try nie jest dostępny, próbuję fallback...");
+        logger.warn("No server from try list is available, attempting fallback...");
         return plugin.getServer().getAllServers().stream()
                 .filter(server -> !server.getServerInfo().getName().equals(authServerName))
                 .filter(server -> isServerAvailable(server, server.getServerInfo().getName()))
@@ -741,11 +744,11 @@ public class ConnectionManager {
     private boolean isServerAvailable(RegisteredServer server, String serverName) {
         try {
             if (server.ping().orTimeout(2, TimeUnit.SECONDS).join() != null) {
-                logger.debug("Znaleziono dostępny serwer: {}", serverName);
+                logger.debug("Found available server: {}", serverName);
                 return true;
             }
         } catch (Exception e) {
-            logger.debug("Serwer {} niedostępny: {}", serverName, e.getMessage());
+            logger.debug("Server {} unavailable: {}", serverName, e.getMessage());
         }
         return false;
     }
@@ -787,12 +790,12 @@ public class ConnectionManager {
             ));
 
             if (logger.isDebugEnabled()) {
-                logger.debug("Wymuszono ponowną autoryzację gracza: {}", player.getUsername());
+                logger.debug("Forced re-authentication for player: {}", player.getUsername());
             }
 
         } catch (Exception e) {
             if (logger.isErrorEnabled()) {
-                logger.error("Błąd podczas wymuszania ponownej autoryzacji: {}", player.getUsername(), e);
+                logger.error("Error forcing re-authentication for {}", player.getUsername(), e);
             }
         }
     }
@@ -837,12 +840,12 @@ public class ConnectionManager {
                     
                     // Sprawdź czy gracz nadal jest aktywny i na auth server
                     if (!player.isActive()) {
-                        logger.debug("Auto-transfer: gracz {} już nie jest aktywny", player.getUsername());
+                        logger.debug("Auto-transfer: player {} is no longer active", player.getUsername());
                         return;
                     }
                     
                     if (!isPlayerOnAuthServer(player)) {
-                        logger.debug("Auto-transfer: gracz {} już nie jest na auth server", player.getUsername());
+                        logger.debug("Auto-transfer: player {} is no longer on auth server", player.getUsername());
                         return;
                     }
                     
@@ -852,7 +855,7 @@ public class ConnectionManager {
                         if (success) {
                             logger.debug("Auto-transfer: gracz {} przeniesiony na backend", player.getUsername());
                         } else {
-                            logger.warn("Auto-transfer: nie udało się przenieść gracza {} na backend", 
+                            logger.warn("Auto-transfer: failed to transfer player {} to backend",
                                     player.getUsername());
                         }
                     });
@@ -943,7 +946,7 @@ public class ConnectionManager {
         timeoutRetryScheduled.clear();
         forcedHostTargets.clear();
         
-        logger.info("ConnectionManager zamknięty");
+        logger.info("ConnectionManager shut down");
     }
 
     /**

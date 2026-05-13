@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -146,5 +148,67 @@ class MessagesExternalFilesTest {
         assertNotNull(message, "Message should not be null");
         assertFalse(message.isEmpty(), "Message should not be empty");
         assertFalse(message.startsWith("Missing:"), "Message should be found in fallback");
+    }
+
+    /**
+     * Regression for the "Missing: key" leak: when the active language file is missing a key
+     * (corrupted edit, partial translation, key added between releases without backfill),
+     * external mode must per-key fall back to English instead of returning literal
+     * {@code "Missing: …"} to the player.
+     */
+    @Test
+    void getFromBundle_keyMissingInActiveLanguage_fallsBackToEnglish() throws IOException {
+        // Set up: switch to Polish, then nuke a key from the Polish file on disk.
+        messages.setLanguage("pl");
+        Path plFile = tempDir.resolve("lang").resolve("messages_pl.properties");
+        assertTrue(Files.exists(plFile), "Polish file should be present after setLanguage");
+
+        String original = Files.readString(plFile, StandardCharsets.UTF_8);
+        // Remove a known key. auth.login.success exists in every language file.
+        String stripped = original.lines()
+                .filter(line -> !line.startsWith("auth.login.success="))
+                .reduce((a, b) -> a + "\n" + b)
+                .orElse("");
+        Files.writeString(plFile, stripped, StandardCharsets.UTF_8);
+        messages.reload();
+
+        String message = messages.get("auth.login.success");
+
+        assertFalse(message.startsWith("Missing:"),
+                "Missing key in active language must fall back to English text, got: " + message);
+        assertFalse(message.isEmpty(), "Fallback message must not be empty");
+    }
+
+    /**
+     * Regression for {@code isLanguageSupported} silently creating a custom-language file
+     * when the operator typed the {@code language} setting wrong (e.g. {@code pll}).
+     * The method must NOT touch the filesystem.
+     */
+    @Test
+    void isLanguageSupported_typoLanguageCode_returnsFalseAndDoesNotCreateFile() {
+        Path langDir = tempDir.resolve("lang");
+        Path bogusFile = langDir.resolve("messages_pll.properties");
+
+        boolean supported = messages.isLanguageSupported("pll");
+
+        assertFalse(supported, "Typo 'pll' must NOT be reported as supported");
+        assertFalse(Files.exists(bogusFile),
+                "isLanguageSupported must not create messages_pll.properties — it is a pure query");
+    }
+
+    /**
+     * Confirms the upstream effect of fix #2: setLanguage with a typo falls back to English
+     * with a warning, no language switch, no file created.
+     */
+    @Test
+    void setLanguage_typoLanguageCode_keepsEnglishAndDoesNotCreateFile() {
+        Path bogusFile = tempDir.resolve("lang").resolve("messages_pll.properties");
+
+        messages.setLanguage("pll");
+
+        assertEquals("en", messages.getCurrentLanguage(),
+                "Typo language code must fall back to 'en'");
+        assertFalse(Files.exists(bogusFile),
+                "Typo must not produce a custom messages_pll.properties file");
     }
 }

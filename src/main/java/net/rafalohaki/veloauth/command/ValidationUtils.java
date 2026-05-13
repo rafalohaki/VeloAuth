@@ -49,6 +49,49 @@ public final class ValidationUtils {
                     byteLength));
         }
 
+        return validateComplexity(password, settings.getPasswordPolicy(), messages);
+    }
+
+    private static ValidationResult validateComplexity(String password,
+                                                       Settings.PasswordPolicy policy,
+                                                       Messages messages) {
+        if (!policy.isAnyComplexityRequired()) {
+            return ValidationResult.success();
+        }
+
+        int digits = 0;
+        int uppercase = 0;
+        int lowercase = 0;
+        int special = 0;
+        for (int i = 0; i < password.length(); i++) {
+            char c = password.charAt(i);
+            if (Character.isDigit(c)) {
+                digits++;
+            } else if (Character.isUpperCase(c)) {
+                uppercase++;
+            } else if (Character.isLowerCase(c)) {
+                lowercase++;
+            } else {
+                special++;
+            }
+        }
+
+        if (digits < policy.getMinDigits()) {
+            return ValidationResult.error(messages.get(
+                    "validation.password.needs_digit", policy.getMinDigits()));
+        }
+        if (uppercase < policy.getMinUppercase()) {
+            return ValidationResult.error(messages.get(
+                    "validation.password.needs_upper", policy.getMinUppercase()));
+        }
+        if (lowercase < policy.getMinLowercase()) {
+            return ValidationResult.error(messages.get(
+                    "validation.password.needs_lower", policy.getMinLowercase()));
+        }
+        if (special < policy.getMinSpecial()) {
+            return ValidationResult.error(messages.get(
+                    "validation.password.needs_special", policy.getMinSpecial()));
+        }
         return ValidationResult.success();
     }
 

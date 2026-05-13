@@ -186,6 +186,26 @@ public class AuthCache {
 
     // ===== Authorized Players =====
 
+    /**
+     * Convenience helper: atomically marks the player as authorized and starts a session.
+     * Equivalent to {@link #addAuthorizedPlayer(UUID, CachedAuthUser)} followed by
+     * {@link #startSession(UUID, String, String)}, kept as one call so the two-step
+     * cache update is not accidentally split across paths.
+     * <p>
+     * Does NOT handle:
+     * <ul>
+     *   <li>premium UUID resolution — callers must build {@code CachedAuthUser} themselves
+     *       to keep the premium/offline decision explicit at the call site;</li>
+     *   <li>brute-force counter reset — that lives in {@code SecurityUtils} / command flow;</li>
+     *   <li>auth-server timeout cancellation — handled by {@code AuthTimeoutScheduler} in
+     *       PostAuthFlow only (timeouts are only armed in the auth-server path).</li>
+     * </ul>
+     */
+    public void authorize(UUID uuid, CachedAuthUser user, String nickname, String ip) {
+        addAuthorizedPlayer(uuid, user);
+        startSession(uuid, nickname, ip);
+    }
+
     public void addAuthorizedPlayer(UUID uuid, CachedAuthUser user) {
         if (uuid == null || user == null) {
             throw new IllegalArgumentException("UUID and user must not be null");
@@ -438,11 +458,11 @@ public class AuthCache {
 
             if (removedAuth > 0 || removedBrute > 0 || removedPremium > 0
                     || removedSessions > 0 || removedRateLimits > 0) {
-                logger.debug("Cleanup: usunięto {} auth, {} brute force, {} premium, {} sessions, {} rate limits",
+                logger.debug("Cleanup: removed {} auth, {} brute force, {} premium, {} sessions, {} rate limits",
                         removedAuth, removedBrute, removedPremium, removedSessions, removedRateLimits);
             }
         } catch (Exception e) {
-            logger.error("Błąd podczas czyszczenia cache", e);
+            logger.error("Error during cache cleanup", e);
         }
     }
 

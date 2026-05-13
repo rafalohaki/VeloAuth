@@ -92,7 +92,7 @@ public final class AuthenticationErrorHandler {
     public static boolean handleVerificationError(Player player, Exception exception,
                                                   AuthCache authCache, Logger logger) {
         if (logger.isErrorEnabled()) {
-            logger.error("Błąd podczas weryfikacji UUID gracza: {}", player.getUsername(), exception);
+            logger.error("Error during player UUID verification: {}", player.getUsername(), exception);
         }
         authCache.removeAuthorizedPlayer(player.getUniqueId());
         authCache.endSession(player.getUniqueId());

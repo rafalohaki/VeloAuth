@@ -52,17 +52,31 @@ final class PostAuthFlow {
         CachedAuthUser cachedUser = CachedAuthUser.fromRegisteredPlayer(player, isPremium, premiumUuid);
 
         Player p = authContext.player();
-        ctx.authCache().addAuthorizedPlayer(p.getUniqueId(), cachedUser);
-        ctx.authCache().startSession(p.getUniqueId(), authContext.username(),
+        ctx.authCache().authorize(p.getUniqueId(), cachedUser, authContext.username(),
                 PlayerAddressUtils.getPlayerIp(p));
         ctx.resetSecurityCounters(authContext.playerAddress(), authContext.username());
+        // Cancel the auth-server timeout: player has successfully authenticated.
+        ctx.plugin().getAuthTimeoutScheduler().cancel(p.getUniqueId());
 
         if (ctx.logger().isDebugEnabled()) {
             ctx.logger().debug(AUTH_MARKER, "Player {} {} successfully from IP {}",
                     authContext.username(), operationName, PlayerAddressUtils.getPlayerIp(p));
         }
 
-        ctx.plugin().getConnectionManager().transferToBackend(p);
+        boolean transferred = ctx.plugin().getConnectionManager().transferToBackend(p);
+        if (!transferred) {
+            // Hard transfer failure: roll back authorization so the next /login attempt
+            // does not skip auth on a stale cache entry. Background retry path returns true,
+            // so reaching this branch means a real error (connection cancelled, retry limit, etc.).
+            ctx.authCache().removeAuthorizedPlayer(p.getUniqueId());
+            ctx.authCache().endSession(p.getUniqueId());
+            if (ctx.logger().isWarnEnabled()) {
+                ctx.logger().warn(AUTH_MARKER,
+                        "{} succeeded for {} but backend transfer failed - rolled back cache/session",
+                        operationName, authContext.username());
+            }
+            return false;
+        }
         return true;
     }
 

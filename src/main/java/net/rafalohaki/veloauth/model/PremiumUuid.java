@@ -15,8 +15,8 @@ import java.util.UUID;
 @DatabaseTable(tableName = "PREMIUM_UUIDS")
 public class PremiumUuid {
 
-    private static final String UUID_INVALID_ERROR = "UUID gracza premium musi być prawidłowy";
-    private static final String NICKNAME_EMPTY_ERROR = "Nickname premium nie może być pusty";
+    private static final String UUID_INVALID_ERROR = "Premium player UUID must be valid";
+    private static final String NICKNAME_EMPTY_ERROR = "Premium nickname must not be empty";
 
     /**
      * UUID gracza premium (klucz główny).

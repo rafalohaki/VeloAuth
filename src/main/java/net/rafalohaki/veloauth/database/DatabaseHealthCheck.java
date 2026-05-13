@@ -37,8 +37,20 @@ class DatabaseHealthCheck {
 
     /**
      * Starts periodic database health checks.
+     * <p>
+     * Performs one synchronous check immediately so callers gating on
+     * {@link #wasLastHealthCheckPassed()} observe a real value instead of the
+     * default {@code false} during the first 30s after startup.
      */
     public void start() {
+        try {
+            performHealthCheck();
+        } catch (RuntimeException e) {
+            if (logger.isWarnEnabled()) {
+                logger.warn(DB_MARKER, "Initial database health check threw — scheduler will retry", e);
+            }
+        }
+
         healthCheckExecutor.scheduleAtFixedRate(() -> {
             try {
                 performHealthCheck();

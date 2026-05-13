@@ -61,7 +61,7 @@ final class JdbcAuthDao {
     private String deletePlayerSql;
 
     JdbcAuthDao(DatabaseConfig config) {
-        this.config = Objects.requireNonNull(config, "config nie może być null");
+        this.config = Objects.requireNonNull(config, "config must not be null");
         this.postgres = DatabaseType.POSTGRESQL.getName().equalsIgnoreCase(config.getStorageType());
         
         initializeSqlStatements();
@@ -147,7 +147,7 @@ final class JdbcAuthDao {
     }
 
     public boolean upsertPlayer(RegisteredPlayer player) throws SQLException {
-        Objects.requireNonNull(player, "player nie może być null");
+        Objects.requireNonNull(player, "player must not be null");
 
         try (Connection connection = openConnection()) {
             boolean previousAutoCommit = connection.getAutoCommit();
@@ -310,7 +310,7 @@ final class JdbcAuthDao {
             return player;
         } catch (IllegalArgumentException e) {
             if (logger.isWarnEnabled()) {
-                logger.warn("Nieprawidłowy wiersz AUTH w bazie danych dla {}", nickname, e);
+                logger.warn("Invalid AUTH row in database for {}", nickname, e);
             }
             throw new SQLException("Invalid AUTH row stored in database for player: " + nickname, e);
         }

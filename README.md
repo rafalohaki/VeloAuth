@@ -34,6 +34,19 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🧵 **Virtual Threads** - Built on Java 21 for maximum performance
 - 📈 **bStats Analytics** - Anonymous usage statistics via bStats
 
+## When to use VeloAuth
+
+- **You run a Velocity proxy** with one or more backend servers and need authentication at the proxy layer (not per-backend).
+- **You accept both premium and cracked players** and need automatic, fail-secure routing — premium players skip `/login`, cracked players go through BCrypt-hashed registration.
+- **You already use LimboAuth** and want to migrate without losing data — VeloAuth reads the same database schema.
+- **You want predictable performance** — premium status is resolved through a three-layer cache (in-memory → DB → Mojang/Ashcon API), virtual-thread I/O, and zero blocking on Velocity event threads.
+
+If you only run a single backend server (Paper/Spigot/Folia) without a proxy, you don't need VeloAuth — use a backend-side auth plugin instead.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release-by-release notes, upgrade instructions, and breaking-behavior callouts.
+
 ## Requirements
 
 - **Java 21 or newer**
@@ -84,8 +97,49 @@ language: en
 
 auth-server:
   server-name: limbo
+  # Seconds before an unauthenticated player is kicked from the auth server.
+  # Set to 0 to disable the kick (player can stay on auth/limbo indefinitely).
   timeout-seconds: 300
 ```
+
+#### Password complexity policy (optional, off by default)
+
+Default policy is **length-only** (8–72 chars) — friendly for casual servers, backward-compatible with LimboAuth. **If a player sets a weak password under default rules, that's on them.** Enable stricter rules only when you actually need them.
+
+```yaml
+security:
+  min-password-length: 8
+  max-password-length: 72
+  # All counters default to 0 = no extra constraint.
+  # Set any to >0 to require that many characters of the given class.
+  password-policy:
+    min-digits: 0       # 0 = off, e.g. 1 = require at least one digit
+    min-uppercase: 0    # 0 = off, e.g. 1 = require at least one uppercase letter
+    min-lowercase: 0    # 0 = off, e.g. 1 = require at least one lowercase letter
+    min-special: 0      # 0 = off, e.g. 1 = require at least one special character
+                        # (special = anything that is NOT a letter or digit)
+```
+
+**Profiles you can copy in:**
+
+| Profile | digits | upper | lower | special | When to use |
+|---|---|---|---|---|---|
+| Relaxed (default) | 0 | 0 | 0 | 0 | Casual SMP, friendly servers, lobby networks |
+| Standard | 1 | 1 | 1 | 0 | Mid-sized servers with staff accounts |
+| Strict | 1 | 1 | 1 | 1 | Servers with economy/premium tiers or regulated regions |
+
+Counters apply **on top of** `min-password-length`. Validation error messages (`validation.password.needs_digit/upper/lower/special`) are localized to all 17 supported languages.
+
+#### Silencing "no server available" notifications
+
+If your setup runs DiscordSRV or another plugin that kicks players before VeloAuth's backend-wait flow finishes, you can silence the in-chat "Waiting for a server…" notifications without forking the plugin: open the language file under `plugins/VeloAuth/lang/messages_<lang>.properties` and set the keys to empty values:
+
+```properties
+connection.waiting_for_server=
+connection.error.no_servers=
+```
+
+Empty value = `sendMessage` is suppressed; logs are still written. Backend transfer retries continue regardless.
 
 Built-in language codes you can copy directly into config:
 
@@ -122,7 +176,19 @@ Keep the Floodgate prefix aligned with your proxy-side Floodgate configuration.
 
 ### Discord Webhooks
 
-VeloAuth supports Discord notifications for security events (failed login bursts, brute-force attempts, premium resolution failures). Configure the webhook URL in `config.yml` under `alerts.discord`.
+VeloAuth posts Discord webhook alerts when premium-resolver failure rates breach a threshold. Wired through `PremiumResolverAlertService` and triggered on every Mojang/Ashcon resolver attempt.
+
+```yaml
+alerts:
+  enabled: true                 # master switch; false disables all alerting
+  discord:
+    enabled: true
+    webhook-url: "https://discord.com/api/webhooks/.../..."
+  failure-rate-threshold: 0.5   # alert when ≥50% of resolutions fail
+  min-requests-for-alert: 10    # don't alert until at least N attempts in the window
+  check-interval-minutes: 5     # rolling metric window
+  alert-cooldown-minutes: 30    # minimum gap between two alerts
+```
 
 ### Database Config
 
@@ -173,6 +239,20 @@ When a premium player logs in with a different username than what is stored (Moj
 - **Conflict resolution** when premium players use cracked-registered nicknames
 - **Admin tools** for managing nickname conflicts
 - **Automatic blocking** of cracked players trying premium nicknames
+
+## FAQ / Troubleshooting
+
+**Q: A cracked player tries to join with a premium nickname and gets "You are not logged into your Minecraft account." VeloAuth never sees the join.**
+This message comes from **Velocity's own online-mode check**, not from VeloAuth. When `online-mode = true` in `velocity.toml`, Velocity rejects unauthenticated connections to premium nicknames before any plugin runs. If your server must accept cracked players on premium nicknames, set `online-mode = false` in `velocity.toml` — VeloAuth's resolver + nickname-protection then takes over and gates the player correctly.
+
+**Q: The `Failed to transfer player X: TextComponentImpl{content="...", style=StyleImpl{...}}` spam in logs is gone — anything I need to do?**
+No action needed. VeloAuth 1.2.0+ renders kick reasons as plain text via `KickReasonRenderer`. Log lines now read e.g. `Failed to transfer player Alice to server lobby (Status: CONNECTION_CANCELLED): You must link your Discord account to play.`
+
+**Q: My `language: en` config still shows Polish strings in some logs.**
+Fixed in 1.2.0 — all operator-facing log messages and exception strings are now English regardless of `language` setting. The `language` key only controls **player-facing** messages.
+
+**Q: Database not connected" right after Velocity startup.**
+Fixed in 1.2.0 — health check runs once synchronously before the 30s scheduler kicks in. The `isConnected()` gate used by admin commands now reflects pool state (initialized + not shut down) rather than waiting for the first health check.
 
 ## LimboAuth Migration
 

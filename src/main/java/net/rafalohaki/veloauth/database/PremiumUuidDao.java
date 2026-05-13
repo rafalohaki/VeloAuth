@@ -95,7 +95,7 @@ public class PremiumUuidDao {
         try {
             return saveOrUpdateStrict(uuid, nickname);
         } catch (Exception e) {
-            logger.error(DB_MARKER, "Błąd podczas zapisu/aktualizacji premium UUID: {} -> {}", uuid, nickname, e);
+            logger.error(DB_MARKER, "Error saving/updating premium UUID: {} -> {}", uuid, nickname, e);
             return false;
         }
     }
@@ -114,7 +114,7 @@ public class PremiumUuidDao {
 
         PremiumUuid preferredResult = results.get(0);
         if (results.size() > 1 && logger.isWarnEnabled()) {
-            logger.warn(DB_MARKER, "Wykryto {} wpisów PREMIUM_UUIDS dla nickname {} - używam najnowszego",
+            logger.warn(DB_MARKER, "Detected {} PREMIUM_UUIDS rows for nickname {} - using the latest one",
                     results.size(), nickname);
         }
         if (logger.isDebugEnabled()) {
@@ -125,7 +125,7 @@ public class PremiumUuidDao {
     }
 
     Optional<PremiumUuid> findByUuidStrict(UUID uuid) throws SQLException {
-        Objects.requireNonNull(uuid, "uuid nie może być null");
+        Objects.requireNonNull(uuid, "uuid must not be null");
         PremiumUuid result = dao.queryForId(uuid.toString());
         if (result == null) {
             logger.debug(DB_MARKER, "Nie znaleziono premium UUID dla UUID: {}", uuid);
@@ -140,7 +140,7 @@ public class PremiumUuidDao {
     }
 
     boolean saveOrUpdateStrict(UUID uuid, String nickname) throws SQLException {
-        Objects.requireNonNull(uuid, "uuid nie może być null");
+        Objects.requireNonNull(uuid, "uuid must not be null");
         String validatedNickname = requireNickname(nickname);
         String normalizedNickname = normalizeNickname(validatedNickname);
 
@@ -185,13 +185,13 @@ public class PremiumUuidDao {
             int deleted = deleteBuilder.delete();
 
             if (deleted > 0) {
-                logger.info(DB_MARKER, "Usunięto {} przestarzałych wpisów premium UUID (TTL: {} min)", deleted, ttlMinutes);
+                logger.info(DB_MARKER, "Cleaned up {} expired premium UUID entries (TTL: {} min)", deleted, ttlMinutes);
             }
 
             return deleted;
 
         } catch (SQLException e) {
-            logger.error(DB_MARKER, "Błąd podczas czyszczenia przestarzałych wpisów premium UUID", e);
+            logger.error(DB_MARKER, "Error cleaning up expired premium UUID entries", e);
             return 0;
         }
     }
@@ -205,7 +205,7 @@ public class PremiumUuidDao {
         try {
             return dao.countOf();
         } catch (SQLException e) {
-            logger.error(DB_MARKER, "Błąd podczas liczenia wpisów premium UUID", e);
+            logger.error(DB_MARKER, "Error counting premium UUID entries", e);
             return 0;
         }
     }
@@ -219,7 +219,7 @@ public class PremiumUuidDao {
         try {
             return dao.queryForAll();
         } catch (SQLException e) {
-            logger.error(DB_MARKER, "Błąd podczas pobierania wszystkich wpisów premium UUID", e);
+            logger.error(DB_MARKER, "Error fetching all premium UUID entries", e);
             return new ArrayList<>();
         }
     }
@@ -247,14 +247,27 @@ public class PremiumUuidDao {
 
     private void deleteNicknameConflicts(UUID authoritativeUuid, String nickname, List<PremiumUuid> nicknameEntries)
             throws SQLException {
+        String authoritativeKey = authoritativeUuid.toString();
+        List<String> idsToDelete = new ArrayList<>(nicknameEntries.size());
         for (PremiumUuid nicknameEntry : nicknameEntries) {
-            if (authoritativeUuid.toString().equalsIgnoreCase(nicknameEntry.getUuidString())) {
+            String entryKey = nicknameEntry.getUuidString();
+            if (authoritativeKey.equalsIgnoreCase(entryKey)) {
                 continue;
             }
-            logger.warn(DB_MARKER, "Usuwam konflikt nickname {} dla UUID {} (autorytatywny UUID: {})",
-                    nickname, nicknameEntry.getUuidString(), authoritativeUuid);
-            dao.deleteById(nicknameEntry.getUuidString());
+            logger.warn(DB_MARKER, "Removing nickname conflict {} for UUID {} (authoritative UUID: {})",
+                    nickname, entryKey, authoritativeUuid);
+            idsToDelete.add(entryKey);
         }
+
+        if (idsToDelete.isEmpty()) {
+            return;
+        }
+
+        // Single batched DELETE with IN-clause replaces the N-query loop.
+        // ORMLite forwards the list to the JDBC driver as parameterized IN(?, ?, ...).
+        DeleteBuilder<PremiumUuid, String> deleteBuilder = dao.deleteBuilder();
+        deleteBuilder.where().in("UUID", idsToDelete);
+        deleteBuilder.delete();
     }
 
     private void validateLoadedEntry(PremiumUuid entry) throws SQLException {
@@ -278,7 +291,7 @@ public class PremiumUuidDao {
 
     private String requireNickname(String nickname) {
         if (nickname == null || nickname.isBlank()) {
-            throw new IllegalArgumentException("nickname nie może być pusty");
+            throw new IllegalArgumentException("nickname must not be empty");
         }
         return nickname;
     }

@@ -74,6 +74,11 @@ class SimpleMessagesKeysTest {
             "validation.password.too_long",
             "validation.password.utf8_too_long",
             "validation.password.mismatch",
+            "validation.password.needs_digit",
+            "validation.password.needs_upper",
+            "validation.password.needs_lower",
+            "validation.password.needs_special",
+            "auth.timeout.kick",
             // System messages
             "system.starting",
             "system.init_error",

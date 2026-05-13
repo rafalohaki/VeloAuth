@@ -156,6 +156,22 @@ final class SettingsLoader {
             CONFIG_KEY_MIN_CREDENTIAL_LENGTH, state.minPasswordLength);
         state.maxPasswordLength = YamlParserUtils.getInt(security,
             CONFIG_KEY_MAX_CREDENTIAL_LENGTH, state.maxPasswordLength);
+
+        loadPasswordPolicy(security, state);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void loadPasswordPolicy(Map<String, Object> security, LoadedState state) {
+        Object policySection = security.get("password-policy");
+        if (!(policySection instanceof Map<?, ?>)) {
+            return;
+        }
+        Map<String, Object> policy = (Map<String, Object>) policySection;
+        Settings.PasswordPolicy target = state.passwordPolicy;
+        target.setMinDigits(YamlParserUtils.getInt(policy, "min-digits", target.getMinDigits()));
+        target.setMinUppercase(YamlParserUtils.getInt(policy, "min-uppercase", target.getMinUppercase()));
+        target.setMinLowercase(YamlParserUtils.getInt(policy, "min-lowercase", target.getMinLowercase()));
+        target.setMinSpecial(YamlParserUtils.getInt(policy, "min-special", target.getMinSpecial()));
     }
 
     @SuppressWarnings("unchecked")
@@ -352,6 +368,7 @@ final class SettingsLoader {
         final Settings.PremiumSettings premiumSettings = new Settings.PremiumSettings();
         final Settings.FloodgateSettings floodgateSettings = new Settings.FloodgateSettings();
         final Settings.AlertSettings alertSettings = new Settings.AlertSettings();
+        final Settings.PasswordPolicy passwordPolicy = new Settings.PasswordPolicy();
 
         static LoadedState from(Settings settings) {
             LoadedState state = new LoadedState();
@@ -386,7 +403,15 @@ final class SettingsLoader {
             copyPremiumSettings(settings.getPremiumSettings(), state.premiumSettings);
             copyFloodgateSettings(settings.getFloodgateSettings(), state.floodgateSettings);
             copyAlertSettings(settings.getAlertSettings(), state.alertSettings);
+            copyPasswordPolicy(settings.getPasswordPolicy(), state.passwordPolicy);
             return state;
+        }
+
+        private static void copyPasswordPolicy(Settings.PasswordPolicy source, Settings.PasswordPolicy target) {
+            target.setMinDigits(source.getMinDigits());
+            target.setMinUppercase(source.getMinUppercase());
+            target.setMinLowercase(source.getMinLowercase());
+            target.setMinSpecial(source.getMinSpecial());
         }
 
         private static void copyPostgreSqlSettings(Settings.PostgreSQLSettings source,

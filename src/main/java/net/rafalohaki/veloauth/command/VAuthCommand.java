@@ -2,7 +2,6 @@ package net.rafalohaki.veloauth.command;
 
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
-import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 
 import java.util.List;

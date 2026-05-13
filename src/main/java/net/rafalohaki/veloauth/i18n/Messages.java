@@ -38,7 +38,9 @@ public class Messages {
     
     // Current resource bundle
     private ResourceBundle bundle;
-    
+    // English fallback bundle (used when a key is missing in `bundle`)
+    private ResourceBundle englishBundle;
+
     private final boolean useExternalFiles;
 
     /**
@@ -126,6 +128,12 @@ public class Messages {
         languageFileManager.initializeLanguageFiles();
         
         this.bundle = languageFileManager.loadLanguageBundle(currentLanguage);
+        // Pre-load English bundle so getFromBundle can fall back per-key when a
+        // user-supplied translation is partial / broken / missing the requested key.
+        // For currentLanguage == "en" we keep the reference identical (no double load).
+        this.englishBundle = "en".equalsIgnoreCase(currentLanguage)
+                ? this.bundle
+                : languageFileManager.loadLanguageBundle("en");
         logger.info("Reloaded language files for: {} (external files enabled)", currentLanguage);
     }
     
@@ -225,7 +233,21 @@ public class Messages {
             String message = bundle.getString(resolvedKey);
             return formatMessageSafely(message, resolvedKey, args);
         } catch (MissingResourceException e) {
-            logger.warn("Missing translation key: {}", resolvedKey);
+            // Per-key fallback to English. Triggered when the active language file is
+            // corrupted, manually edited to remove keys, or simply missing newer keys
+            // that fillMissingKeysFromEnglish() failed to backfill. Keeps user-facing
+            // text in a real language instead of leaking "Missing: …" to the player.
+            if (englishBundle != null && englishBundle != bundle) {
+                try {
+                    String message = englishBundle.getString(resolvedKey);
+                    logger.warn("Missing translation key '{}' in language '{}' — falling back to English",
+                            resolvedKey, currentLanguage);
+                    return formatMessageSafely(message, resolvedKey, args);
+                } catch (MissingResourceException ignoredEn) {
+                    // fall through to the absolute fallback below
+                }
+            }
+            logger.warn("Missing translation key '{}' in all available languages", resolvedKey);
             return "Missing: " + resolvedKey;
         }
     }
@@ -329,19 +351,15 @@ public class Messages {
         if (language == null) return false;
 
         String lang = language.toLowerCase(Locale.ROOT);
-        
+
+        // Pure query — does NOT mutate the filesystem. A typo in the config (e.g. "pll")
+        // must surface as "Unsupported language" + EN fallback, not auto-create a custom file.
+        // Operators who want a real custom language drop messages_<code>.properties into the
+        // lang directory themselves; that file will then be picked up as "supported" on next boot.
         if (useExternalFiles && languageFileManager != null) {
-            // Check if language file exists in external directory
-            try {
-                languageFileManager.loadLanguageBundle(lang);
-                return true;
-            } catch (IOException e) {
-                return false;
-            }
-        } else {
-            // Legacy mode: check JAR resources (built-in languages only)
-            return BuiltInLanguages.isBuiltIn(lang);
+            return BuiltInLanguages.isBuiltIn(lang) || languageFileManager.fileExists(lang);
         }
+        return BuiltInLanguages.isBuiltIn(lang);
     }
 
     /**

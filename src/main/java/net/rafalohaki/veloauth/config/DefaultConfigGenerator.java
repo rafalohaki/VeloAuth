@@ -38,7 +38,7 @@ final class DefaultConfigGenerator {
         ).replace(BUILT_IN_LANGUAGE_CODES_PLACEHOLDER, BuiltInLanguages.quotedCodeList());
 
         Files.writeString(configFile, defaultConfig);
-        logger.info("Utworzono domyślny plik konfiguracji");
+        logger.info("Created default configuration file");
     }
 
     private static final String LANGUAGE_SECTION = """
@@ -156,7 +156,30 @@ final class DefaultConfigGenerator {
                   # Inclusive minimum password length
                   min-password-length: 8
                   # Inclusive maximum password length (BCrypt limit: 72)
-                  max-password-length: 72""";
+                  max-password-length: 72
+                  # Password complexity policy (OPTIONAL, all counters default to 0 = no extra constraint).
+                  #
+                  # By default players can set any password meeting the length limits — friendly for
+                  # casual servers where strict rules just annoy players. Tighten only if you actually
+                  # need it (e.g. servers with admin accounts, premium economies, regulated regions).
+                  #
+                  # How it works:
+                  #   - Counters apply ON TOP of min-password-length.
+                  #   - Each counter = minimum occurrences of that character class in the password.
+                  #   - "special" = anything that is NOT a letter or digit (punctuation, spaces, unicode).
+                  #   - Set any value to 0 to disable that particular check.
+                  #
+                  # Examples (uncomment one row to enable that profile):
+                  #   Relaxed (default):                      digits=0  upper=0  lower=0  special=0
+                  #   Standard (1 digit + 1 letter case mix): digits=1  upper=1  lower=1  special=0
+                  #   Strict (NIST-style for admin tier):     digits=1  upper=1  lower=1  special=1
+                  #
+                  # Validation message keys: validation.password.needs_{digit,upper,lower,special}
+                  password-policy:
+                    min-digits: 0
+                    min-uppercase: 0
+                    min-lowercase: 0
+                    min-special: 0""";
 
     private static final String PREMIUM_SECTION = """
                 

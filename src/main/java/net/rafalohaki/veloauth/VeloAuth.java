@@ -11,6 +11,7 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.command.CommandHandler;
 import net.rafalohaki.veloauth.config.Settings;
+import net.rafalohaki.veloauth.connection.AuthTimeoutScheduler;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.database.DatabaseConfig;
 import net.rafalohaki.veloauth.database.DatabaseManager;
@@ -20,6 +21,7 @@ import net.rafalohaki.veloauth.exception.VeloAuthException;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.listener.AuthListener;
 import net.rafalohaki.veloauth.listener.ListenerFactory;
+import net.rafalohaki.veloauth.alert.PremiumResolverAlertService;
 import net.rafalohaki.veloauth.premium.PremiumResolverService;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.bstats.velocity.Metrics;
@@ -64,8 +66,10 @@ public class VeloAuth {
     private AuthCache authCache;
     private CommandHandler commandHandler;
     private ConnectionManager connectionManager;
+    private AuthTimeoutScheduler authTimeoutScheduler;
     private AuthListener authListener;
     private PremiumResolverService premiumResolverService;
+    private PremiumResolverAlertService premiumResolverAlertService;
     private ScheduledExecutorService premiumCacheCleanupScheduler;
     private ScheduledExecutorService premiumDbCleanupScheduler;
 
@@ -428,10 +432,13 @@ public class VeloAuth {
             logger.debug("🔌 [6/8] Initializing connection manager...");
         }
         long startTime = System.currentTimeMillis();
-        
+
         connectionManager = new ConnectionManager(this, authCache, settings, messages);
-        
-        logger.debug("✅ Connection manager initialized in {} ms", System.currentTimeMillis() - startTime);
+        authTimeoutScheduler = new AuthTimeoutScheduler(this, settings, messages, authCache, connectionManager);
+
+        logger.debug("✅ Connection manager initialized in {} ms (auth timeout: {}s)",
+                System.currentTimeMillis() - startTime,
+                settings.getAuthServerTimeoutSeconds());
     }
 
     private void initializePremiumResolver() {
@@ -439,12 +446,20 @@ public class VeloAuth {
             logger.debug("👑 [7/8] Initializing premium resolver service...");
         }
         long startTime = System.currentTimeMillis();
-        
-        premiumResolverService = new PremiumResolverService(logger, settings, databaseManager.getPremiumUuidDao());
-        
-        logger.debug("✅ Premium resolver initialized in {} ms (Enabled: {})", 
-                System.currentTimeMillis() - startTime, 
-                settings.isPremiumCheckEnabled());
+
+        if (settings.getAlertSettings().isEnabled()) {
+            premiumResolverAlertService = new PremiumResolverAlertService(settings);
+            logger.info("Premium resolver Discord alerts enabled (webhook configured: {})",
+                    settings.getAlertSettings().isDiscordEnabled());
+        }
+
+        premiumResolverService = new PremiumResolverService(
+                logger, settings, databaseManager.getPremiumUuidDao(), premiumResolverAlertService);
+
+        logger.debug("✅ Premium resolver initialized in {} ms (Enabled: {}, Alerts: {})",
+                System.currentTimeMillis() - startTime,
+                settings.isPremiumCheckEnabled(),
+                premiumResolverAlertService != null);
     }
 
     private void initializeListeners() {
@@ -540,27 +555,32 @@ public class VeloAuth {
         logger.info("🔴 Initialization flag set to FALSE - blocking all new player connections");
 
         try {
-            logger.info("Inicjowanie graceful shutdown VeloAuth...");
+            logger.info("Initiating VeloAuth graceful shutdown...");
 
-            // 1. Zamknij event listeners
+            // 1. Unregister event listeners
             if (authListener != null) {
                 server.getEventManager().unregisterListener(this, authListener);
-                logger.debug("AuthListener wyrejestrowany");
+                logger.debug("AuthListener unregistered");
             }
 
-            // 2. Zamknij command handlers
+            // 2. Unregister command handlers
             if (commandHandler != null) {
                 commandHandler.unregisterCommands();
-                logger.debug("Komendy wyrejestrowane");
+                logger.debug("Commands unregistered");
             }
 
-            // 3. Czekaj na pending operacje (timeout 2 sekundy)
+            // 3. Wait for pending operations (2 second timeout)
             waitForPendingOperations();
 
-            // 4. Zamknij komponenty w odwrotnej kolejności
+            // 4. Shut down components in reverse order
+            if (authTimeoutScheduler != null) {
+                authTimeoutScheduler.shutdown();
+                logger.debug("AuthTimeoutScheduler shut down");
+            }
+
             if (connectionManager != null) {
                 connectionManager.shutdown();
-                logger.debug("ConnectionManager zamknięty");
+                logger.debug("ConnectionManager shut down");
             }
 
             shutdownCleanupScheduler(premiumCacheCleanupScheduler, "Premium cache cleanup scheduler");
@@ -568,28 +588,33 @@ public class VeloAuth {
 
             if (premiumResolverService != null) {
                 premiumResolverService.shutdown();
-                logger.debug("PremiumResolverService zamknięty");
+                logger.debug("PremiumResolverService shut down");
+            }
+
+            if (premiumResolverAlertService != null) {
+                premiumResolverAlertService.close();
+                logger.debug("PremiumResolverAlertService shut down");
             }
 
             if (authCache != null) {
                 authCache.shutdown();
-                logger.debug("AuthCache zamknięty");
+                logger.debug("AuthCache shut down");
             }
 
-            // 5. Zamknij DB connection jako ostatni
+            // 5. Close DB connection last
             if (databaseManager != null) {
                 databaseManager.shutdown();
-                logger.debug("DatabaseManager zamknięty");
+                logger.debug("DatabaseManager shut down");
             }
 
-            // 6. Zamknij Virtual Thread executor
+            // 6. Shut down Virtual Thread executor
             VirtualThreadExecutorProvider.shutdown();
-            logger.debug("VirtualThreadExecutorProvider zamknięty");
+            logger.debug("VirtualThreadExecutorProvider shut down");
 
             logger.info("VeloAuth shutdown completed successfully");
 
         } catch (IllegalStateException e) {
-            logger.error("Błąd stanu podczas graceful shutdown", e);
+            logger.error("State error during graceful shutdown", e);
         }
     }
 
@@ -613,7 +638,7 @@ public class VeloAuth {
             logger.warn("Interrupted while stopping {}", schedulerName, e);
         }
 
-        logger.debug("{} zamknięty", schedulerName);
+        logger.debug("{} shut down", schedulerName);
     }
 
     private void logStartupInfo(long initializationDuration) {
@@ -666,7 +691,7 @@ public class VeloAuth {
 
         } catch (IllegalStateException e) {
             if (logger.isErrorEnabled()) {
-                logger.error("Błąd stanu podczas przeładowywania konfiguracji", e);
+                logger.error("State error during configuration reload", e);
             }
             return false;
         }
@@ -744,6 +769,13 @@ public class VeloAuth {
      */
     public ConnectionManager getConnectionManager() {
         return connectionManager;
+    }
+
+    /**
+     * @return auth-server timeout scheduler (kicks players who linger unauthenticated)
+     */
+    public AuthTimeoutScheduler getAuthTimeoutScheduler() {
+        return authTimeoutScheduler;
     }
 
     /**

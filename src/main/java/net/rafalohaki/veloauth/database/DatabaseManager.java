@@ -761,8 +761,16 @@ public class DatabaseManager {
 
     // ===== Accessors =====
 
+    /**
+     * Indicates whether the database pool is initialized and the manager has not been shut down.
+     * <p>
+     * Distinct from {@link #isHealthy()}: a manager that just finished initialization is
+     * {@code connected} immediately, but {@code healthy} only after the first health check
+     * completes successfully. Admin commands gate on this method so they do not falsely
+     * report "database not connected" during the 30s window before the first scheduled check.
+     */
     public boolean isConnected() {
-        return isHealthy();
+        return connected;
     }
 
     public DatabaseConfig getConfig() {

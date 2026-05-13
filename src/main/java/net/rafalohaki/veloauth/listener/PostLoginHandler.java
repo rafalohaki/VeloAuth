@@ -69,8 +69,7 @@ public class PostLoginHandler {
                 true,
                 premiumUuid);
 
-        authCache.addAuthorizedPlayer(playerUuid, cachedUser);
-        authCache.startSession(playerUuid, player.getUsername(), playerIp);
+        authCache.authorize(playerUuid, cachedUser, player.getUsername(), playerIp);
 
         // Premium player is now authorized in cache
         // ServerPreConnectEvent will redirect to auth server automatically

@@ -33,6 +33,7 @@ public class Settings {
     private final PremiumSettings premiumSettings = new PremiumSettings();
     private final FloodgateSettings floodgateSettings = new FloodgateSettings();
     private final AlertSettings alertSettings = new AlertSettings();
+    private final PasswordPolicy passwordPolicy = new PasswordPolicy();
     @SuppressWarnings("java:S2068")
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
     
@@ -150,6 +151,14 @@ public class Settings {
         copyPremiumSettings(state.premiumSettings);
         copyFloodgateSettings(state.floodgateSettings);
         copyAlertSettings(state.alertSettings);
+        copyPasswordPolicy(state.passwordPolicy);
+    }
+
+    private void copyPasswordPolicy(PasswordPolicy source) {
+        passwordPolicy.setMinDigits(source.getMinDigits());
+        passwordPolicy.setMinUppercase(source.getMinUppercase());
+        passwordPolicy.setMinLowercase(source.getMinLowercase());
+        passwordPolicy.setMinSpecial(source.getMinSpecial());
     }
 
     private void copyPostgreSqlSettings(PostgreSQLSettings source) {
@@ -303,6 +312,10 @@ public class Settings {
 
     public int getMaxPasswordLength() {
         return maxPasswordLength;
+    }
+
+    public PasswordPolicy getPasswordPolicy() {
+        return passwordPolicy;
     }
 
     public boolean isPremiumCheckEnabled() {
@@ -481,5 +494,43 @@ public class Settings {
         void setCheckIntervalMinutes(int value) { this.checkIntervalMinutes = value; }
         public int getAlertCooldownMinutes() { return alertCooldownMinutes; }
         void setAlertCooldownMinutes(int value) { this.alertCooldownMinutes = value; }
+    }
+
+    /**
+     * Password complexity policy. All counters default to 0 (= no constraint),
+     * preserving backward compatibility with configs that omit the password-policy section.
+     */
+    public static class PasswordPolicy {
+        private int minDigits;
+        private int minUppercase;
+        private int minLowercase;
+        private int minSpecial;
+
+        public int getMinDigits() { return minDigits; }
+        void setMinDigits(int value) { this.minDigits = Math.max(0, value); }
+        public int getMinUppercase() { return minUppercase; }
+        void setMinUppercase(int value) { this.minUppercase = Math.max(0, value); }
+        public int getMinLowercase() { return minLowercase; }
+        void setMinLowercase(int value) { this.minLowercase = Math.max(0, value); }
+        public int getMinSpecial() { return minSpecial; }
+        void setMinSpecial(int value) { this.minSpecial = Math.max(0, value); }
+
+        public boolean isAnyComplexityRequired() {
+            return minDigits > 0 || minUppercase > 0 || minLowercase > 0 || minSpecial > 0;
+        }
+
+        /**
+         * Test-only factory for constructing a fully-specified policy outside this package.
+         * Production code loads policy values via {@link SettingsLoader}.
+         */
+        public static PasswordPolicy forTesting(int minDigits, int minUppercase,
+                                                int minLowercase, int minSpecial) {
+            PasswordPolicy p = new PasswordPolicy();
+            p.setMinDigits(minDigits);
+            p.setMinUppercase(minUppercase);
+            p.setMinLowercase(minLowercase);
+            p.setMinSpecial(minSpecial);
+            return p;
+        }
     }
 }

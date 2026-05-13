@@ -151,14 +151,16 @@ public final class LanguageFileManager {
             }
             
             if (!missingKeys.isEmpty()) {
-                // Append missing keys to file
-                try (java.io.BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8, 
+                // Append missing keys to file using .properties-spec escaping so future
+                // values with backslashes, newlines, leading spaces or special chars
+                // (#, !, =, :) do not corrupt the file when re-loaded.
+                try (java.io.BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8,
                         java.nio.file.StandardOpenOption.APPEND)) {
                     writer.newLine();
                     writer.write("# === Auto-added missing keys ===");
                     writer.newLine();
                     for (String key : missingKeys) {
-                        writer.write(key + "=" + jarProps.getProperty(key));
+                        writer.write(escapePropertyKey(key) + "=" + escapePropertyValue(jarProps.getProperty(key)));
                         writer.newLine();
                     }
                 }
@@ -178,6 +180,30 @@ public final class LanguageFileManager {
      * @return ResourceBundle containing the language strings
      * @throws IOException if the language file cannot be loaded
      */
+    /**
+     * Pure existence check: does {@code messages_<language>.properties} already live on disk?
+     * <p>
+     * Unlike {@link #loadLanguageBundle(String)}, this method never creates or copies files.
+     * Used by {@code Messages.isLanguageSupported} so a typo in the {@code language} config key
+     * (e.g. {@code pll} instead of {@code pl}) does not silently spawn a custom language file.
+     */
+    public boolean fileExists(String language) {
+        if (language == null || language.isBlank()) {
+            return false;
+        }
+        try {
+            validateLanguageCode(language);
+        } catch (IllegalArgumentException invalidCode) {
+            return false;
+        }
+        String filename = MESSAGES_PREFIX + language.toLowerCase(java.util.Locale.ROOT) + PROPERTIES_SUFFIX;
+        Path candidate = langDirectory.resolve(filename).normalize();
+        if (!candidate.startsWith(langDirectory.normalize())) {
+            return false;
+        }
+        return Files.exists(candidate);
+    }
+
     public ResourceBundle loadLanguageBundle(String language) throws IOException {
         validateLanguageCode(language);
         String filename = MESSAGES_PREFIX + language + PROPERTIES_SUFFIX;
@@ -298,23 +324,87 @@ public final class LanguageFileManager {
             }
             
             if (!missingKeys.isEmpty()) {
-                // Append missing keys with English values (as placeholder for translation)
-                try (java.io.BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8, 
+                // Append missing keys with English values (as placeholder for translation),
+                // escaping per .properties spec so future English values containing newlines,
+                // backslashes, leading whitespace, or =:#! survive the round-trip.
+                try (java.io.BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8,
                         java.nio.file.StandardOpenOption.APPEND)) {
                     writer.newLine();
                     writer.write("# === Missing keys (English fallback - please translate) ===");
                     writer.newLine();
                     for (String key : missingKeys) {
-                        writer.write(key + "=" + englishProps.getProperty(key));
+                        writer.write(escapePropertyKey(key) + "=" + escapePropertyValue(englishProps.getProperty(key)));
                         writer.newLine();
                     }
                 }
-                logger.info("Added {} missing keys to messages_{}.properties from English template: {}", 
+                logger.info("Added {} missing keys to messages_{}.properties from English template: {}",
                         missingKeys.size(), language, missingKeys);
             }
         } catch (IOException e) {
             logger.warn("Failed to fill missing keys for language {}: {}", language, e.getMessage());
         }
     }
-    
+
+    /**
+     * Escapes a .properties value per Java {@link java.util.Properties#store} rules:
+     * backslash, control characters, and a leading space. Internal whitespace, {@code =},
+     * {@code :}, {@code #}, {@code !} are valid in values without escaping (only the first
+     * non-whitespace character determines key/value separation, which is the {@code =} we write).
+     */
+    static String escapePropertyValue(String value) {
+        if (value == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(value.length() + 4);
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                case '\f': sb.append("\\f"); break;
+                case ' ':
+                    // Leading space in a value must be escaped to survive Properties.load.
+                    sb.append(i == 0 ? "\\ " : " ");
+                    break;
+                default:
+                    sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Escapes a .properties key. Keys disallow unescaped {@code =}, {@code :}, {@code #},
+     * {@code !}, whitespace, and backslash. VeloAuth keys are ASCII dotted identifiers,
+     * but this guards against future renames into more exotic shapes.
+     */
+    static String escapePropertyKey(String key) {
+        if (key == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(key.length() + 4);
+        for (int i = 0; i < key.length(); i++) {
+            char c = key.charAt(i);
+            switch (c) {
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                case '\f': sb.append("\\f"); break;
+                case ' ':
+                case '=':
+                case ':':
+                case '#':
+                case '!':
+                    sb.append('\\').append(c);
+                    break;
+                default:
+                    sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
 }

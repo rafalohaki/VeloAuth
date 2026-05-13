@@ -1,5 +1,6 @@
 package net.rafalohaki.veloauth.premium;
 
+import net.rafalohaki.veloauth.alert.PremiumResolverAlertService;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.config.Settings.PremiumResolverSettings;
 import net.rafalohaki.veloauth.database.PremiumUuidDao;
@@ -34,13 +35,20 @@ public class PremiumResolverService {
     private final long premiumTtlMillis;
     private final long missTtlMillis;
     private final int maxCacheSize;
+    private final PremiumResolverAlertService alertService;
     // ReentrantLock prevents virtual thread pinning (Java 21 synchronized issue)
     private final ReentrantLock cacheSizeLock = new ReentrantLock();
 
     public PremiumResolverService(Logger logger, Settings settings, PremiumUuidDao premiumUuidDao) {
+        this(logger, settings, premiumUuidDao, null);
+    }
+
+    public PremiumResolverService(Logger logger, Settings settings, PremiumUuidDao premiumUuidDao,
+                                  PremiumResolverAlertService alertService) {
         this.logger = Objects.requireNonNull(logger, "logger");
         PremiumResolverSettings rs = Objects.requireNonNull(settings, "settings").getPremiumResolverSettings();
         this.dao = Objects.requireNonNull(premiumUuidDao, "premiumUuidDao");
+        this.alertService = alertService;
 
         if (logger.isInfoEnabled()) {
             logger.info("[PremiumResolver] Config - Mojang: {}, Ashcon: {}, Wpme: {}",
@@ -74,6 +82,7 @@ public class PremiumResolverService {
         this.premiumTtlMillis = Math.max(0L, premiumTtlMillis);
         this.missTtlMillis = Math.max(0L, missTtlMillis);
         this.maxCacheSize = 10_000;
+        this.alertService = null;
     }
 
     private static List<PremiumResolver> createDefaultResolvers(Logger logger, PremiumResolverSettings settings) {
@@ -162,10 +171,19 @@ public class PremiumResolverService {
             PremiumResolution rawResolution = resolver.resolve(trimmed);
             PremiumResolution resolution = normalizeResolution(resolver, rawResolution, trimmed);
             categorizeResolution(resolver, resolution, trimmed, premiumResult, offlineCandidate, unknownCount);
+            // API responded (premium or offline) = success; unknown = treated as failure for alerting
+            recordAlertMetric(resolver.id(), !resolution.isUnknown());
             return resolution;
         } catch (Exception e) {
             logResolverFailure(resolver, trimmed, e);
+            recordAlertMetric(resolver.id(), false);
             return PremiumResolution.unknown(resolver.id(), e.getMessage());
+        }
+    }
+
+    private void recordAlertMetric(String resolverId, boolean success) {
+        if (alertService != null) {
+            alertService.recordResolution(resolverId, success);
         }
     }
 

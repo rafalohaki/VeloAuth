@@ -170,8 +170,7 @@ public class AuthListener {
                 true,
                 premiumUuid);
 
-        authCache.addAuthorizedPlayer(playerUuid, cachedUser);
-        authCache.startSession(playerUuid, player.getUsername(), playerIp);
+        authCache.authorize(playerUuid, cachedUser, player.getUsername(), playerIp);
 
         if (logger.isDebugEnabled()) {
             logger.debug(AUTH_MARKER, "Refreshed premium authorization for {} (expired cache re-created)",
@@ -456,6 +455,7 @@ public class AuthListener {
 
         // Cleanup retry attempts counter to prevent memory leak
         connectionManager.clearRetryAttempts(player.getUniqueId());
+        plugin.getAuthTimeoutScheduler().cancel(player.getUniqueId());
 
         if (logger.isDebugEnabled()) {
             logger.debug("Player {} disconnected - session remains active", player.getUsername());
@@ -750,6 +750,7 @@ public class AuthListener {
         }
 
         sendAuthInstructions(player);
+        plugin.getAuthTimeoutScheduler().schedule(player);
     }
 
     private void triggerAutoTransfer(Player player) {

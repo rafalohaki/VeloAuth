@@ -66,10 +66,10 @@ public final class CachedAuthUser {
     public CachedAuthUser(UUID uuid, String nickname, String loginIp,
                           long loginTime, boolean isPremium, UUID premiumUuid) {
         if (uuid == null) {
-            throw new IllegalArgumentException("UUID nie może być null");
+            throw new IllegalArgumentException("UUID must not be null");
         }
         if (nickname == null || nickname.isBlank()) {
-            throw new IllegalArgumentException("Nickname nie może być pusty");
+            throw new IllegalArgumentException("Nickname must not be empty");
         }
         if (!isPremium && premiumUuid != null) {
             throw new IllegalArgumentException("Premium UUID wymaga konta premium");
@@ -107,12 +107,12 @@ public final class CachedAuthUser {
     public static CachedAuthUser fromRegisteredPlayer(RegisteredPlayer player, boolean isPremium,
                                                        UUID premiumUuid) {
         if (player == null) {
-            throw new IllegalArgumentException("Player nie może być null");
+            throw new IllegalArgumentException("Player must not be null");
         }
 
         UUID uuid = player.getUuidAsUUID();
         if (uuid == null) {
-            throw new IllegalArgumentException("Player musi mieć prawidłowy UUID");
+            throw new IllegalArgumentException("Player must have a valid UUID");
         }
 
         return new CachedAuthUser(

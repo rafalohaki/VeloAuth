@@ -6,7 +6,7 @@
 
     <groupId>net.rafalohaki.veloauth</groupId>
     <artifactId>veloauth</artifactId>
-    <version>1.1.4</version>
+    <version>1.2.0</version>
     <packaging>jar</packaging>
 
     <name>VeloAuth</name>
@@ -195,6 +195,28 @@
 
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>enforce-jdk21</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[21,)</version>
+                                    <message>VeloAuth requires JDK 21 or newer to build. Note: PMD currently has known issues with class files compiled by JDK 22+ (Unsupported class file major version). For PMD static analysis builds, use JDK 21 explicitly.</message>
+                                </requireJavaVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
                 <configuration>
@@ -265,6 +287,19 @@
                                     <pattern>com.fasterxml.jackson</pattern>
                                     <shadedPattern>net.rafalohaki.veloauth.libs.jackson</shadedPattern>
                                 </relocation>
+                                <!--
+                                  HikariCP relocation prevents LinkageError when another Velocity plugin
+                                  bundles a different Hikari version. Safe because VeloAuth only uses the
+                                  Hikari API via type imports (DatabaseConfig.java) — no string-FQN refs.
+                                  JDBC drivers (postgresql, mysql, h2, sqlite) are NOT relocated:
+                                  DatabaseType.java stores driver class names as string literals which
+                                  shade does not rewrite, and JDBC SPI discovery in META-INF/services
+                                  already handles cross-plugin coexistence.
+                                -->
+                                <relocation>
+                                    <pattern>com.zaxxer.hikari</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.hikari</shadedPattern>
+                                </relocation>
                             </relocations>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
@@ -295,7 +330,20 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-pmd-plugin</artifactId>
-                <version>3.25.0</version>
+                <version>3.28.0</version>
+                <dependencies>
+                    <!-- PMD 7.21+ supports parsing JDK 21..26 class files; required when local JDK is 22+. -->
+                    <dependency>
+                        <groupId>net.sourceforge.pmd</groupId>
+                        <artifactId>pmd-core</artifactId>
+                        <version>7.21.0</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>net.sourceforge.pmd</groupId>
+                        <artifactId>pmd-java</artifactId>
+                        <version>7.21.0</version>
+                    </dependency>
+                </dependencies>
                 <configuration>
                     <!-- PMD analysis configuration -->
                     <rulesets>

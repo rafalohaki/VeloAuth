@@ -97,4 +97,96 @@ class LanguageFileManagerTest {
             languageFileManager.loadLanguageBundle("en");
         }, "Should throw IOException when no language files exist");
     }
+
+    // ===== fileExists: pure query, does not mutate the filesystem =====
+
+    @Test
+    void fileExists_languageWithoutFile_returnsFalseAndDoesNotCreate() throws IOException {
+        languageFileManager.initializeLanguageFiles();
+        Path langDir = tempDir.resolve("lang");
+        Path bogus = langDir.resolve("messages_pll.properties");
+
+        boolean exists = languageFileManager.fileExists("pll");
+
+        assertEquals(false, exists);
+        assertEquals(false, Files.exists(bogus),
+                "fileExists must be a pure query — no file should be created");
+    }
+
+    @Test
+    void fileExists_languageWithFile_returnsTrue() throws IOException {
+        languageFileManager.initializeLanguageFiles();
+        assertTrue(languageFileManager.fileExists("en"));
+        assertTrue(languageFileManager.fileExists("pl"));
+    }
+
+    @Test
+    void fileExists_nullOrBlank_returnsFalse() {
+        assertEquals(false, languageFileManager.fileExists(null));
+        assertEquals(false, languageFileManager.fileExists(""));
+        assertEquals(false, languageFileManager.fileExists("   "));
+    }
+
+    @Test
+    void fileExists_invalidLanguageCode_returnsFalseWithoutThrowing() throws IOException {
+        languageFileManager.initializeLanguageFiles();
+        // Path traversal attempts must not pass validateLanguageCode
+        assertEquals(false, languageFileManager.fileExists("../etc/passwd"));
+        assertEquals(false, languageFileManager.fileExists("en/../pl"));
+    }
+
+    // ===== escapePropertyValue / escapePropertyKey =====
+
+    @Test
+    void escapePropertyValue_backslashAndControlChars_escapedPerSpec() {
+        assertEquals("a\\\\b", LanguageFileManager.escapePropertyValue("a\\b"));
+        assertEquals("line1\\nline2", LanguageFileManager.escapePropertyValue("line1\nline2"));
+        assertEquals("col\\tval", LanguageFileManager.escapePropertyValue("col\tval"));
+        assertEquals("\\r\\n", LanguageFileManager.escapePropertyValue("\r\n"));
+    }
+
+    @Test
+    void escapePropertyValue_leadingSpace_escaped() {
+        // Leading space in a value would be silently swallowed by Properties.load
+        assertEquals("\\ leading", LanguageFileManager.escapePropertyValue(" leading"));
+        // Internal spaces left untouched
+        assertEquals("a b c", LanguageFileManager.escapePropertyValue("a b c"));
+    }
+
+    @Test
+    void escapePropertyValue_specialCharsInValueAreSafe() {
+        // =, :, #, ! in VALUE position are not separators and need no escaping
+        assertEquals("a=b:c#d!e", LanguageFileManager.escapePropertyValue("a=b:c#d!e"));
+    }
+
+    @Test
+    void escapePropertyValue_null_returnsEmpty() {
+        assertEquals("", LanguageFileManager.escapePropertyValue(null));
+    }
+
+    @Test
+    void escapePropertyKey_separatorCharsEscaped() {
+        assertEquals("a\\=b", LanguageFileManager.escapePropertyKey("a=b"));
+        assertEquals("a\\:b", LanguageFileManager.escapePropertyKey("a:b"));
+        assertEquals("\\#hash", LanguageFileManager.escapePropertyKey("#hash"));
+        assertEquals("\\!bang", LanguageFileManager.escapePropertyKey("!bang"));
+        assertEquals("a\\ b", LanguageFileManager.escapePropertyKey("a b"));
+    }
+
+    @Test
+    void escapeRoundTrip_writeThenReadThroughProperties() throws IOException {
+        String trickyValue = "leading\\ tab\there\nnewline\r=equals#hash!bang";
+        String escaped = LanguageFileManager.escapePropertyValue(trickyValue);
+
+        // Round-trip via real Properties.load to prove escape output is spec-compliant
+        Path file = tempDir.resolve("roundtrip.properties");
+        Files.writeString(file, "k=" + escaped + "\n");
+
+        java.util.Properties props = new java.util.Properties();
+        try (var r = Files.newBufferedReader(file)) {
+            props.load(r);
+        }
+        assertEquals(trickyValue, props.getProperty("k"),
+                "Escape output must round-trip cleanly through Properties.load");
+    }
 }
