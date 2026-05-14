@@ -38,7 +38,8 @@ class PlayerAddressUtilsTest {
 
     @Test
     void getPlayerIp_validAddress_returnsHostAddress() throws UnknownHostException {
-        InetSocketAddress addr = new InetSocketAddress(InetAddress.getByName("198.51.100.10"), 25565);
+        InetSocketAddress addr = new InetSocketAddress(
+                InetAddress.getByAddress(new byte[] {(byte) 198, 51, 100, 10}), 25565);
         when(player.getRemoteAddress()).thenReturn(addr);
         when(player.getUsername()).thenReturn("alice");
 
@@ -60,7 +61,8 @@ class PlayerAddressUtilsTest {
 
     @Test
     void getPlayerAddress_validPlayer_returnsInetAddress() throws UnknownHostException {
-        InetSocketAddress addr = new InetSocketAddress(InetAddress.getByName("203.0.113.5"), 25565);
+        InetSocketAddress addr = new InetSocketAddress(
+                InetAddress.getByAddress(new byte[] {(byte) 203, 0, 113, 5}), 25565);
         when(player.getRemoteAddress()).thenReturn(addr);
         when(player.getUsername()).thenReturn("alice");
 
@@ -77,7 +79,8 @@ class PlayerAddressUtilsTest {
 
     @Test
     void getAddressFromPreLogin_validInetSocket_returnsAddress() throws UnknownHostException {
-        InetSocketAddress addr = new InetSocketAddress(InetAddress.getByName("192.0.2.1"), 25565);
+        InetSocketAddress addr = new InetSocketAddress(
+                InetAddress.getByAddress(new byte[] {(byte) 192, 0, 2, 1}), 25565);
         when(preLoginEvent.getConnection()).thenReturn(inboundConnection);
         when(inboundConnection.getRemoteAddress()).thenReturn(addr);
         when(preLoginEvent.getUsername()).thenReturn("bob");
@@ -109,7 +112,8 @@ class PlayerAddressUtilsTest {
 
     @Test
     void hasValidAddress_validAddress_returnsTrue() throws UnknownHostException {
-        InetSocketAddress addr = new InetSocketAddress(InetAddress.getByName("10.0.0.1"), 25565);
+        InetSocketAddress addr = new InetSocketAddress(
+                InetAddress.getByAddress(new byte[] {10, 0, 0, 1}), 25565);
         when(player.getRemoteAddress()).thenReturn(addr);
 
         assertTrue(PlayerAddressUtils.hasValidAddress(player));

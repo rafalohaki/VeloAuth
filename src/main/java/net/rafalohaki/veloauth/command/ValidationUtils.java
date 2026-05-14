@@ -59,12 +59,42 @@ public final class ValidationUtils {
             return ValidationResult.success();
         }
 
-        int digits = 0;
-        int uppercase = 0;
-        int lowercase = 0;
-        int special = 0;
+        CharCounts counts = countChars(password);
+
+        if (counts.digits < policy.getMinDigits()) {
+            return ValidationResult.error(messages.get(
+                    "validation.password.needs_digit", policy.getMinDigits()));
+        }
+        if (counts.uppercase < policy.getMinUppercase()) {
+            return ValidationResult.error(messages.get(
+                    "validation.password.needs_upper", policy.getMinUppercase()));
+        }
+        if (counts.lowercase < policy.getMinLowercase()) {
+            return ValidationResult.error(messages.get(
+                    "validation.password.needs_lower", policy.getMinLowercase()));
+        }
+        if (counts.special < policy.getMinSpecial()) {
+            return ValidationResult.error(messages.get(
+                    "validation.password.needs_special", policy.getMinSpecial()));
+        }
+        return ValidationResult.success();
+    }
+
+    private static CharCounts countChars(String password) {
+        CharCounts counts = new CharCounts();
         for (int i = 0; i < password.length(); i++) {
-            char c = password.charAt(i);
+            counts.tally(password.charAt(i));
+        }
+        return counts;
+    }
+
+    private static final class CharCounts {
+        int digits;
+        int uppercase;
+        int lowercase;
+        int special;
+
+        void tally(char c) {
             if (Character.isDigit(c)) {
                 digits++;
             } else if (Character.isUpperCase(c)) {
@@ -75,24 +105,6 @@ public final class ValidationUtils {
                 special++;
             }
         }
-
-        if (digits < policy.getMinDigits()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.needs_digit", policy.getMinDigits()));
-        }
-        if (uppercase < policy.getMinUppercase()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.needs_upper", policy.getMinUppercase()));
-        }
-        if (lowercase < policy.getMinLowercase()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.needs_lower", policy.getMinLowercase()));
-        }
-        if (special < policy.getMinSpecial()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.needs_special", policy.getMinSpecial()));
-        }
-        return ValidationResult.success();
     }
 
     /**

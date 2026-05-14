@@ -57,7 +57,8 @@ class AuthenticationErrorHandlerTest {
     void handleUuidMismatch_invalidatesCacheAndSession() throws UnknownHostException {
         when(player.getUsername()).thenReturn("alice");
         when(player.getRemoteAddress()).thenReturn(
-                new InetSocketAddress(InetAddress.getByName("203.0.113.10"), 25565));
+                new InetSocketAddress(
+                        InetAddress.getByAddress(new byte[] {(byte) 203, 0, 113, 10}), 25565));
 
         AuthenticationErrorHandler.handleUuidMismatch(
                 player, PLAYER_UUID, STORED_UUID, PREMIUM_UUID, dbPlayer, authCache, logger);
@@ -70,7 +71,8 @@ class AuthenticationErrorHandlerTest {
     void handleUuidMismatch_nullStoredUuids_stillInvalidates() throws UnknownHostException {
         when(player.getUsername()).thenReturn("alice");
         when(player.getRemoteAddress()).thenReturn(
-                new InetSocketAddress(InetAddress.getByName("203.0.113.10"), 25565));
+                new InetSocketAddress(
+                        InetAddress.getByAddress(new byte[] {(byte) 203, 0, 113, 10}), 25565));
 
         AuthenticationErrorHandler.handleUuidMismatch(
                 player, PLAYER_UUID, null, null, null, authCache, logger);

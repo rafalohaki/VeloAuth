@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.i18n;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -78,7 +79,7 @@ class MessagesSourceScanTest {
             collectMatches(MESSAGES_GET, source, keys);
             collectMatches(MESSAGES_GET_FOR_LANGUAGE, source, keys);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to read source file: " + javaFile, e);
+            throw new UncheckedIOException("Failed to read source file: " + javaFile, e);
         }
     }
 

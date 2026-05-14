@@ -358,18 +358,14 @@ public final class LanguageFileManager {
         StringBuilder sb = new StringBuilder(value.length() + 4);
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
-            switch (c) {
-                case '\\': sb.append("\\\\"); break;
-                case '\n': sb.append("\\n"); break;
-                case '\r': sb.append("\\r"); break;
-                case '\t': sb.append("\\t"); break;
-                case '\f': sb.append("\\f"); break;
-                case ' ':
-                    // Leading space in a value must be escaped to survive Properties.load.
-                    sb.append(i == 0 ? "\\ " : " ");
-                    break;
-                default:
-                    sb.append(c);
+            String controlEscape = controlEscape(c);
+            if (controlEscape != null) {
+                sb.append(controlEscape);
+            } else if (c == ' ' && i == 0) {
+                // Leading space in a value must be escaped to survive Properties.load.
+                sb.append("\\ ");
+            } else {
+                sb.append(c);
             }
         }
         return sb.toString();
@@ -387,24 +383,31 @@ public final class LanguageFileManager {
         StringBuilder sb = new StringBuilder(key.length() + 4);
         for (int i = 0; i < key.length(); i++) {
             char c = key.charAt(i);
-            switch (c) {
-                case '\\': sb.append("\\\\"); break;
-                case '\n': sb.append("\\n"); break;
-                case '\r': sb.append("\\r"); break;
-                case '\t': sb.append("\\t"); break;
-                case '\f': sb.append("\\f"); break;
-                case ' ':
-                case '=':
-                case ':':
-                case '#':
-                case '!':
-                    sb.append('\\').append(c);
-                    break;
-                default:
-                    sb.append(c);
+            String controlEscape = controlEscape(c);
+            if (controlEscape != null) {
+                sb.append(controlEscape);
+            } else if (isKeyDelimiter(c)) {
+                sb.append('\\').append(c);
+            } else {
+                sb.append(c);
             }
         }
         return sb.toString();
+    }
+
+    private static String controlEscape(char c) {
+        return switch (c) {
+            case '\\' -> "\\\\";
+            case '\n' -> "\\n";
+            case '\r' -> "\\r";
+            case '\t' -> "\\t";
+            case '\f' -> "\\f";
+            default -> null;
+        };
+    }
+
+    private static boolean isKeyDelimiter(char c) {
+        return c == ' ' || c == '=' || c == ':' || c == '#' || c == '!';
     }
 
 }

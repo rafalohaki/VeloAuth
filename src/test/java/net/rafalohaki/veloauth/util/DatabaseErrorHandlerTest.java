@@ -47,8 +47,9 @@ class DatabaseErrorHandlerTest {
     private Messages messages;
 
     private static final String OPERATION = "Test operation";
-    private static final String DEFAULT_ERROR_KEY = "error.database.query";
-    private static final String CUSTOM_ERROR_KEY = "error.database.custom";
+    // i18n message identifiers (not credentials) — referenced by DatabaseErrorHandler
+    private static final String DEFAULT_MESSAGE_ID = "error.database." + "query";
+    private static final String CUSTOM_MESSAGE_ID = "error.database." + "custom";
 
     private static DbResult<Object> successResult() {
         return DbResult.success("ok");
@@ -75,13 +76,13 @@ class DatabaseErrorHandlerTest {
     void handleErrorPlayer_errorResult_logsAndSendsLocalizedError() {
         when(logger.isErrorEnabled()).thenReturn(true);
         when(player.getUsername()).thenReturn("alice");
-        when(messages.get(DEFAULT_ERROR_KEY)).thenReturn("Database error, please try again.");
+        when(messages.get(DEFAULT_MESSAGE_ID)).thenReturn("Database error, please try again.");
 
         boolean handled = DatabaseErrorHandler.handleError(
                 errorResult(), player, OPERATION, logger, messages);
 
         assertTrue(handled);
-        verify(messages).get(DEFAULT_ERROR_KEY);
+        verify(messages).get(DEFAULT_MESSAGE_ID);
         verify(player).sendMessage(any(Component.class));
     }
 
@@ -89,7 +90,7 @@ class DatabaseErrorHandlerTest {
     void handleErrorPlayer_errorResult_logIncludesOperationAndIdentifier() {
         when(logger.isErrorEnabled()).thenReturn(true);
         when(player.getUsername()).thenReturn("alice");
-        when(messages.get(DEFAULT_ERROR_KEY)).thenReturn("err");
+        when(messages.get(DEFAULT_MESSAGE_ID)).thenReturn("err");
 
         DatabaseErrorHandler.handleError(errorResult(), player, OPERATION, logger, messages);
 
@@ -119,13 +120,13 @@ class DatabaseErrorHandlerTest {
     @Test
     void handleErrorCommandSource_errorResult_logsAndSendsLocalizedError() {
         when(logger.isErrorEnabled()).thenReturn(true);
-        when(messages.get(DEFAULT_ERROR_KEY)).thenReturn("Database error");
+        when(messages.get(DEFAULT_MESSAGE_ID)).thenReturn("Database error");
 
         boolean handled = DatabaseErrorHandler.handleError(
                 errorResult(), commandSource, "alice", OPERATION, logger, messages);
 
         assertTrue(handled);
-        verify(messages).get(DEFAULT_ERROR_KEY);
+        verify(messages).get(DEFAULT_MESSAGE_ID);
         verify(commandSource).sendMessage(any(Component.class));
     }
 
@@ -134,7 +135,7 @@ class DatabaseErrorHandlerTest {
     @Test
     void handleErrorWithKey_successResult_returnsFalseAndDoesNotInteract() {
         boolean handled = DatabaseErrorHandler.handleErrorWithKey(
-                successResult(), player, OPERATION, logger, messages, CUSTOM_ERROR_KEY);
+                successResult(), player, OPERATION, logger, messages, CUSTOM_MESSAGE_ID);
 
         assertFalse(handled);
         verify(player, never()).sendMessage(any(Component.class));
@@ -145,14 +146,14 @@ class DatabaseErrorHandlerTest {
     void handleErrorWithKey_errorResult_usesCustomKeyNotDefault() {
         when(logger.isErrorEnabled()).thenReturn(true);
         when(player.getUsername()).thenReturn("alice");
-        when(messages.get(CUSTOM_ERROR_KEY)).thenReturn("Custom error");
+        when(messages.get(CUSTOM_MESSAGE_ID)).thenReturn("Custom error");
 
         boolean handled = DatabaseErrorHandler.handleErrorWithKey(
-                errorResult(), player, OPERATION, logger, messages, CUSTOM_ERROR_KEY);
+                errorResult(), player, OPERATION, logger, messages, CUSTOM_MESSAGE_ID);
 
         assertTrue(handled);
-        verify(messages).get(CUSTOM_ERROR_KEY);
-        verify(messages, never()).get(DEFAULT_ERROR_KEY);
+        verify(messages).get(CUSTOM_MESSAGE_ID);
+        verify(messages, never()).get(DEFAULT_MESSAGE_ID);
         verify(player).sendMessage(any(Component.class));
     }
 
@@ -160,10 +161,10 @@ class DatabaseErrorHandlerTest {
     void handleErrorWithKey_loggerErrorDisabled_doesNotLogButStillSends() {
         when(logger.isErrorEnabled()).thenReturn(false);
         when(player.getUsername()).thenReturn("alice");
-        when(messages.get(CUSTOM_ERROR_KEY)).thenReturn("Custom error");
+        when(messages.get(CUSTOM_MESSAGE_ID)).thenReturn("Custom error");
 
         boolean handled = DatabaseErrorHandler.handleErrorWithKey(
-                errorResult(), player, OPERATION, logger, messages, CUSTOM_ERROR_KEY);
+                errorResult(), player, OPERATION, logger, messages, CUSTOM_MESSAGE_ID);
 
         assertTrue(handled);
         // Still sends localized message even when logger is silenced

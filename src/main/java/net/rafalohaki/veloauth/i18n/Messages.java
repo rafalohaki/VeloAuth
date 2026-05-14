@@ -237,7 +237,7 @@ public class Messages {
             // corrupted, manually edited to remove keys, or simply missing newer keys
             // that fillMissingKeysFromEnglish() failed to backfill. Keeps user-facing
             // text in a real language instead of leaking "Missing: …" to the player.
-            if (englishBundle != null && englishBundle != bundle) {
+            if (englishBundle != null && !"en".equals(currentLanguage)) {
                 try {
                     String message = englishBundle.getString(resolvedKey);
                     logger.warn("Missing translation key '{}' in language '{}' — falling back to English",
