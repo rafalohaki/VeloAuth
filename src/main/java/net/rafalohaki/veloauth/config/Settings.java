@@ -35,6 +35,7 @@ public class Settings {
     private final AlertSettings alertSettings = new AlertSettings();
     private final PasswordPolicy passwordPolicy = new PasswordPolicy();
     private final AuditLogSettings auditLogSettings = new AuditLogSettings();
+    private final TwoFactorSettings twoFactorSettings = new TwoFactorSettings();
     @SuppressWarnings("java:S2068")
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
     
@@ -106,7 +107,22 @@ public class Settings {
             logger.debug("Loading configuration from: {}", configFile);
 
             applyLoadedState(SettingsLoader.load(this, configFile, yamlMapper, logger));
-            SettingsValidator.validate(this);
+
+            try {
+                SettingsValidator.validate(this);
+            } catch (IllegalArgumentException e) {
+                // Validator throws on invalid config values. Convert to a graceful failure so
+                // VeloAuth.initializeConfiguration() and /vauth reload can report it without
+                // a stack trace propagating to the player or to Velocity's event dispatch.
+                // The live Settings instance is left in whatever state the loader applied; on
+                // first load the plugin aborts init, and on /vauth reload the caller can surface
+                // the validation error to the operator and keep running with the partial state.
+                logger.error("Invalid configuration in {}: {}", configFile, e.getMessage());
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Configuration validation failure details", e);
+                }
+                return false;
+            }
 
             logger.debug("Configuration loaded successfully");
             return true;
@@ -154,11 +170,19 @@ public class Settings {
         copyAlertSettings(state.alertSettings);
         copyPasswordPolicy(state.passwordPolicy);
         copyAuditLogSettings(state.auditLogSettings);
+        copyTwoFactorSettings(state.twoFactorSettings);
     }
 
     private void copyAuditLogSettings(AuditLogSettings source) {
         auditLogSettings.setEnabled(source.isEnabled());
         auditLogSettings.setRetentionDays(source.getRetentionDays());
+    }
+
+    private void copyTwoFactorSettings(TwoFactorSettings source) {
+        twoFactorSettings.setEnabled(source.isEnabled());
+        twoFactorSettings.setIssuer(source.getIssuer());
+        twoFactorSettings.setShowAsciiQr(source.isShowAsciiQr());
+        twoFactorSettings.setPendingTimeoutSeconds(source.getPendingTimeoutSeconds());
     }
 
     private void copyPasswordPolicy(PasswordPolicy source) {
@@ -381,6 +405,10 @@ public class Settings {
         return auditLogSettings;
     }
 
+    public TwoFactorSettings getTwoFactorSettings() {
+        return twoFactorSettings;
+    }
+
     // ===== Inner Settings Classes =====
 
     /**
@@ -394,6 +422,7 @@ public class Settings {
         private int hitTtlMinutes = 10;
         private int missTtlMinutes = 3;
         private boolean caseSensitive = true;
+        private int memoryCacheMaxSize = 10_000;
 
         public boolean isMojangEnabled() { return mojangEnabled; }
         void setMojangEnabled(boolean value) { this.mojangEnabled = value; }
@@ -409,6 +438,8 @@ public class Settings {
         void setMissTtlMinutes(int value) { this.missTtlMinutes = value; }
         public boolean isCaseSensitive() { return caseSensitive; }
         void setCaseSensitive(boolean value) { this.caseSensitive = value; }
+        public int getMemoryCacheMaxSize() { return memoryCacheMaxSize; }
+        void setMemoryCacheMaxSize(int value) { this.memoryCacheMaxSize = value; }
 
         void copyFrom(PremiumResolverSettings source) {
             this.mojangEnabled = source.mojangEnabled;
@@ -418,6 +449,7 @@ public class Settings {
             this.hitTtlMinutes = source.hitTtlMinutes;
             this.missTtlMinutes = source.missTtlMinutes;
             this.caseSensitive = source.caseSensitive;
+            this.memoryCacheMaxSize = source.memoryCacheMaxSize;
         }
     }
 
@@ -519,6 +551,28 @@ public class Settings {
         void setEnabled(boolean value) { this.enabled = value; }
         public int getRetentionDays() { return retentionDays; }
         void setRetentionDays(int value) { this.retentionDays = value; }
+    }
+
+    /**
+     * 2FA / TOTP configuration. Opt-in per player; {@code enabled=false} disables
+     * the entire feature (existing TOTP tokens stop being enforced and {@code /2fa setup}
+     * is rejected). Backward-compatible with LimboAuth's {@code TOTPTOKEN} column
+     * because we use the same RFC 6238 parameter set as every other authenticator app.
+     */
+    public static class TwoFactorSettings {
+        private boolean enabled = true;
+        private String issuer = "VeloAuth";
+        private boolean showAsciiQr = true;
+        private int pendingTimeoutSeconds = 300;
+
+        public boolean isEnabled() { return enabled; }
+        void setEnabled(boolean value) { this.enabled = value; }
+        public String getIssuer() { return issuer; }
+        void setIssuer(String value) { this.issuer = (value == null || value.isBlank()) ? "VeloAuth" : value; }
+        public boolean isShowAsciiQr() { return showAsciiQr; }
+        void setShowAsciiQr(boolean value) { this.showAsciiQr = value; }
+        public int getPendingTimeoutSeconds() { return pendingTimeoutSeconds; }
+        void setPendingTimeoutSeconds(int value) { this.pendingTimeoutSeconds = value; }
     }
 
     /**

@@ -3,9 +3,12 @@ package net.rafalohaki.veloauth.command;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import net.rafalohaki.veloauth.audit.AuditEventType;
+import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.DatabaseErrorHandler;
+import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
@@ -87,6 +90,12 @@ class UnregisterCommand implements SimpleCommand {
                 CommandHelper.sendSuccess(source, ctx.messages().get("admin.account_deleted", nickname));
                 String adminName = source instanceof Player player ? player.getUsername() : "CONSOLE";
                 ctx.logger().info(AUTH_MARKER, "Admin {} deleted player account: {}", adminName, nickname);
+
+                AuditLogService audit = ctx.plugin().getAuditLogService();
+                if (audit != null) {
+                    String adminIp = source instanceof Player p ? PlayerAddressUtils.getPlayerIp(p) : null;
+                    audit.record(AuditEventType.UNREGISTER, nickname, adminIp, "admin=" + adminName);
+                }
 
             } else {
                 CommandHelper.sendError(source, ctx.messages(), ERROR_DATABASE_QUERY);

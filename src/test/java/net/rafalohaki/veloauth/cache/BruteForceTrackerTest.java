@@ -1,12 +1,12 @@
 package net.rafalohaki.veloauth.cache;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.net.InetAddress;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -58,40 +58,23 @@ class BruteForceTrackerTest {
         assertFalse(tracker.isBlocked(address, null));
     }
 
-    @Test
-    void testCleanupExpired_ConcurrentCheck_WaitsForCheckLock() throws Exception {
-        BruteForceTracker tracker = new BruteForceTracker(3, 60, messages);
-        InetAddress address = InetAddress.getByName("127.0.0.11");
-        BlockingExpiryEntry entry = new BlockingExpiryEntry();
-        entry.incrementAttempts();
-        getEntries(tracker).put(address, entry);
-
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            Future<Boolean> blockedFuture = executor.submit(() -> tracker.isBlocked(address, null));
-
-            assertTrue(entry.awaitExpiryCheckStarted());
-
-            Future<Integer> cleanupFuture = executor.submit(tracker::cleanupExpired);
-
-            assertThrows(TimeoutException.class, () -> cleanupFuture.get(200, TimeUnit.MILLISECONDS));
-
-            entry.release();
-
-            assertFalse(blockedFuture.get(5, TimeUnit.SECONDS));
-            assertEquals(0, cleanupFuture.get(5, TimeUnit.SECONDS));
-        }
-
-        assertEquals(1, tracker.size());
-        assertFalse(tracker.isBlocked(address, null));
-    }
+    /*
+     * NOTE: The pre-Caffeine companion test "testCleanupExpired_ConcurrentCheck_WaitsForCheckLock"
+     * pinned the legacy global ReentrantLock contract — `isBlocked` and `cleanupExpired` were
+     * forced to serialize. That contract is gone in the Caffeine refactor: reads
+     * ({@code getIfPresent}) are lock-free, and {@code cleanUp()} runs the internal maintenance
+     * buffer rather than iterating user-visible state. The new design is still correct (an
+     * isBlocked caller that already obtained an entry reference is unaffected by a concurrent
+     * eviction — it operates on the local reference), so the assertion no longer applies.
+     */
 
     @SuppressWarnings("unchecked")
-    private static ConcurrentHashMap<InetAddress, BruteForceTracker.BruteForceEntry> getEntries(
+    private static Cache<InetAddress, BruteForceTracker.BruteForceEntry> getEntries(
             BruteForceTracker tracker
     ) throws Exception {
         Field field = BruteForceTracker.class.getDeclaredField("bruteForceAttempts");
         field.setAccessible(true);
-        return (ConcurrentHashMap<InetAddress, BruteForceTracker.BruteForceEntry>) field.get(tracker);
+        return (Cache<InetAddress, BruteForceTracker.BruteForceEntry>) field.get(tracker);
     }
 
     private static final class BlockingIncrementEntry extends BruteForceTracker.BruteForceEntry {
@@ -112,27 +95,6 @@ class BruteForceTrackerTest {
 
         private void release() {
             releaseIncrement.countDown();
-        }
-    }
-
-    private static final class BlockingExpiryEntry extends BruteForceTracker.BruteForceEntry {
-
-        private final CountDownLatch expiryCheckStarted = new CountDownLatch(1);
-        private final CountDownLatch releaseExpiryCheck = new CountDownLatch(1);
-
-        @Override
-        boolean isExpired(int timeoutMinutes) {
-            expiryCheckStarted.countDown();
-            await(releaseExpiryCheck);
-            return false;
-        }
-
-        private boolean awaitExpiryCheckStarted() throws InterruptedException {
-            return expiryCheckStarted.await(5, TimeUnit.SECONDS);
-        }
-
-        private void release() {
-            releaseExpiryCheck.countDown();
         }
     }
 

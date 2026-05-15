@@ -14,7 +14,6 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -49,22 +48,13 @@ class SettingsValidationTest {
                 """;
 
         Path configFile = tempDir.resolve("config.yml");
-        
+
         // When: Loading config with all resolvers disabled
         writeConfigFile(configFile, invalidConfig);
 
-        // Then: Should throw IllegalArgumentException
-        IllegalArgumentException exception = assertThrows(
-            IllegalArgumentException.class,
-            () -> settings.load(),
-            "Should reject config with all resolvers disabled"
-        );
-
-        assertTrue(
-            exception.getMessage().contains("at least one source") ||
-            exception.getMessage().contains("at least one resolver"),
-            "Error message should mention resolver requirement"
-        );
+        // Then: Should reject gracefully (validation exceptions are caught and surfaced via return false
+        // so /vauth reload and startup paths don't crash on operator typos)
+        assertFalse(settings.load(), "Should reject config with all resolvers disabled");
     }
 
     @ParameterizedTest(name = "shouldAcceptConfigWith mojang={0}, ashcon={1}, wpme={2}")
@@ -120,18 +110,8 @@ class SettingsValidationTest {
         // When: Loading config with invalid timeout
         writeConfigFile(configFile, invalidConfig);
 
-        // Then: Should throw IllegalArgumentException
-        IllegalArgumentException exception = assertThrows(
-            IllegalArgumentException.class,
-            () -> settings.load(),
-            "Should reject config with negative timeout"
-        );
-
-        assertTrue(
-            exception.getMessage().contains("timeout") ||
-            exception.getMessage().contains("must be > 0"),
-            "Error message should mention timeout validation"
-        );
+        // Then: validation errors are caught inside load() and surfaced via return false
+        assertFalse(settings.load(), "Should reject config with negative timeout");
     }
 
     @Test
@@ -154,18 +134,8 @@ class SettingsValidationTest {
         // When: Loading config with invalid TTL
         writeConfigFile(configFile, invalidConfig);
 
-        // Then: Should throw IllegalArgumentException
-        IllegalArgumentException exception = assertThrows(
-            IllegalArgumentException.class,
-            () -> settings.load(),
-            "Should reject config with negative TTL"
-        );
-
-        assertTrue(
-            exception.getMessage().contains("TTL") ||
-            exception.getMessage().contains("negative"),
-            "Error message should mention TTL validation"
-        );
+        // Then: validation errors are caught inside load() and surfaced via return false
+        assertFalse(settings.load(), "Should reject config with negative TTL");
     }
 
     @Test
@@ -221,14 +191,7 @@ class SettingsValidationTest {
         Path configFile = tempDir.resolve("config.yml");
         writeConfigFile(configFile, invalidConfig);
 
-        IllegalArgumentException exception = assertThrows(
-            IllegalArgumentException.class,
-            () -> settings.load(),
-            "Should reject Floodgate prefixes with whitespace"
-        );
-
-        assertTrue(exception.getMessage().contains("whitespace"),
-                "Error message should mention whitespace validation");
+        assertFalse(settings.load(), "Should reject Floodgate prefixes with whitespace");
     }
 
     @Test
@@ -268,14 +231,7 @@ class SettingsValidationTest {
         Path configFile = tempDir.resolve("config.yml");
         writeConfigFile(configFile, invalidConfig);
 
-        IllegalArgumentException exception = assertThrows(
-            IllegalArgumentException.class,
-            () -> settings.load(),
-            "Should reject non-positive session timeout values"
-        );
-
-        assertTrue(exception.getMessage().contains("Session timeout"),
-                "Error message should mention session timeout validation");
+        assertFalse(settings.load(), "Should reject non-positive session timeout values");
     }
 
     @Test

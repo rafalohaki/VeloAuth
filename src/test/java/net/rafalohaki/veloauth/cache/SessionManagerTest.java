@@ -1,5 +1,6 @@
 package net.rafalohaki.veloauth.cache;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -9,7 +10,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -38,7 +38,7 @@ class SessionManagerTest {
         UUID playerUuid = UUID.randomUUID();
 
         sessionManager.startSession(playerUuid, "ExpiredPlayer", "127.0.0.1");
-        AuthCache.ActiveSession session = getActiveSessions(sessionManager).get(playerUuid);
+        AuthCache.ActiveSession session = getActiveSessions(sessionManager).getIfPresent(playerUuid);
         setLastActivityTime(session, System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(2));
 
         assertFalse(sessionManager.hasActiveSession(playerUuid, "ExpiredPlayer", "127.0.0.1"));
@@ -102,11 +102,11 @@ class SessionManagerTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static ConcurrentHashMap<UUID, AuthCache.ActiveSession> getActiveSessions(SessionManager sessionManager)
+    private static Cache<UUID, AuthCache.ActiveSession> getActiveSessions(SessionManager sessionManager)
             throws Exception {
         Field field = SessionManager.class.getDeclaredField("activeSessions");
         field.setAccessible(true);
-        return (ConcurrentHashMap<UUID, AuthCache.ActiveSession>) field.get(sessionManager);
+        return (Cache<UUID, AuthCache.ActiveSession>) field.get(sessionManager);
     }
 
     private static void setLastActivityTime(AuthCache.ActiveSession session, long timestamp) throws Exception {

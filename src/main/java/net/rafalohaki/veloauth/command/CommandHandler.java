@@ -26,6 +26,8 @@ public class CommandHandler {
     private static final String COMMAND_CHANGE_PASSWORD = "changepassword"; // NOSONAR
     private static final String COMMAND_UNREGISTER = "unregister";
     private static final String COMMAND_VAUTH = "vauth";
+    private static final String COMMAND_TWO_FACTOR = "2fa";
+    private static final String[] COMMAND_TWO_FACTOR_ALIASES = {"totp", "twofa"};
 
     private final VeloAuth plugin;
     private final Messages messages;
@@ -61,6 +63,8 @@ public class CommandHandler {
 
         commandManager.register(commandManager.metaBuilder(COMMAND_UNREGISTER).build(), new UnregisterCommand(ctx));
         commandManager.register(commandManager.metaBuilder(COMMAND_VAUTH).build(), new VAuthCommand(ctx));
+        commandManager.register(commandManager.metaBuilder(COMMAND_TWO_FACTOR).aliases(COMMAND_TWO_FACTOR_ALIASES).build(),
+                new TwoFactorCommand(ctx));
 
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("connection.commands.registered"));
@@ -78,6 +82,7 @@ public class CommandHandler {
         unregisterCommandAliases(commandManager, COMMAND_CHANGE_PASSWORD);
         unregisterCommandAliases(commandManager, COMMAND_UNREGISTER);
         unregisterCommandAliases(commandManager, COMMAND_VAUTH);
+        unregisterCommandAliases(commandManager, COMMAND_TWO_FACTOR, COMMAND_TWO_FACTOR_ALIASES);
 
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("admin.commands_unregistered"));

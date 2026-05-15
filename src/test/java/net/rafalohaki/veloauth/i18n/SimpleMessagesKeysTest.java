@@ -126,7 +126,38 @@ class SimpleMessagesKeysTest {
             "admin.reload.success",
             "admin.reload.failed",
             // Kick messages
-            "general.kick.message"
+            "general.kick.message",
+            // 2FA / TOTP keys (RFC 6238)
+            "2fa.disabled_in_config",
+            "2fa.usage",
+            "2fa.setup.already_enabled",
+            "2fa.setup.generated_header",
+            "2fa.setup.scan_instruction",
+            "2fa.setup.secret_label",
+            "2fa.setup.issuer_label",
+            "2fa.setup.account_label",
+            "2fa.setup.verify_prompt",
+            "2fa.setup.uri_label",
+            "2fa.verify.usage",
+            "2fa.verify.no_pending",
+            "2fa.verify.invalid_format",
+            "2fa.verify.wrong_code",
+            "2fa.verify.setup_success",
+            "2fa.verify.login_success",
+            "2fa.disable.usage",
+            "2fa.disable.not_enabled",
+            "2fa.disable.wrong_code",
+            "2fa.disable.success",
+            "2fa.qr.not_enabled",
+            "2fa.qr.warning",
+            "2fa.status.enabled",
+            "2fa.status.disabled",
+            "2fa.login.pending_prompt",
+            "admin.2fa.remove.usage",
+            "admin.2fa.remove.success",
+            "admin.2fa.remove.not_found",
+            "admin.2fa.remove.not_enabled",
+            "admin.help.2fa_remove"
     );
 
     /**

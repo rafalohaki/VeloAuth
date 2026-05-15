@@ -25,6 +25,7 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
 - 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are completely hidden from tab-completion once the player is logged in
 - 🚀 **High Performance** - Three-layer premium resolution cache: in-memory → database → external API, with 24-hour premium status retention
+- 🔐 **Optional 2FA (TOTP)** - Opt-in RFC 6238 second factor compatible with Google Authenticator, Authy, Aegis. See [2FA.md](2FA.md) for the operator + player handbook.
 - 🔄 **Conflict Resolution** - Smart handling of premium/cracked nickname conflicts
 - 📊 **Admin Tools** - Complete conflict management with `/vauth conflicts`
 - 🗄️ **Multi-Database** - MySQL, PostgreSQL, H2, SQLite
@@ -201,6 +202,10 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 | `/register <password> <confirm>` | Create new account | Hidden after login. No premium nicknames |
 | `/login <password>` | Login to your account | Hidden after login. Works for all players |
 | `/changepassword <old> <new>` | Change your password | Must be logged in |
+| `/2fa setup` | Enroll a TOTP authenticator (see [2FA.md](2FA.md)) | Must be logged in. Disabled when `two-factor.enabled: false` |
+| `/2fa verify <code>` | Confirm enrollment OR pass 2FA at login | — |
+| `/2fa disable <code>` | Disable 2FA on your account | Requires a valid code |
+| `/2fa qr` / `/2fa status` | Re-show QR / show 2FA status | Must be logged in |
 
 ## Admin Commands
 
@@ -211,6 +216,7 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 | `/vauth cache-reset [player]` | `veloauth.admin` | Clear authorization cache |
 | `/vauth stats` | `veloauth.admin` | Show plugin statistics |
 | `/vauth conflicts` | `veloauth.admin` | List nickname conflicts |
+| `/vauth 2fa-remove <nickname>` | `veloauth.admin` | Recovery: wipe a player's 2FA token (see [2FA.md](2FA.md)) |
 
 ## How It Works
 

@@ -29,6 +29,7 @@ public final class SettingsValidator {
         validatePremium(settings);
         validateFloodgate(settings);
         validateAuditLog(settings);
+        validateTwoFactor(settings);
         settings.normalizeLanguage();
         logger.debug("Configuration validation completed successfully");
     }
@@ -37,6 +38,24 @@ public final class SettingsValidator {
         int retention = settings.getAuditLogSettings().getRetentionDays();
         if (retention < 1 || retention > 3650) {
             throw new IllegalArgumentException("Audit log retention-days must be in range 1-3650");
+        }
+    }
+
+    static void validateTwoFactor(Settings settings) {
+        Settings.TwoFactorSettings twoFactor = settings.getTwoFactorSettings();
+        int timeout = twoFactor.getPendingTimeoutSeconds();
+        if (timeout < 30 || timeout > 1800) {
+            throw new IllegalArgumentException(
+                "two-factor.pending-timeout-seconds must be in range 30-1800 (got " + timeout + ")");
+        }
+        String issuer = twoFactor.getIssuer();
+        if (issuer == null || issuer.isBlank()) {
+            throw new IllegalArgumentException("two-factor.issuer must not be empty");
+        }
+        // RFC 6238 + Google Authenticator key-uri-format reserves ':' as the issuer/account separator.
+        if (issuer.contains(":")) {
+            throw new IllegalArgumentException(
+                "two-factor.issuer must not contain ':' (reserved separator in otpauth URI)");
         }
     }
 
@@ -170,6 +189,9 @@ public final class SettingsValidator {
     private static void validatePremiumResolverTtl(Settings.PremiumResolverSettings resolver) {
         if (resolver.getHitTtlMinutes() < 0 || resolver.getMissTtlMinutes() < 0) {
             throw new IllegalArgumentException("Premium resolver: TTL in minutes must not be negative");
+        }
+        if (resolver.getMemoryCacheMaxSize() <= 0) {
+            throw new IllegalArgumentException("Premium resolver: memory-cache-max-size must be > 0");
         }
     }
 

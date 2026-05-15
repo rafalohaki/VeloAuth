@@ -38,6 +38,7 @@ final class SettingsLoader {
         loadFloodgateSettings(config, state);
         loadAlertSettings(config, state);
         loadAuditLogSettings(config, state);
+        loadTwoFactorSettings(config, state);
         loadDebugSettings(config, state);
         loadLanguageSettings(config, state);
         processDatabaseSettings(state, logger);
@@ -54,6 +55,20 @@ final class SettingsLoader {
         Settings.AuditLogSettings target = state.auditLogSettings;
         target.setEnabled(YamlParserUtils.getBoolean(auditLog, YAML_FIELD_ENABLED, target.isEnabled()));
         target.setRetentionDays(YamlParserUtils.getInt(auditLog, "retention-days", target.getRetentionDays()));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void loadTwoFactorSettings(Map<String, Object> config, LoadedState state) {
+        Object section = config.get("two-factor");
+        if (!(section instanceof Map<?, ?>)) {
+            return;
+        }
+        Map<String, Object> twoFactor = (Map<String, Object>) section;
+        Settings.TwoFactorSettings target = state.twoFactorSettings;
+        target.setEnabled(YamlParserUtils.getBoolean(twoFactor, YAML_FIELD_ENABLED, target.isEnabled()));
+        target.setIssuer(YamlParserUtils.getString(twoFactor, "issuer", target.getIssuer()));
+        target.setShowAsciiQr(YamlParserUtils.getBoolean(twoFactor, "show-ascii-qr", target.isShowAsciiQr()));
+        target.setPendingTimeoutSeconds(YamlParserUtils.getInt(twoFactor, "pending-timeout-seconds", target.getPendingTimeoutSeconds()));
     }
 
     @SuppressWarnings("unchecked")
@@ -230,6 +245,7 @@ final class SettingsLoader {
         target.setHitTtlMinutes(YamlParserUtils.getInt(resolver, "hit-ttl-minutes", target.getHitTtlMinutes()));
         target.setMissTtlMinutes(YamlParserUtils.getInt(resolver, "miss-ttl-minutes", target.getMissTtlMinutes()));
         target.setCaseSensitive(YamlParserUtils.getBoolean(resolver, "case-sensitive", target.isCaseSensitive()));
+        target.setMemoryCacheMaxSize(YamlParserUtils.getInt(resolver, "memory-cache-max-size", target.getMemoryCacheMaxSize()));
     }
 
     @SuppressWarnings("unchecked")
@@ -383,6 +399,7 @@ final class SettingsLoader {
         final Settings.AlertSettings alertSettings = new Settings.AlertSettings();
         final Settings.PasswordPolicy passwordPolicy = new Settings.PasswordPolicy();
         final Settings.AuditLogSettings auditLogSettings = new Settings.AuditLogSettings();
+        final Settings.TwoFactorSettings twoFactorSettings = new Settings.TwoFactorSettings();
 
         static LoadedState from(Settings settings) {
             LoadedState state = new LoadedState();
@@ -419,6 +436,7 @@ final class SettingsLoader {
             copyAlertSettings(settings.getAlertSettings(), state.alertSettings);
             copyPasswordPolicy(settings.getPasswordPolicy(), state.passwordPolicy);
             copyAuditLogSettings(settings.getAuditLogSettings(), state.auditLogSettings);
+            copyTwoFactorSettings(settings.getTwoFactorSettings(), state.twoFactorSettings);
             return state;
         }
 
@@ -426,6 +444,14 @@ final class SettingsLoader {
                                                  Settings.AuditLogSettings target) {
             target.setEnabled(source.isEnabled());
             target.setRetentionDays(source.getRetentionDays());
+        }
+
+        private static void copyTwoFactorSettings(Settings.TwoFactorSettings source,
+                                                  Settings.TwoFactorSettings target) {
+            target.setEnabled(source.isEnabled());
+            target.setIssuer(source.getIssuer());
+            target.setShowAsciiQr(source.isShowAsciiQr());
+            target.setPendingTimeoutSeconds(source.getPendingTimeoutSeconds());
         }
 
         private static void copyPasswordPolicy(Settings.PasswordPolicy source, Settings.PasswordPolicy target) {

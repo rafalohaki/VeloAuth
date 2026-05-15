@@ -62,6 +62,9 @@ class CommandContext {
     Logger logger() { return logger; }
     SimpleMessages sm() { return sm; }
     IPRateLimiter ipRateLimiter() { return ipRateLimiter; }
+    net.rafalohaki.veloauth.auth.totp.TotpService totpService() { return plugin.getTotpService(); }
+    net.rafalohaki.veloauth.auth.totp.PendingTotpStore pendingTotpStore() { return plugin.getPendingTotpStore(); }
+    net.rafalohaki.veloauth.audit.AuditLogService auditLogService() { return plugin.getAuditLogService(); }
 
     /**
      * Template method for common authentication pre-checks:

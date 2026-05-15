@@ -2,7 +2,11 @@ package net.rafalohaki.veloauth.command;
 
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
+import com.velocitypowered.api.proxy.Player;
+import net.rafalohaki.veloauth.audit.AuditEventType;
+import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
+import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 
 import java.util.List;
 import java.util.UUID;
@@ -21,6 +25,7 @@ class VAuthCommand implements SimpleCommand {
     private static final String CONFLICT_PREFIX = "   §7";
     private static final String RELOAD_WARNING_KEY = "admin.reload.warning";
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
+    private static final Marker AUTH_MARKER = MarkerFactory.getMarker("AUTH");
 
     private final CommandContext ctx;
 
@@ -49,12 +54,92 @@ class VAuthCommand implements SimpleCommand {
             case "cache-reset" -> handleCacheResetCommand(source, args);
             case "stats" -> handleStatsCommand(source);
             case "conflicts" -> handleConflictsCommand(source);
+            case "2fa-remove" -> handleTwoFactorRemoveCommand(source, args);
             default -> {
                 source.sendMessage(ValidationUtils.createErrorComponent(
                     ctx.messages().get("admin.unknown_command", subcommand)));
                 sendAdminHelp(source);
             }
         }
+    }
+
+    private void handleTwoFactorRemoveCommand(CommandSource source, String[] args) {
+        if (args.length != 2) {
+            CommandHelper.sendError(source, ctx.messages(), "admin.2fa.remove.usage");
+            return;
+        }
+        String nickname = args[1];
+        ctx.runAsyncCommand(source, () -> processTwoFactorRemove(source, nickname), ERROR_DATABASE_QUERY);
+    }
+
+    @SuppressWarnings("FutureReturnValueIgnored")
+    private void processTwoFactorRemove(CommandSource source, String nickname) {
+        if (!ctx.ensureDatabaseConnected(source, "Admin 2fa-remove")) {
+            return;
+        }
+
+        DatabaseManager.DbResult<RegisteredPlayer> dbResult;
+        try {
+            dbResult = ctx.databaseManager().findPlayerByNickname(nickname).join();
+        } catch (CompletionException e) {
+            ctx.logger().error(DB_MARKER, "Admin 2fa-remove lookup failed for {}", nickname, e);
+            ctx.sendDatabaseErrorMessage(source);
+            return;
+        }
+        if (ctx.handleDatabaseError(dbResult, source, nickname, "Admin 2fa-remove lookup")) {
+            return;
+        }
+
+        RegisteredPlayer registered = dbResult.getValue();
+        if (registered == null) {
+            source.sendMessage(ValidationUtils.createErrorComponent(
+                    ctx.messages().get("admin.2fa.remove.not_found", nickname)));
+            return;
+        }
+        if (registered.getTotpToken() == null || registered.getTotpToken().isBlank()) {
+            source.sendMessage(ValidationUtils.createWarningComponent(
+                    ctx.messages().get("admin.2fa.remove.not_enabled", nickname)));
+            return;
+        }
+
+        registered.setTotpToken(null);
+        var saveResult = ctx.databaseManager().savePlayer(registered).join();
+        if (ctx.handleDatabaseError(saveResult, source, nickname, "Admin 2fa-remove save")) {
+            return;
+        }
+        if (!Boolean.TRUE.equals(saveResult.getValue())) {
+            ctx.sendDatabaseErrorMessage(source);
+            return;
+        }
+
+        // Disconnect the online player so they re-/login without 2FA (token is gone now).
+        // Mirrors /unregister behavior: don't leave the player in a stale session.
+        // Also wipe any in-flight pending TOTP verification: if the admin is removing 2FA
+        // because of a suspected compromise, leaving a stale `pending LOGIN` state (with
+        // the now-old token cached on it) would let an attacker mid-flow complete their
+        // verification against the soon-to-be-deleted token. Belt and suspenders.
+        ctx.plugin().getServer().getPlayer(nickname).ifPresent(p -> {
+            ctx.pendingTotpStore().invalidate(p.getUniqueId());
+            p.disconnect(ctx.sm().kickMessage());
+            if (ctx.logger().isInfoEnabled()) {
+                ctx.logger().info(AUTH_MARKER, "Disconnected {} after admin 2FA wipe", nickname);
+            }
+        });
+
+        emitAdminAudit(source, nickname, registered);
+
+        CommandHelper.sendSuccess(source, ctx.messages().get("admin.2fa.remove.success", nickname));
+    }
+
+    private void emitAdminAudit(CommandSource source, String nickname, RegisteredPlayer registered) {
+        AuditLogService audit = ctx.auditLogService();
+        if (audit == null) {
+            return;
+        }
+        String adminName = source instanceof Player p ? p.getUsername() : "CONSOLE";
+        String adminIp = source instanceof Player p ? PlayerAddressUtils.getPlayerIp(p) : null;
+        String details = "admin=" + adminName + " uuid=" + registered.getUuid();
+        audit.record(AuditEventType.TWO_FACTOR_DISABLED, nickname, adminIp, details);
     }
 
     private void handleReloadCommand(CommandSource source) {
@@ -91,6 +176,8 @@ class VAuthCommand implements SimpleCommand {
         source.sendMessage(ctx.sm().adminHelpCache());
         source.sendMessage(ctx.sm().adminHelpStats());
         source.sendMessage(ctx.sm().adminHelpConflicts());
+        source.sendMessage(ctx.sm().key("admin.help.2fa_remove",
+                net.kyori.adventure.text.format.NamedTextColor.YELLOW));
     }
 
     @Override
@@ -98,7 +185,7 @@ class VAuthCommand implements SimpleCommand {
         String[] args = invocation.arguments();
 
         if (args.length == 1) {
-            return List.of("reload", "cache-reset", "stats", "conflicts");
+            return List.of("reload", "cache-reset", "stats", "conflicts", "2fa-remove");
         }
 
         return List.of();

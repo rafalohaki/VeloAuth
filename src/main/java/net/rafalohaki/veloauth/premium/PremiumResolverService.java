@@ -1,6 +1,9 @@
 package net.rafalohaki.veloauth.premium;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Expiry;
 import net.rafalohaki.veloauth.alert.PremiumResolverAlertService;
+import net.rafalohaki.veloauth.cache.VeloAuthCaches;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.config.Settings.PremiumResolverSettings;
 import net.rafalohaki.veloauth.database.PremiumUuidDao;
@@ -15,15 +18,21 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
 /**
  * Aggregates premium resolvers with caching and priority fallback.
+ * <p>
+ * In-memory caching is delegated to Caffeine ({@link VeloAuthCaches#variableTtl}) so
+ * positive hits use the configured {@code hit-ttl-minutes} while negative results
+ * (player not premium) use the much shorter {@code miss-ttl-minutes}. Capacity is
+ * bounded by {@code memory-cache-max-size}; W-TinyLFU handles eviction in O(1).
+ * <p>
+ * No explicit lock or hand-rolled LRU sweep is needed any more — Caffeine's per-node
+ * synchronization covers both the size cap and the per-entry TTL.
  */
 public class PremiumResolverService {
 
@@ -34,13 +43,11 @@ public class PremiumResolverService {
     private final Logger logger;
     private final PremiumUuidDao dao; // Renamed to avoid conflict with class name
     private final List<PremiumResolver> resolvers;
-    private final Map<String, CachedEntry> cache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Cache<String, PremiumResolution> cache;
     private final long premiumTtlMillis;
     private final long missTtlMillis;
     private final int maxCacheSize;
     private final PremiumResolverAlertService alertService;
-    // ReentrantLock prevents virtual thread pinning (Java 21 synchronized issue)
-    private final ReentrantLock cacheSizeLock = new ReentrantLock();
 
     public PremiumResolverService(Logger logger, Settings settings, PremiumUuidDao premiumUuidDao) {
         this(logger, settings, premiumUuidDao, null);
@@ -64,7 +71,9 @@ public class PremiumResolverService {
 
         this.premiumTtlMillis = Math.max(0L, rs.getHitTtlMinutes()) * 60_000L;
         this.missTtlMillis = Math.max(0L, rs.getMissTtlMinutes()) * 60_000L;
-        this.maxCacheSize = 10_000;
+        int configuredMaxSize = rs.getMemoryCacheMaxSize();
+        this.maxCacheSize = configuredMaxSize > 0 ? configuredMaxSize : 10_000;
+        this.cache = VeloAuthCaches.variableTtl(this.maxCacheSize, perEntryExpiry());
 
         if (premiumTtlMillis == 0 && logger.isWarnEnabled()) {
             logger.warn(PREMIUM_MARKER, "[PremiumResolver] hitTtlMinutes = 0 — premium cache disabled, every login will query API!");
@@ -86,6 +95,41 @@ public class PremiumResolverService {
         this.missTtlMillis = Math.max(0L, missTtlMillis);
         this.maxCacheSize = 10_000;
         this.alertService = null;
+        this.cache = VeloAuthCaches.variableTtl(this.maxCacheSize, perEntryExpiry());
+    }
+
+    /**
+     * Builds the per-entry expiry policy. Captured premium / miss TTLs are final
+     * by the time this is called, so the returned {@link Expiry} can read them
+     * via the enclosing instance fields without any mutation hazard.
+     */
+    private Expiry<String, PremiumResolution> perEntryExpiry() {
+        return new Expiry<>() {
+            @Override
+            public long expireAfterCreate(String key, PremiumResolution value, long currentTime) {
+                return computeTtlNanos(value);
+            }
+
+            @Override
+            public long expireAfterUpdate(String key, PremiumResolution value, long currentTime, long currentDuration) {
+                return computeTtlNanos(value);
+            }
+
+            @Override
+            public long expireAfterRead(String key, PremiumResolution value, long currentTime, long currentDuration) {
+                return currentDuration;
+            }
+        };
+    }
+
+    /**
+     * TTL conversion helper. Cache-skip semantics (TTL ≤ 0 = "do not cache this kind of result")
+     * live in {@link #cacheResult}; here we only handle the positive case so the Expiry never
+     * has to think about disabled tiers.
+     */
+    private long computeTtlNanos(PremiumResolution value) {
+        long ttlMillis = value.isPremium() ? premiumTtlMillis : missTtlMillis;
+        return ttlMillis <= 0L ? 1L : TimeUnit.MILLISECONDS.toNanos(ttlMillis);
     }
 
     private static List<PremiumResolver> createDefaultResolvers(Logger logger, PremiumResolverSettings settings) {
@@ -304,7 +348,7 @@ public class PremiumResolverService {
 
         // 2. Sprawdź database cache (persistency)
         Optional<PremiumUuid> dbResult = dao.findByNickname(trimmed);
-        if (dbResult.isPresent()) {
+        if (dbResult.isPresent() && isDbCacheEntryFresh(dbResult.get())) {
             PremiumUuid premiumUuid = dbResult.get();
             PremiumResolution result = PremiumResolution.premium(
                     premiumUuid.getUuid(),
@@ -321,8 +365,40 @@ public class PremiumResolverService {
             return result;
         }
 
-        // 3. Cache miss - wywołaj API
+        if (dbResult.isPresent() && logger.isDebugEnabled()) {
+            logger.debug(PREMIUM_MARKER,
+                    "[PremiumResolver] DB cache entry for {} stale (lastSeen age > hit-ttl) — refreshing from API",
+                    trimmed);
+        }
+
+        // 3. Cache miss (or stale DB entry) - wywołaj API
         return resolveFromApi(trimmed, cacheKey);
+    }
+
+    /**
+     * Treats a DB cache entry as fresh only if its last-seen timestamp is within the
+     * configured hit-ttl. Without this guard a stale {@code PREMIUM_UUIDS} row could
+     * trigger an erroneous account migration in {@code findAndMigrateByPremiumUuid}
+     * when the player's actual Mojang UUID has since changed.
+     * <p>
+     * Compatibility note: legacy rows imported from LimboAuth via
+     * {@code DatabaseMigrationService} have {@code LAST_SEEN=0} (the {@code DEFAULT 0}
+     * we set on ALTER TABLE). Treating those as stale would force an API refetch on
+     * every login until the next successful resolution rewrites the timestamp — a
+     * potential API storm right after upgrade. So {@code lastSeen <= 0} is treated
+     * as "unknown but trusted"; only entries with a real positive timestamp are
+     * subject to the TTL check.
+     */
+    private boolean isDbCacheEntryFresh(PremiumUuid entry) {
+        long lastSeen = entry.getLastSeen();
+        if (lastSeen <= 0L) {
+            return true;
+        }
+        if (premiumTtlMillis <= 0L) {
+            return true;
+        }
+        long age = System.currentTimeMillis() - lastSeen;
+        return age >= 0 && age <= premiumTtlMillis;
     }
 
     private PremiumResolution normalizeResolution(PremiumResolver resolver, PremiumResolution resolution, String requestName) {
@@ -356,47 +432,28 @@ public class PremiumResolverService {
         return PremiumResolution.premium(resolution.uuid(), canonical, source);
     }
 
+    /**
+     * Cache read. Caffeine's per-entry TTL hides expired entries from {@code getIfPresent},
+     * collapsing the previous "lookup → expiry check → conditional remove" branch into a
+     * single call.
+     */
     private PremiumResolution getFromCache(String key) {
-        CachedEntry entry = cache.get(key);
-        if (entry == null) {
-            return null;
-        }
-        if (entry.isExpired(premiumTtlMillis, missTtlMillis)) {
-            cache.remove(key, entry);
-            return null;
-        }
-        return entry.resolution();
+        return cache.getIfPresent(key);
     }
 
+    /**
+     * Cache write. When the matching TTL tier is disabled (configured to {@code 0}) we
+     * intentionally drop any existing entry instead of putting one with a phantom TTL —
+     * matches the legacy semantics where {@code hit-ttl-minutes=0} or {@code miss-ttl-minutes=0}
+     * meant "every login queries the API for this kind of result".
+     */
     private void cacheResult(String key, PremiumResolution resolution) {
         long ttl = resolution.isPremium() ? premiumTtlMillis : missTtlMillis;
         if (ttl <= 0L) {
-            cache.remove(key);
+            cache.invalidate(key);
             return;
         }
-
-        // Check cache size and implement LRU eviction if needed
-        // Using ReentrantLock prevents virtual thread pinning (Java 21)
-        cacheSizeLock.lock();
-        try {
-            if (cache.size() >= maxCacheSize) {
-                // Remove oldest entries (simple LRU - remove first 10% of entries)
-                int entriesToRemove = Math.max(1, maxCacheSize / 10);
-                cache.entrySet().stream()
-                        .sorted((e1, e2) -> Long.compare(e1.getValue().timestamp(), e2.getValue().timestamp()))
-                        .limit(entriesToRemove)
-                        .forEach(entry -> cache.remove(entry.getKey()));
-
-                if (logger.isDebugEnabled()) {
-                    logger.debug(PREMIUM_MARKER, "[PremiumResolver] Cache eviction: removed {} entries, new size: {}",
-                            entriesToRemove, cache.size());
-                }
-            }
-
-            cache.put(key, new CachedEntry(resolution, System.currentTimeMillis()));
-        } finally {
-            cacheSizeLock.unlock();
-        }
+        cache.put(key, resolution);
     }
 
     /**
@@ -404,17 +461,11 @@ public class PremiumResolverService {
      * Must be called during plugin shutdown before DatabaseManager is closed.
      */
     public void shutdown() {
-        int size = cache.size();
-        cache.clear();
+        long size = cache.estimatedSize();
+        cache.invalidateAll();
+        cache.cleanUp();
         if (logger.isDebugEnabled()) {
             logger.debug(PREMIUM_MARKER, "[PremiumResolver] Shutdown complete — cleared {} cached entries", size);
-        }
-    }
-
-    private record CachedEntry(PremiumResolution resolution, long timestamp) {
-        boolean isExpired(long premiumTtlMillis, long missTtlMillis) {
-            long ttl = resolution.isPremium() ? premiumTtlMillis : missTtlMillis;
-            return ttl <= 0L || System.currentTimeMillis() - timestamp > ttl;
         }
     }
 }

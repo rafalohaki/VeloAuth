@@ -1,6 +1,7 @@
 package net.rafalohaki.veloauth.listener;
 
 import com.velocitypowered.api.proxy.Player;
+import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
@@ -13,6 +14,7 @@ import org.slf4j.MarkerFactory;
 
 import java.time.Instant;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Handles UUID verification logic for player authentication.
@@ -34,18 +36,30 @@ class UuidVerificationHandler {
     private final DatabaseManager databaseManager;
     private final AuthCache authCache;
     private final Logger logger;
+    private final Supplier<AuditLogService> auditLogServiceSupplier;
 
     /**
-     * Creates a new UuidVerificationHandler.
-     *
-     * @param databaseManager Database manager for player lookup
-     * @param authCache       Authorization cache
-     * @param logger          Logger instance
+     * Legacy ctor — kept for tests that do not exercise the audit log.
      */
     UuidVerificationHandler(DatabaseManager databaseManager, AuthCache authCache, Logger logger) {
+        this(databaseManager, authCache, logger, () -> null);
+    }
+
+    /**
+     * Creates a new UuidVerificationHandler with an audit log supplier.
+     *
+     * @param databaseManager        Database manager for player lookup
+     * @param authCache              Authorization cache
+     * @param logger                 Logger instance
+     * @param auditLogServiceSupplier supplies the (possibly null) audit log service. Resolved lazily so
+     *                                tests can inject a stub before the plugin completes init.
+     */
+    UuidVerificationHandler(DatabaseManager databaseManager, AuthCache authCache, Logger logger,
+                            Supplier<AuditLogService> auditLogServiceSupplier) {
         this.databaseManager = databaseManager;
         this.authCache = authCache;
         this.logger = logger;
+        this.auditLogServiceSupplier = auditLogServiceSupplier != null ? auditLogServiceSupplier : () -> null;
     }
 
     /**
@@ -165,7 +179,8 @@ class UuidVerificationHandler {
     private void handleUuidMismatch(Player player, UUID playerUuid, UUID storedUuid,
                                    UUID storedPremiumUuid, RegisteredPlayer dbPlayer) {
         AuthenticationErrorHandler.handleUuidMismatch(
-                player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer, authCache, logger);
+                player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer, authCache, logger,
+                auditLogServiceSupplier.get());
     }
 
     private boolean handleAsyncVerificationError(Player player, Exception e) {

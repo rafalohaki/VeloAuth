@@ -1,6 +1,8 @@
 package net.rafalohaki.veloauth.util;
 
 import com.velocitypowered.api.proxy.Player;
+import net.rafalohaki.veloauth.audit.AuditEventType;
+import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
@@ -55,29 +57,50 @@ public final class AuthenticationErrorHandler {
      * @param logger            Logger instance for security logging
      */
     public static void handleUuidMismatch(Player player, UUID playerUuid, UUID storedUuid,
-                                         UUID storedPremiumUuid, 
+                                         UUID storedPremiumUuid,
                                          net.rafalohaki.veloauth.model.RegisteredPlayer dbPlayer,
                                          AuthCache authCache, Logger logger) {
+        handleUuidMismatch(player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer,
+                authCache, logger, null);
+    }
+
+    /**
+     * Overload that also emits an UUID_MISMATCH audit event when {@code auditLogService}
+     * is non-null and enabled. Kept as a separate overload so legacy call sites compile unchanged.
+     */
+    public static void handleUuidMismatch(Player player, UUID playerUuid, UUID storedUuid,
+                                         UUID storedPremiumUuid,
+                                         net.rafalohaki.veloauth.model.RegisteredPlayer dbPlayer,
+                                         AuthCache authCache, Logger logger,
+                                         AuditLogService auditLogService) {
         // Enhanced logging with detailed UUID comparison (Requirements 8.2, 8.3)
         logger.warn(SECURITY_MARKER,
                 "[UUID MISMATCH DETECTED] Nickname: {}, Connection UUID: {}, DB UUID: {}, DB PREMIUMUUID: {}, " +
                 "ConflictMode: {}, IP: {}",
-                player.getUsername(), 
-                playerUuid, 
+                player.getUsername(),
+                playerUuid,
                 storedUuid != null ? storedUuid : "null",
                 storedPremiumUuid != null ? storedPremiumUuid : "null",
                 dbPlayer != null ? dbPlayer.getConflictMode() : "unknown",
                 PlayerAddressUtils.getPlayerIp(player));
-        
+
         // Cache invalidation for security (Requirement 8.2)
         if (logger.isDebugEnabled()) {
-            logger.debug(SECURITY_MARKER, 
+            logger.debug(SECURITY_MARKER,
                 "[CACHE INVALIDATION] Removing player {} (UUID: {}) from cache due to UUID mismatch",
                 player.getUsername(), playerUuid);
         }
-        
+
         authCache.removeAuthorizedPlayer(playerUuid);
         authCache.endSession(playerUuid);
+
+        if (auditLogService != null) {
+            String details = "connection=" + playerUuid
+                    + " stored=" + (storedUuid != null ? storedUuid : "null")
+                    + " premium=" + (storedPremiumUuid != null ? storedPremiumUuid : "null");
+            auditLogService.record(AuditEventType.UUID_MISMATCH, player.getUsername(),
+                    PlayerAddressUtils.getPlayerIp(player), details);
+        }
     }
 
     /**

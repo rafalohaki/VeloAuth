@@ -302,4 +302,77 @@ public final class SimpleMessages {
     public Component kickMessage() {
         return key("general.kick.message", NamedTextColor.YELLOW);
     }
+
+    // 2FA / TOTP messages
+    public Component twoFactorDisabledInConfig() {
+        return key("2fa.disabled_in_config", NamedTextColor.YELLOW);
+    }
+
+    public Component twoFactorUsage() {
+        return key("2fa.usage", NamedTextColor.YELLOW);
+    }
+
+    public Component twoFactorSetupAlreadyEnabled() {
+        return key("2fa.setup.already_enabled", NamedTextColor.YELLOW);
+    }
+
+    public Component twoFactorVerifyUsage() {
+        return key("2fa.verify.usage", NamedTextColor.YELLOW);
+    }
+
+    public Component twoFactorVerifyNoPending() {
+        return key("2fa.verify.no_pending", NamedTextColor.RED);
+    }
+
+    public Component twoFactorVerifyInvalidFormat() {
+        return key("2fa.verify.invalid_format", NamedTextColor.RED);
+    }
+
+    public Component twoFactorVerifyWrongCode() {
+        return key("2fa.verify.wrong_code", NamedTextColor.RED);
+    }
+
+    public Component twoFactorVerifySetupSuccess() {
+        return key("2fa.verify.setup_success", NamedTextColor.GREEN);
+    }
+
+    public Component twoFactorVerifyLoginSuccess() {
+        return key("2fa.verify.login_success", NamedTextColor.GREEN);
+    }
+
+    public Component twoFactorDisableUsage() {
+        return key("2fa.disable.usage", NamedTextColor.YELLOW);
+    }
+
+    public Component twoFactorDisableNotEnabled() {
+        return key("2fa.disable.not_enabled", NamedTextColor.YELLOW);
+    }
+
+    public Component twoFactorDisableWrongCode() {
+        return key("2fa.disable.wrong_code", NamedTextColor.RED);
+    }
+
+    public Component twoFactorDisableSuccess() {
+        return key("2fa.disable.success", NamedTextColor.GREEN);
+    }
+
+    public Component twoFactorQrNotEnabled() {
+        return key("2fa.qr.not_enabled", NamedTextColor.YELLOW);
+    }
+
+    public Component twoFactorQrWarning() {
+        return key("2fa.qr.warning", NamedTextColor.GOLD);
+    }
+
+    public Component twoFactorStatusEnabled() {
+        return key("2fa.status.enabled", NamedTextColor.GREEN);
+    }
+
+    public Component twoFactorStatusDisabled() {
+        return key("2fa.status.disabled", NamedTextColor.GRAY);
+    }
+
+    public Component twoFactorLoginPendingPrompt() {
+        return key("2fa.login.pending_prompt", NamedTextColor.GOLD);
+    }
 }

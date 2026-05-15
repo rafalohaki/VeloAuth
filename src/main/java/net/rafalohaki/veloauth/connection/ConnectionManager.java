@@ -359,7 +359,9 @@ public class ConnectionManager {
     }
 
     private boolean handleSuccessfulTransfer(Player player, String serverName) {
-        resetTransferState(player.getUniqueId(), false);
+        // Player is now successfully on a backend server — drop any pending forced-host preference
+        // so a future reconnect uses the regular flow instead of replaying a stale target.
+        resetTransferState(player.getUniqueId(), true);
         retryAttempts.remove(player.getUniqueId());
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("player.transfer.backend.success", player.getUsername(), serverName));
@@ -475,7 +477,12 @@ public class ConnectionManager {
                 return;
             }
 
-            Optional<RegisteredServer> server = findAvailableBackendServer();
+            // Honor forced-host preference on retry too — a temporarily offline target stays
+            // in the map and gets a fresh attempt every retry tick before we fall back to try-list.
+            Optional<RegisteredServer> server = resolveForcedHostTarget(player);
+            if (server.isEmpty()) {
+                server = findAvailableBackendServer();
+            }
             if (server.isPresent()) {
                 logger.info("Backend server available for {} after waiting - transferring to {}",
                         player.getUsername(), server.get().getServerInfo().getName());
@@ -690,13 +697,18 @@ public class ConnectionManager {
      * Resolves a forced host target for the given player.
      * If the player was redirected from a forced-host connection, this method
      * retrieves and validates the originally intended server.
-     * The target is consumed (removed) on retrieval.
+     * <p>
+     * The target is <b>NOT</b> consumed on retrieval — it stays in the map until either
+     * {@link #handleSuccessfulTransfer(Player, String)} (transfer succeeded, no longer needed)
+     * or {@link #clearRetryAttempts(UUID)} (player disconnected) fires. This way a temporarily
+     * offline forced-host target is retried on subsequent attempts instead of being silently
+     * downgraded to a try-list fallback after the first failure.
      *
      * @param player the player to resolve for
      * @return Optional with the target server if available and online
      */
     private Optional<RegisteredServer> resolveForcedHostTarget(Player player) {
-        String targetName = forcedHostTargets.remove(player.getUniqueId());
+        String targetName = forcedHostTargets.get(player.getUniqueId());
         if (targetName == null) {
             return Optional.empty();
         }
@@ -705,6 +717,9 @@ public class ConnectionManager {
         if (targetName.equals(authServerName)) {
             logger.debug("Forced host target for {} is auth server '{}' - ignoring",
                     player.getUsername(), targetName);
+            // The auth-server target is a configuration error (the player would loop). Drop it so
+            // we never reconsult it; subsequent retries go straight to the try-list.
+            forcedHostTargets.remove(player.getUniqueId());
             return Optional.empty();
         }
 
@@ -712,6 +727,8 @@ public class ConnectionManager {
         if (server.isEmpty()) {
             logger.warn("Forced host target '{}' for {} is not registered - falling back to try list",
                     targetName, player.getUsername());
+            // Unknown server name will never resolve — drop it permanently to avoid log spam.
+            forcedHostTargets.remove(player.getUniqueId());
             return Optional.empty();
         }
 
@@ -721,7 +738,9 @@ public class ConnectionManager {
             return server;
         }
 
-        logger.warn("Forced host target '{}' for {} is offline - falling back to try list",
+        // Server is registered but currently offline — keep the entry so the next retry
+        // (scheduleBackendWaitRetry or transferToBackend) can try it again once it comes back up.
+        logger.warn("Forced host target '{}' for {} is offline - falling back to try list (will retry forced host on next attempt)",
                 targetName, player.getUsername());
         return Optional.empty();
     }

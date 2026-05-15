@@ -4,6 +4,8 @@ import at.favre.lib.crypto.bcrypt.BCrypt;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import net.rafalohaki.veloauth.audit.AuditEventType;
+import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import net.rafalohaki.veloauth.util.SecurityUtils;
 import org.slf4j.Marker;
@@ -165,6 +167,11 @@ class ChangePasswordCommand implements SimpleCommand {
         if (ctx.logger().isInfoEnabled()) {
             ctx.logger().info(AUTH_MARKER, "Player {} changed password from IP {}",
                     authCtx.username(), PlayerAddressUtils.getPlayerIp(authCtx.player()));
+        }
+        AuditLogService audit = ctx.plugin().getAuditLogService();
+        if (audit != null) {
+            audit.record(AuditEventType.PASSWORD_CHANGE, authCtx.username(),
+                    PlayerAddressUtils.getPlayerIp(authCtx.player()));
         }
     }
 }

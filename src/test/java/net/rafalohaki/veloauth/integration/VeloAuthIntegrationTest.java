@@ -113,8 +113,8 @@ class VeloAuthIntegrationTest {
         // Test: Verify all commands are registered with aliases
         commandHandler.registerCommands();
 
-        // Verify command manager was called for each command
-        verify(commandManager, times(5)).register(any(), any()); // Total should be 5 commands
+        // 6 commands: /login, /register, /changepassword, /unregister, /vauth, /2fa
+        verify(commandManager, times(6)).register(any(), any());
     }
 
     @Test
@@ -130,7 +130,8 @@ class VeloAuthIntegrationTest {
     void testCommandUnregistration_allAliasesAreUnregistered() {
         commandHandler.unregisterCommands();
 
-        verify(commandManager, times(8)).unregister(anyString());
+        // 11 unregister calls: login + 2 aliases, register + 1 alias, changepassword, unregister, vauth, 2fa + 2 aliases.
+        verify(commandManager, times(11)).unregister(anyString());
         verify(commandManager).unregister("login");
         verify(commandManager).unregister("log");
         verify(commandManager).unregister("l");
@@ -139,6 +140,9 @@ class VeloAuthIntegrationTest {
         verify(commandManager).unregister("changepassword");
         verify(commandManager).unregister("unregister");
         verify(commandManager).unregister("vauth");
+        verify(commandManager).unregister("2fa");
+        verify(commandManager).unregister("totp");
+        verify(commandManager).unregister("twofa");
     }
 
     @Test

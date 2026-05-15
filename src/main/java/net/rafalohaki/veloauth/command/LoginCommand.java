@@ -4,6 +4,10 @@ import at.favre.lib.crypto.bcrypt.BCrypt;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import net.rafalohaki.veloauth.audit.AuditEventType;
+import net.rafalohaki.veloauth.audit.AuditLogService;
+import net.rafalohaki.veloauth.auth.totp.PendingTotpState;
+import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import net.rafalohaki.veloauth.util.SecurityUtils;
 
@@ -115,8 +119,17 @@ class LoginCommand implements SimpleCommand {
                 return;
             }
 
+            // 2FA gate — if the account has a TOTP token AND the feature is currently enabled,
+            // park the player in a pending state instead of transferring to backend. The /2fa verify
+            // command completes the transfer once the player produces a valid code.
+            if (shouldRequireTotp(authContext.registeredPlayer())) {
+                parkForTotpVerify(authContext);
+                return;
+            }
+
             if (PostAuthFlow.execute(ctx, authContext, authContext.registeredPlayer(), "logged in")) {
                 authContext.player().sendMessage(ctx.sm().loginSuccess());
+                emitAudit(AuditEventType.LOGIN_OK, authContext, null);
             }
 
         } catch (java.util.concurrent.CompletionException e) {
@@ -124,6 +137,30 @@ class LoginCommand implements SimpleCommand {
                 ctx.logger().error("Error processing successful login: {}", authContext.username(), e);
             }
             ctx.sendDatabaseErrorMessage(authContext.player());
+        }
+    }
+
+    /**
+     * True iff the player has a TOTP secret AND the two-factor feature is currently enabled
+     * by configuration. The master switch is checked here on purpose: an operator who sets
+     * {@code two-factor.enabled=false} expects existing tokens to stop being enforced.
+     */
+    private boolean shouldRequireTotp(RegisteredPlayer dbPlayer) {
+        if (!ctx.settings().getTwoFactorSettings().isEnabled()) {
+            return false;
+        }
+        String token = dbPlayer.getTotpToken();
+        return token != null && !token.isBlank();
+    }
+
+    private void parkForTotpVerify(AuthenticationContext authContext) {
+        Player player = authContext.player();
+        String ip = PlayerAddressUtils.getPlayerIp(player);
+        ctx.pendingTotpStore().put(PendingTotpState.forLogin(player.getUniqueId(), authContext.registeredPlayer(), ip));
+        player.sendMessage(ctx.sm().twoFactorLoginPendingPrompt());
+
+        if (ctx.logger().isDebugEnabled()) {
+            ctx.logger().debug("Player {} parked for 2FA verification (IP {})", authContext.username(), ip);
         }
     }
 
@@ -141,12 +178,23 @@ class LoginCommand implements SimpleCommand {
                 ctx.logger().warn("Player {} blocked for brute force from IP {}",
                         authContext.username(), PlayerAddressUtils.getPlayerIp(authContext.player()));
             }
+            emitAudit(AuditEventType.LOGIN_FAIL, authContext, "brute-force-blocked");
         } else {
             authContext.player().sendMessage(ctx.sm().loginFailed());
             if (ctx.logger().isDebugEnabled()) {
                 ctx.logger().debug("Failed login attempt for player {} from IP {}",
                         authContext.username(), PlayerAddressUtils.getPlayerIp(authContext.player()));
             }
+            emitAudit(AuditEventType.LOGIN_FAIL, authContext, "wrong-password");
         }
+    }
+
+    private void emitAudit(AuditEventType type, AuthenticationContext authContext, String details) {
+        AuditLogService audit = ctx.plugin().getAuditLogService();
+        if (audit == null) {
+            return;
+        }
+        audit.record(type, authContext.username(),
+                PlayerAddressUtils.getPlayerIp(authContext.player()), details);
     }
 }

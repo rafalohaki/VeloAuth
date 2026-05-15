@@ -1,5 +1,7 @@
 package net.rafalohaki.veloauth.cache;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Expiry;
 import net.rafalohaki.veloauth.command.IPRateLimiter;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
@@ -8,110 +10,104 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetAddress;
+import java.time.Duration;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Thread-safe cache autoryzacji dla VeloAuth.
- * Używa ConcurrentHashMap dla bezpiecznego dostępu wielowątkowego i ReentrantLock.
+ * Thread-safe authentication cache for VeloAuth.
  * <p>
- * <h2>Extracted Components</h2>
+ * Storage is delegated to Caffeine (W-TinyLFU eviction, lock-striped concurrency,
+ * scheduled time-based expiration). The hand-rolled {@code ReentrantLock} +
+ * {@code ConcurrentHashMap} + per-insert O(N) eviction this class used to ship
+ * has been removed entirely; Caffeine subsumes all three responsibilities.
+ *
+ * <h2>Stored Caches</h2>
  * <ul>
- *   <li>{@link BruteForceTracker} - brute-force attempt tracking and IP blocking</li>
- *   <li>{@link SessionManager} - active session management with anti-hijacking</li>
+ *   <li>{@code authorizedPlayers} — UUID → {@link CachedAuthUser}, bounded by
+ *       {@code maxSize}, evicted by access-TTL ({@code ttlMinutes}).</li>
+ *   <li>{@code premiumCache} — nickname (lowercase) → {@link PremiumCacheEntry},
+ *       bounded by {@code maxPremiumCache}, evicted per-entry TTL (positive entries
+ *       use the configured premium hit-ttl, negative entries use {@link #NEGATIVE_PREMIUM_TTL_MINUTES}).</li>
+ *   <li>{@link BruteForceTracker} — brute-force counters (delegated).</li>
+ *   <li>{@link SessionManager} — active sessions (delegated).</li>
  * </ul>
- * <p>
- * Cache przechowuje:
- * - Autoryzowanych graczy (UUID -> CachedAuthUser)
- * - Próby brute force (delegated to BruteForceTracker)
- * - Premium graczy (nickname -> premium status)
- * - Aktywne sesje (delegated to SessionManager)
- * 
- * <h2>Cache Invalidation Strategy</h2>
+ *
+ * <h2>Invalidation</h2>
  * <ul>
- *   <li><b>authorizedPlayers</b> - On player data update, TTL expiration, manual removal, or logout</li>
- *   <li><b>premiumCache</b> - On TTL expiration (24h), manual removal, or LRU eviction</li>
- *   <li><b>bruteForceAttempts</b> - On timeout expiration, successful login, or manual reset</li>
- *   <li><b>activeSessions</b> - On player disconnect, session hijacking detection, or inactivity</li>
+ *   <li>{@code authorizedPlayers} — on player data update, TTL expiration, manual removal, or logout.</li>
+ *   <li>{@code premiumCache} — on per-entry TTL expiration, manual removal, or W-TinyLFU eviction.</li>
+ *   <li>{@code bruteForceAttempts} — on timeout expiration, successful login, or manual reset.</li>
+ *   <li>{@code activeSessions} — on player disconnect, session hijacking detection, or inactivity.</li>
  * </ul>
  */
 public class AuthCache {
 
     private static final Logger logger = LoggerFactory.getLogger(AuthCache.class);
 
-    /**
-     * Cache autoryzowanych graczy.
-     */
-    private final ConcurrentHashMap<UUID, CachedAuthUser> authorizedPlayers;
+    /** Negative-result TTL (player resolved as non-premium). Short on purpose so the cache can
+     *  recover quickly when a player upgrades to a premium account. */
+    private static final long NEGATIVE_PREMIUM_TTL_MINUTES = 5;
 
-    /**
-     * Cache premium graczy.
-     */
-    private final ConcurrentHashMap<String, PremiumCacheEntry> premiumCache;
+    /** Per-entry expiry for {@link PremiumCacheEntry} — reads the TTL the entry was constructed
+     *  with so positive vs negative hits can coexist with different lifetimes. */
+    private static final Expiry<String, PremiumCacheEntry> PREMIUM_EXPIRY =
+            new Expiry<>() {
+                @Override
+                public long expireAfterCreate(String key, PremiumCacheEntry value, long currentTime) {
+                    return TimeUnit.MILLISECONDS.toNanos(value.getTtlMillis());
+                }
 
-    /**
-     * Delegated brute-force tracking.
-     */
+                @Override
+                public long expireAfterUpdate(String key, PremiumCacheEntry value, long currentTime, long currentDuration) {
+                    return TimeUnit.MILLISECONDS.toNanos(value.getTtlMillis());
+                }
+
+                @Override
+                public long expireAfterRead(String key, PremiumCacheEntry value, long currentTime, long currentDuration) {
+                    return currentDuration;
+                }
+            };
+
+    private final Cache<UUID, CachedAuthUser> authorizedPlayers;
+    private final Cache<String, PremiumCacheEntry> premiumCache;
     private final BruteForceTracker bruteForceTracker;
-
-    /**
-     * Delegated session management.
-     */
     private final SessionManager sessionManager;
-
-    /**
-     * Lock dla operacji krytycznych.
-     */
-    private final ReentrantLock cacheLock;
 
     private final int ttlMinutes;
     private final int maxSize;
     private final int maxPremiumCache;
-    private static final long NEGATIVE_PREMIUM_TTL_MINUTES = 5;
-
     private final int premiumTtlHours;
     private final double premiumRefreshThreshold;
 
     private final ScheduledExecutorService scheduler;
-
-    private final AtomicLong cacheHits = new AtomicLong(0);
-    private final AtomicLong cacheMisses = new AtomicLong(0);
+    private final CacheMetrics authMetrics = new CacheMetrics();
 
     private final Settings settings;
     private final Messages messages;
 
-    /**
-     * Optional IP rate limiter for periodic cleanup.
-     * Set after construction because IPRateLimiter is created later in CommandContext.
-     */
+    /** Optional IP rate limiter for periodic cleanup. Set after construction because
+     *  {@link IPRateLimiter} is created later by {@code CommandContext}. */
     private volatile IPRateLimiter ipRateLimiter;
 
-    /**
-     * Configuration parameters for AuthCache.
-     */
+    /** Configuration parameters for AuthCache. */
     public record AuthCacheConfig(
-        int ttlMinutes,
-        int maxSize,
-        int maxSessions,
-        int maxPremiumCache,
-        int maxLoginAttempts,
-        int bruteForceTimeoutMinutes,
-        int cleanupIntervalMinutes,
-        int sessionTimeoutMinutes
+            int ttlMinutes,
+            int maxSize,
+            int maxSessions,
+            int maxPremiumCache,
+            int maxLoginAttempts,
+            int bruteForceTimeoutMinutes,
+            int cleanupIntervalMinutes,
+            int sessionTimeoutMinutes
     ) {}
 
-    /**
-     * Tworzy nowy AuthCache.
-     */
     public AuthCache(AuthCacheConfig config, Settings settings, Messages messages) {
         String error = validateParams(
-            config.ttlMinutes(), config.maxSize(), config.maxSessions(), config.maxPremiumCache(),
-            config.maxLoginAttempts(), config.bruteForceTimeoutMinutes(), messages
+                config.ttlMinutes(), config.maxSize(), config.maxSessions(), config.maxPremiumCache(),
+                config.maxLoginAttempts(), config.bruteForceTimeoutMinutes(), messages
         );
         if (error != null) {
             throw new IllegalArgumentException(error);
@@ -125,15 +121,17 @@ public class AuthCache {
         this.settings = settings;
         this.messages = messages;
 
-        this.authorizedPlayers = new ConcurrentHashMap<>();
-        this.premiumCache = new ConcurrentHashMap<>();
-        this.cacheLock = new ReentrantLock();
+        this.authorizedPlayers = VeloAuthCaches.accessTtl(
+                config.maxSize(), Duration.ofMinutes(Math.max(1L, config.ttlMinutes())));
+        this.premiumCache = VeloAuthCaches.variableTtl(
+                config.maxPremiumCache(), PREMIUM_EXPIRY);
 
-        // Delegated components
         this.bruteForceTracker = new BruteForceTracker(
                 config.maxLoginAttempts(), config.bruteForceTimeoutMinutes(), messages);
         this.sessionManager = new SessionManager(
-                config.maxSessions(), config.sessionTimeoutMinutes() > 0 ? config.sessionTimeoutMinutes() : 60, messages);
+                config.maxSessions(),
+                config.sessionTimeoutMinutes() > 0 ? config.sessionTimeoutMinutes() : 60,
+                messages);
 
         this.scheduler = Executors.newScheduledThreadPool(1, r -> {
             Thread t = new Thread(r, "AuthCache-Scheduler");
@@ -142,7 +140,7 @@ public class AuthCache {
         });
 
         if (config.cleanupIntervalMinutes() > 0) {
-            // skipcq: JAVA-W1087 - Periodic scheduled task, fire-and-forget
+            // skipcq: JAVA-W1087 - Periodic scheduled task, fire-and-forget.
             scheduler.scheduleAtFixedRate(
                     this::cleanupExpiredEntries,
                     config.cleanupIntervalMinutes(),
@@ -151,7 +149,7 @@ public class AuthCache {
             );
         }
 
-        // skipcq: JAVA-W1087 - Periodic scheduled task, fire-and-forget
+        // skipcq: JAVA-W1087 - Periodic scheduled task, fire-and-forget.
         scheduler.scheduleAtFixedRate(
                 this::logPeriodicCacheMetrics,
                 5, 5, TimeUnit.MINUTES
@@ -166,8 +164,6 @@ public class AuthCache {
     /**
      * Sets the IP rate limiter for periodic cleanup integration.
      * Called after CommandContext creates the IPRateLimiter instance.
-     *
-     * @param ipRateLimiter the IP rate limiter to clean up periodically
      */
     public void setIpRateLimiter(IPRateLimiter ipRateLimiter) {
         this.ipRateLimiter = ipRateLimiter;
@@ -210,30 +206,9 @@ public class AuthCache {
         if (uuid == null || user == null) {
             throw new IllegalArgumentException("UUID and user must not be null");
         }
-
-        cacheLock.lock();
-        try {
-            if (authorizedPlayers.size() >= maxSize && !authorizedPlayers.containsKey(uuid)) {
-                evictOldestAuthorizedEntryAtomic();
-            }
-
-            authorizedPlayers.put(uuid, user);
-        } finally {
-            cacheLock.unlock();
-        }
+        authorizedPlayers.put(uuid, user);
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("cache.debug.auth.added"), user.getNickname(), uuid);
-        }
-    }
-
-    private void logCacheAccessMetric(String messageKey, Object... args) {
-        double rate = (double) cacheHits.get() / Math.max(1, cacheHits.get() + cacheMisses.get()) * 100;
-        String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
-        if (logger.isDebugEnabled()) {
-            Object[] logArgs = new Object[args.length + 1];
-            System.arraycopy(args, 0, logArgs, 0, args.length);
-            logArgs[args.length] = rateStr;
-            logger.debug(messages.get(messageKey), logArgs);
         }
     }
 
@@ -242,45 +217,29 @@ public class AuthCache {
         if (uuid == null) {
             return null;
         }
-
-        CachedAuthUser user = authorizedPlayers.get(uuid);
+        // Caffeine handles TTL: an expired entry is invisible to getIfPresent(),
+        // which collapses the previous "missing OR expired" branches into one path.
+        CachedAuthUser user = authorizedPlayers.getIfPresent(uuid);
         if (user == null) {
-            cacheMisses.incrementAndGet();
+            authMetrics.recordMiss();
             logCacheAccessMetric("cache.debug.uuid.miss", uuid);
             return null;
         }
-
-        if (!user.isValid(ttlMinutes)) {
-            removeAuthorizedPlayerIfMatch(uuid, user);
-            cacheMisses.incrementAndGet();
-            logCacheAccessMetric("cache.debug.uuid.expired", uuid);
-            return null;
-        }
-
-        user.touch();
-        cacheHits.incrementAndGet();
+        authMetrics.recordHit();
         logCacheAccessMetric("cache.debug.hit.rate");
         return user;
     }
 
     @javax.annotation.Nonnull
     public java.util.Optional<CachedAuthUser> findAuthorizedPlayer(@javax.annotation.Nullable UUID uuid) {
-        return java.util.Objects.requireNonNull(java.util.Optional.ofNullable(getAuthorizedPlayer(uuid)), "Optional cannot be null");
+        return java.util.Optional.ofNullable(getAuthorizedPlayer(uuid));
     }
 
     public void removeAuthorizedPlayer(UUID uuid) {
         if (uuid == null) {
             return;
         }
-
-        CachedAuthUser removed;
-        cacheLock.lock();
-        try {
-            removed = authorizedPlayers.remove(uuid);
-        } finally {
-            cacheLock.unlock();
-        }
-
+        CachedAuthUser removed = authorizedPlayers.asMap().remove(uuid);
         if (removed != null && logger.isDebugEnabled()) {
             logger.debug(messages.get("cache.debug.player.removed"),
                     removed.getNickname(), uuid);
@@ -289,25 +248,14 @@ public class AuthCache {
 
     public boolean isPlayerAuthorized(UUID uuid, String currentIp) {
         CachedAuthUser user = getAuthorizedPlayer(uuid);
-        if (user == null) {
-            return false;
-        }
-        return user.matchesIp(currentIp);
+        return user != null && user.matchesIp(currentIp);
     }
-    
+
     public void invalidatePlayerData(UUID playerUuid) {
         if (playerUuid == null) {
             return;
         }
-
-        CachedAuthUser removed;
-        cacheLock.lock();
-        try {
-            removed = authorizedPlayers.remove(playerUuid);
-        } finally {
-            cacheLock.unlock();
-        }
-
+        CachedAuthUser removed = authorizedPlayers.asMap().remove(playerUuid);
         if (removed != null && logger.isDebugEnabled()) {
             logger.debug("Invalidated cached data for player UUID: {} (nickname: {})",
                     playerUuid, removed.getNickname());
@@ -320,14 +268,7 @@ public class AuthCache {
         if (nickname == null || nickname.isEmpty()) {
             return;
         }
-
-        PremiumCacheEntry removed;
-        cacheLock.lock();
-        try {
-            removed = premiumCache.remove(nickname.toLowerCase());
-        } finally {
-            cacheLock.unlock();
-        }
+        PremiumCacheEntry removed = premiumCache.asMap().remove(nickname.toLowerCase());
         if (removed != null && logger.isDebugEnabled()) {
             logger.debug(messages.get("cache.debug.premium.removed"),
                     nickname, removed.isPremium());
@@ -338,22 +279,12 @@ public class AuthCache {
         if (nickname == null || nickname.isEmpty()) {
             return;
         }
-
         String key = nickname.toLowerCase();
-        long ttl = (premiumUuid == null)
+        long ttlMillis = (premiumUuid == null)
                 ? TimeUnit.MINUTES.toMillis(NEGATIVE_PREMIUM_TTL_MINUTES)
                 : TimeUnit.HOURS.toMillis(premiumTtlHours);
-        PremiumCacheEntry entry = new PremiumCacheEntry(premiumUuid != null, premiumUuid, ttl, premiumRefreshThreshold);
-        cacheLock.lock();
-        try {
-            if (premiumCache.size() >= maxPremiumCache && !premiumCache.containsKey(key)) {
-                evictOldestPremiumEntryAtomic();
-            }
-
-            premiumCache.put(key, entry);
-        } finally {
-            cacheLock.unlock();
-        }
+        premiumCache.put(key,
+                new PremiumCacheEntry(premiumUuid != null, premiumUuid, ttlMillis, premiumRefreshThreshold));
 
         if (logger.isDebugEnabled()) {
             logger.debug("{} | nickname: {}, premium entry: {}, TTL: {}h, threshold: {}",
@@ -370,28 +301,13 @@ public class AuthCache {
         if (nickname == null || nickname.isEmpty()) {
             return null;
         }
-
-        String key = nickname.toLowerCase();
-        PremiumCacheEntry entry = premiumCache.get(key);
-        if (entry == null) {
-            return null;
-        }
-
-        if (entry.isExpired()) {
-            removePremiumEntryIfMatch(key, entry);
-            if (logger.isDebugEnabled()) {
-                logger.debug("Premium cache entry expired for {} (age: {}ms, TTL: {}ms)",
-                        nickname, entry.getAgeMillis(), entry.getTtlMillis());
-            }
-            return null;
-        }
-
-        return entry;
+        // Per-entry TTL is enforced by Caffeine's Expiry — an expired entry is invisible here.
+        return premiumCache.getIfPresent(nickname.toLowerCase());
     }
 
     @javax.annotation.Nonnull
     public java.util.Optional<PremiumCacheEntry> findPremiumStatus(@javax.annotation.Nullable String nickname) {
-        return java.util.Objects.requireNonNull(java.util.Optional.ofNullable(getPremiumStatus(nickname)), "Optional cannot be null");
+        return java.util.Optional.ofNullable(getPremiumStatus(nickname));
     }
 
     // ===== Brute Force Delegation =====
@@ -426,143 +342,63 @@ public class AuthCache {
 
     public void clearAll() {
         try {
-            cacheLock.lock();
-            try {
-                authorizedPlayers.clear();
-                bruteForceTracker.clear();
-                premiumCache.clear();
-                sessionManager.clear();
-                if (logger.isDebugEnabled()) {
-                    logger.debug(messages.get("cache.all_cleared"));
-                }
-            } finally {
-                cacheLock.unlock();
+            authorizedPlayers.invalidateAll();
+            premiumCache.invalidateAll();
+            bruteForceTracker.clear();
+            sessionManager.clear();
+            if (logger.isDebugEnabled()) {
+                logger.debug(messages.get("cache.all_cleared"));
             }
         } catch (IllegalStateException e) {
             logger.error(messages.get("cache.error.state.clear"), e);
         }
     }
 
+    /**
+     * Forces Caffeine to run its pending maintenance (expired-entry eviction, size cap
+     * enforcement) for every cache we own. Caffeine schedules this work proactively via
+     * {@code Scheduler.systemScheduler()} but the periodic kick keeps the cleanup deterministic
+     * on idle proxies and matches the legacy {@code cacheCleanupInterval} expectation.
+     */
     public void cleanupExpiredEntries() {
         try {
-            int removedAuth = cleanupAuthorized();
-            int removedBrute = bruteForceTracker.cleanupExpired();
-            int removedPremium = cleanupPremium();
-            int removedSessions = sessionManager.cleanupExpired();
-            int removedRateLimits = 0;
-
+            authorizedPlayers.cleanUp();
+            premiumCache.cleanUp();
+            bruteForceTracker.cleanUp();
+            sessionManager.cleanUp();
             IPRateLimiter limiter = this.ipRateLimiter;
             if (limiter != null) {
-                removedRateLimits = limiter.cleanupExpired();
+                limiter.cleanupExpired();
             }
-
-            if (removedAuth > 0 || removedBrute > 0 || removedPremium > 0
-                    || removedSessions > 0 || removedRateLimits > 0) {
-                logger.debug("Cleanup: removed {} auth, {} brute force, {} premium, {} sessions, {} rate limits",
-                        removedAuth, removedBrute, removedPremium, removedSessions, removedRateLimits);
-            }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Error during cache cleanup", e);
         }
     }
 
     /**
-     * Cleans expired premium cache entries.
-     * Can be scheduled independently for dedicated premium cache maintenance.
+     * Premium-cache-only maintenance kick. Scheduled independently from
+     * {@link #cleanupExpiredEntries} so the premium cache can be tuned on a different
+     * cadence (premium TTL is hours, the other caches are minutes).
      */
     public void cleanExpiredPremiumEntries() {
         try {
-            int removed = cleanupPremium();
-            if (removed > 0) {
-                logger.debug("Premium cache cleanup: removed {} expired entries", removed);
-            }
-        } catch (Exception e) {
+            premiumCache.cleanUp();
+        } catch (RuntimeException e) {
             logger.error("Error during premium cache cleanup", e);
         }
     }
 
-    private int cleanupAuthorized() {
-        cacheLock.lock();
-        try {
-            int removed = 0;
-            var iterator = authorizedPlayers.entrySet().iterator();
-            while (iterator.hasNext()) {
-                var entry = iterator.next();
-                if (!entry.getValue().isValid(ttlMinutes)) {
-                    iterator.remove();
-                    removed++;
-                }
-            }
-            return removed;
-        } finally {
-            cacheLock.unlock();
-        }
-    }
-
-    private int cleanupPremium() {
-        cacheLock.lock();
-        try {
-            int removed = 0;
-            var iterator = premiumCache.entrySet().iterator();
-            while (iterator.hasNext()) {
-                var entry = iterator.next();
-                if (entry.getValue().isExpired()) {
-                    iterator.remove();
-                    removed++;
-                }
-            }
-            return removed;
-        } finally {
-            cacheLock.unlock();
-        }
-    }
-
-    // ===== Eviction =====
-
-    private void evictOldestAuthorizedEntryAtomic() {
-        var lru = authorizedPlayers.entrySet().stream()
-                .min(java.util.Comparator.comparingLong(e -> e.getValue().getLastAccessTime()))
-                .orElse(null);
-        if (lru != null) {
-            authorizedPlayers.remove(lru.getKey(), lru.getValue());
-        }
-    }
-
-    private void evictOldestPremiumEntryAtomic() {
-        var oldest = premiumCache.entrySet().stream()
-                .min(java.util.Comparator.comparingLong(e -> e.getValue().getTimestamp()))
-                .orElse(null);
-        if (oldest != null) {
-            String evictedKey = oldest.getKey();
-            PremiumCacheEntry evictedEntry = oldest.getValue();
-            premiumCache.remove(evictedKey, evictedEntry);
-            
-            if (logger.isDebugEnabled()) {
-                logger.debug("Premium cache LRU eviction: {} (age: {}ms, was premium: {})", 
-                        evictedKey, evictedEntry.getAgeMillis(), evictedEntry.isPremium());
-            }
-        }
-    }
-
-    private void removeAuthorizedPlayerIfMatch(UUID uuid, CachedAuthUser expectedUser) {
-        cacheLock.lock();
-        try {
-            authorizedPlayers.remove(uuid, expectedUser);
-        } finally {
-            cacheLock.unlock();
-        }
-    }
-
-    private void removePremiumEntryIfMatch(String nickname, PremiumCacheEntry expectedEntry) {
-        cacheLock.lock();
-        try {
-            premiumCache.remove(nickname, expectedEntry);
-        } finally {
-            cacheLock.unlock();
-        }
-    }
-
     // ===== Metrics & Shutdown =====
+
+    private void logCacheAccessMetric(String messageKey, Object... args) {
+        if (!logger.isDebugEnabled()) {
+            return;
+        }
+        Object[] logArgs = new Object[args.length + 1];
+        System.arraycopy(args, 0, logArgs, 0, args.length);
+        logArgs[args.length] = authMetrics.formatHitRate();
+        logger.debug(messages.get(messageKey), logArgs);
+    }
 
     private void logPeriodicCacheMetrics() {
         try {
@@ -573,14 +409,14 @@ public class AuthCache {
             CacheStats stats = getStats();
             double hitRate = stats.getHitRate();
             long totalRequests = stats.getTotalRequests();
+            String hitRateStr = String.format(java.util.Locale.US, "%.2f", hitRate);
 
             logger.debug("=== CACHE METRICS ===");
             logger.debug("Authorized Players: {}/{} ({}% full)",
                     stats.authorizedPlayersCount(), stats.maxSize(),
-                    (double) stats.authorizedPlayersCount() / stats.maxSize() * 100);
+                    (double) stats.authorizedPlayersCount() / Math.max(1, stats.maxSize()) * 100);
             logger.debug("Brute Force Entries: {}", stats.bruteForceEntriesCount());
             logger.debug("Premium Cache Entries: {}", stats.premiumCacheCount());
-            String hitRateStr = String.format(java.util.Locale.US, "%.2f", hitRate);
             logger.debug("Cache Performance: {} hits, {} misses, {}% hit rate",
                     stats.cacheHits(), stats.cacheMisses(), hitRateStr);
             logger.debug("Total Requests: {}", totalRequests);
@@ -595,20 +431,16 @@ public class AuthCache {
             }
 
             logger.debug("====================");
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.error("Error logging cache metrics", e);
         }
     }
 
     public void shutdown() {
         try {
-            if (cacheHits.get() + cacheMisses.get() > 0) {
-                double rate = (double) cacheHits.get() / (cacheHits.get() + cacheMisses.get()) * 100;
-                String rateStr = String.format(java.util.Locale.US, "%.1f", rate);
-                if (logger.isDebugEnabled()) {
-                    logger.debug(messages.get("cache.stats_final"),
-                            cacheHits.get(), cacheMisses.get(), rateStr);
-                }
+            if (authMetrics.getTotalRequests() > 0 && logger.isDebugEnabled()) {
+                logger.debug(messages.get("cache.stats_final"),
+                        authMetrics.getHits(), authMetrics.getMisses(), authMetrics.formatHitRate());
             }
 
             scheduler.shutdown();
@@ -620,7 +452,6 @@ public class AuthCache {
             if (logger.isDebugEnabled()) {
                 logger.debug(messages.get("cache.shutdown"));
             }
-
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             scheduler.shutdownNow();
@@ -633,12 +464,17 @@ public class AuthCache {
     // ===== Stats =====
 
     public CacheStats getStats() {
+        // cleanUp() forces Caffeine to converge to its size cap before we read the count.
+        // Otherwise size assertions in tests (and the approaching-capacity warning at
+        // runtime) can momentarily see entries that the async maintenance hasn't evicted yet.
+        authorizedPlayers.cleanUp();
+        premiumCache.cleanUp();
         return new CacheStats(
-                authorizedPlayers.size(),
+                (int) Math.min(Integer.MAX_VALUE, authorizedPlayers.estimatedSize()),
                 bruteForceTracker.size(),
-                premiumCache.size(),
-                cacheHits.get(),
-                cacheMisses.get(),
+                (int) Math.min(Integer.MAX_VALUE, premiumCache.estimatedSize()),
+                authMetrics.getHits(),
+                authMetrics.getMisses(),
                 maxSize,
                 ttlMinutes
         );
@@ -666,7 +502,13 @@ public class AuthCache {
     // ===== Inner Data Classes (kept public for external usage) =====
 
     /**
-     * Wpis premium cache z TTL.
+     * Premium cache entry with TTL.
+     * <p>
+     * {@code isExpired()} / {@code isStale()} were the only mechanism the legacy
+     * {@code ConcurrentHashMap}-backed implementation had to honor per-entry TTL. With
+     * Caffeine handling expiration via {@link AuthCache#PREMIUM_EXPIRY}, those methods
+     * survive only for external callers ({@code getStale()} is still used to decide
+     * whether to refresh a premium entry proactively).
      */
     public static class PremiumCacheEntry {
         private final boolean isPremium;
@@ -702,7 +544,7 @@ public class AuthCache {
     }
 
     /**
-     * Aktywna sesja gracza - zapobiega session hijacking.
+     * Active player session — anti-hijacking record managed by {@link SessionManager}.
      */
     public static class ActiveSession {
         private final UUID uuid;

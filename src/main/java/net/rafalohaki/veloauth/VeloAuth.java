@@ -23,6 +23,8 @@ import net.rafalohaki.veloauth.listener.AuthListener;
 import net.rafalohaki.veloauth.listener.ListenerFactory;
 import net.rafalohaki.veloauth.alert.PremiumResolverAlertService;
 import net.rafalohaki.veloauth.audit.AuditLogService;
+import net.rafalohaki.veloauth.auth.totp.PendingTotpStore;
+import net.rafalohaki.veloauth.auth.totp.TotpService;
 import net.rafalohaki.veloauth.premium.PremiumResolverService;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.bstats.velocity.Metrics;
@@ -72,6 +74,8 @@ public class VeloAuth {
     private PremiumResolverService premiumResolverService;
     private PremiumResolverAlertService premiumResolverAlertService;
     private AuditLogService auditLogService;
+    private TotpService totpService;
+    private PendingTotpStore pendingTotpStore;
     private ScheduledExecutorService premiumCacheCleanupScheduler;
     private ScheduledExecutorService premiumDbCleanupScheduler;
     private ScheduledExecutorService auditLogCleanupScheduler;
@@ -266,6 +270,7 @@ public class VeloAuth {
             initializeMessages();
             initializeDatabase();
             initializeAuditLog();
+            initializeTwoFactor();
             initializeCache();
             initializeCommands();
             initializeConnectionManager();
@@ -380,6 +385,27 @@ public class VeloAuth {
 
         if (logger.isDebugEnabled()) {
             logger.debug("Audit log initialized (retention: {} days)", retentionDays);
+        }
+    }
+
+    /**
+     * Phase 3.5: Two-Factor (TOTP) services. Always instantiated — even when
+     * {@code two-factor.enabled=false} — because {@code TotpService} is a stateless
+     * verifier and {@code PendingTotpStore} is cheap. The runtime check on
+     * {@link Settings.TwoFactorSettings#isEnabled()} lives at the call sites, so
+     * flipping the master switch off is the operator's intended kill-switch.
+     */
+    private void initializeTwoFactor() {
+        Settings.TwoFactorSettings twoFactorSettings = settings.getTwoFactorSettings();
+        this.totpService = new TotpService();
+        java.time.Duration pendingTtl = java.time.Duration.ofSeconds(twoFactorSettings.getPendingTimeoutSeconds());
+        this.pendingTotpStore = new PendingTotpStore(pendingTtl, auditLogService);
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("2FA initialized (enabled: {}, pending-timeout: {}s, issuer: {})",
+                    twoFactorSettings.isEnabled(),
+                    twoFactorSettings.getPendingTimeoutSeconds(),
+                    twoFactorSettings.getIssuer());
         }
     }
 
@@ -728,9 +754,11 @@ public class VeloAuth {
                 return false;
             }
 
-        } catch (IllegalStateException e) {
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            // IllegalArgumentException can leak out if validation paths added in the future
+            // forget to be caught inside Settings.load(); IllegalStateException covers init-order races.
             if (logger.isErrorEnabled()) {
-                logger.error("State error during configuration reload", e);
+                logger.error("Configuration reload failed: {}", e.getMessage(), e);
             }
             return false;
         }
@@ -825,6 +853,16 @@ public class VeloAuth {
      */
     public AuthTimeoutScheduler getAuthTimeoutScheduler() {
         return authTimeoutScheduler;
+    }
+
+    /** @return shared RFC 6238 TOTP verifier (stateless). */
+    public TotpService getTotpService() {
+        return totpService;
+    }
+
+    /** @return store of in-flight 2FA verification states (post-BCrypt and pending /2fa setup). */
+    public PendingTotpStore getPendingTotpStore() {
+        return pendingTotpStore;
     }
 
     /**

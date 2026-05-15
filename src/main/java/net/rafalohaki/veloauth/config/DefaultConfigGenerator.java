@@ -35,6 +35,7 @@ final class DefaultConfigGenerator {
                 FLOODGATE_SECTION,
                 ALERTS_SECTION,
                 AUDIT_LOG_SECTION,
+                TWO_FACTOR_SECTION,
                 "" // trailing newline
         ).replace(BUILT_IN_LANGUAGE_CODES_PLACEHOLDER, BuiltInLanguages.quotedCodeList());
 
@@ -205,7 +206,11 @@ final class DefaultConfigGenerator {
                     # Cache TTL for misses in minutes
                     miss-ttl-minutes: 3
                     # Preserve username case in resolver cache
-                    case-sensitive: true""";
+                    case-sensitive: true
+                    # Maximum entries kept in the in-memory premium resolution cache. Once exceeded,
+                    # the oldest 10% are evicted in a batched LRU sweep. Raise this on busy proxies
+                    # (1000+ concurrent players); the default suits servers with up to a few hundred.
+                    memory-cache-max-size: 10000""";
 
     private static final String FLOODGATE_SECTION = """
                 
@@ -250,4 +255,25 @@ final class DefaultConfigGenerator {
                   enabled: true
                   # Keep entries this many days; older rows are pruned daily (1-3650)
                   retention-days: 90""";
+
+    private static final String TWO_FACTOR_SECTION = """
+
+                # Two-Factor Authentication (TOTP / RFC 6238) — opt-in per player.
+                # Compatible with Google Authenticator, Authy, Aegis, FreeOTP, and LimboAuth tokens.
+                # See 2FA.md for the full setup flow and operator handbook.
+                two-factor:
+                  # Master switch.
+                  # - true  → players can /2fa setup; existing tokens are enforced at /login.
+                  # - false → /2fa setup is rejected; existing tokens are NOT enforced.
+                  #           (Operator can still wipe tokens via /vauth 2fa-remove <nick>.)
+                  enabled: true
+                  # Name displayed in authenticator apps (Google Authenticator, Authy, …)
+                  # next to each saved code. Must not contain ':' (reserved by otpauth URI).
+                  issuer: "VeloAuth"
+                  # Render the ASCII QR code in chat alongside the plain-text secret.
+                  # Disabling shrinks the /2fa setup output to the secret + otpauth:// URI only.
+                  show-ascii-qr: true
+                  # Maximum window (seconds) between successful BCrypt verify and TOTP code entry.
+                  # After this the player must run /login again. Range: 30-1800. Default: 300 (5 min).
+                  pending-timeout-seconds: 300""";
 }

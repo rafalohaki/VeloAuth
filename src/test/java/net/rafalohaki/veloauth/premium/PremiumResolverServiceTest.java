@@ -109,6 +109,53 @@ class PremiumResolverServiceTest {
     }
 
     @Test
+    void shouldTreatStaleDbCacheEntryAsMissAndFallThroughToApi() {
+        // Given: a DB cache row with lastSeen older than the configured hit-ttl (10 minutes).
+        String username = "StaleNickTest";
+        UUID staleUuid = UUID.randomUUID();
+        PremiumUuid staleEntry = mock(PremiumUuid.class);
+        when(staleEntry.getUuid()).thenReturn(staleUuid);
+        when(staleEntry.getNickname()).thenReturn(username);
+        when(staleEntry.getLastSeen()).thenReturn(System.currentTimeMillis() - 60L * 60_000L); // 60 min old
+
+        when(dao.findByNickname(username)).thenReturn(Optional.of(staleEntry));
+
+        // No API resolvers — service should hit the "no resolvers enabled" offline branch,
+        // proving the stale DB entry was bypassed.
+        when(resolverSettings.isMojangEnabled()).thenReturn(false);
+        when(resolverSettings.isAshconEnabled()).thenReturn(false);
+        when(resolverSettings.isWpmeEnabled()).thenReturn(false);
+        service = new PremiumResolverService(logger, settings, dao);
+
+        PremiumResolution result = service.resolve(username);
+
+        assertNotNull(result);
+        assertTrue(result.isOffline(),
+                "Stale DB cache entry must NOT short-circuit to premium — it should fall through to the API path");
+    }
+
+    @Test
+    void shouldTrustDbCacheRowWithZeroLastSeenForLimboAuthCompatibility() {
+        // Given: a DB row migrated from LimboAuth — LAST_SEEN defaults to 0 because the column was
+        // ALTER TABLE-added with DEFAULT 0. Forcing those rows through the API on every login would
+        // be an upgrade-time API storm, so we treat lastSeen <= 0 as "trusted, unknown freshness".
+        String username = "LegacyNickTest";
+        UUID legacyUuid = UUID.randomUUID();
+        PremiumUuid legacyEntry = mock(PremiumUuid.class);
+        when(legacyEntry.getUuid()).thenReturn(legacyUuid);
+        when(legacyEntry.getNickname()).thenReturn(username);
+        when(legacyEntry.getLastSeen()).thenReturn(0L);
+
+        when(dao.findByNickname(username)).thenReturn(Optional.of(legacyEntry));
+
+        PremiumResolution result = service.resolve(username);
+
+        assertNotNull(result);
+        assertTrue(result.isPremium(), "Legacy row with lastSeen=0 must be trusted (LimboAuth migration compatibility)");
+        assertEquals(legacyUuid, result.uuid());
+    }
+
+    @Test
     void shouldCacheSuccessfulPremiumResolution() {
         // Given: A premium player UUID
         UUID premiumUuid = UUID.randomUUID();

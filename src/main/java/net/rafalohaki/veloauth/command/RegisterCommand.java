@@ -5,6 +5,8 @@ import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.Component;
+import net.rafalohaki.veloauth.audit.AuditEventType;
+import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 
@@ -136,6 +138,11 @@ class RegisterCommand implements SimpleCommand {
 
             if (PostAuthFlow.execute(ctx, authContext, newPlayer, "registered")) {
                 authContext.player().sendMessage(ctx.sm().registerSuccess());
+                AuditLogService audit = ctx.plugin().getAuditLogService();
+                if (audit != null) {
+                    audit.record(AuditEventType.REGISTER, authContext.username(),
+                            PlayerAddressUtils.getPlayerIp(authContext.player()));
+                }
             }
         } catch (CompletionException e) {
             ctx.logger().error(DB_MARKER, "Database error during registration for player {}", player.getUsername(), e);

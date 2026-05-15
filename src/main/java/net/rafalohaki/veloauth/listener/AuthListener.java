@@ -118,7 +118,8 @@ public class AuthListener {
             "PreLoginHandler cannot be null - initialization failed");
         this.postLoginHandler = java.util.Objects.requireNonNull(postLoginHandler, 
             "PostLoginHandler cannot be null - initialization failed");
-        this.uuidVerificationHandler = new UuidVerificationHandler(databaseManager, authCache, logger);
+        this.uuidVerificationHandler = new UuidVerificationHandler(databaseManager, authCache, logger,
+                plugin::getAuditLogService);
 
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("connection.listener.registered"));
