@@ -12,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Locale;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatabaseMigrationServiceTest {
@@ -76,6 +77,22 @@ class DatabaseMigrationServiceTest {
         }
         manager = new DatabaseManager(config, new Messages());
         assertTrue(manager.initialize().join(), "Third init should also succeed");
+    }
+
+    @Test
+    void postgresCreateStatementIfNotExists_shouldMakeSequenceAndTableCreationIdempotent() {
+        assertEquals(
+                "CREATE SEQUENCE IF NOT EXISTS \"veloauth_audit_log_id_seq\"",
+                DatabaseMigrationService.postgresCreateStatementIfNotExists(
+                        "CREATE SEQUENCE \"veloauth_audit_log_id_seq\""));
+        assertEquals(
+                "CREATE TABLE IF NOT EXISTS \"VELOAUTH_AUDIT_LOG\" (\"ID\" BIGINT)",
+                DatabaseMigrationService.postgresCreateStatementIfNotExists(
+                        "CREATE TABLE \"VELOAUTH_AUDIT_LOG\" (\"ID\" BIGINT)"));
+        assertEquals(
+                "CREATE INDEX idx_audit_player ON \"VELOAUTH_AUDIT_LOG\" (\"PLAYER_LOWERCASE\")",
+                DatabaseMigrationService.postgresCreateStatementIfNotExists(
+                        "CREATE INDEX idx_audit_player ON \"VELOAUTH_AUDIT_LOG\" (\"PLAYER_LOWERCASE\")"));
     }
 
     private boolean tableExists(String tableName) throws SQLException {

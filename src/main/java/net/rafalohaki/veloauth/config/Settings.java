@@ -563,12 +563,13 @@ public class Settings {
     public static class TwoFactorSettings {
         /**
          * Default URL template for an external QR-rendering service. {@code {uri}} is
-         * substituted with the URL-encoded {@code otpauth://} string at runtime. Chosen
-         * because the API is documented, free, and the URL is short. Operators worried
-         * about leaking the shared secret to a third party should either set
+         * substituted with the URL-encoded {@code otpauth://} string at runtime. Operators
+         * worried about leaking the shared secret to an external service should either set
          * {@code qr-link-enabled: false} or point this template at their own QR endpoint.
          */
         private static final String DEFAULT_QR_URL_TEMPLATE =
+                "https://qr.autarch.workers.dev/siemaa?data={uri}";
+        private static final String LEGACY_QR_URL_TEMPLATE =
                 "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={uri}";
 
         private boolean enabled = true;
@@ -585,7 +586,10 @@ public class Settings {
         void setQrLinkEnabled(boolean value) { this.qrLinkEnabled = value; }
         public String getQrLinkUrlTemplate() { return qrLinkUrlTemplate; }
         void setQrLinkUrlTemplate(String value) {
-            this.qrLinkUrlTemplate = (value == null || value.isBlank()) ? DEFAULT_QR_URL_TEMPLATE : value;
+            String normalized = value == null ? "" : value.trim();
+            this.qrLinkUrlTemplate = (normalized.isBlank() || LEGACY_QR_URL_TEMPLATE.equals(normalized))
+                    ? DEFAULT_QR_URL_TEMPLATE
+                    : normalized;
         }
         public int getPendingTimeoutSeconds() { return pendingTimeoutSeconds; }
         void setPendingTimeoutSeconds(int value) { this.pendingTimeoutSeconds = value; }

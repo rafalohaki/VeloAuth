@@ -13,6 +13,7 @@ import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
 import java.sql.SQLException;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -29,6 +30,10 @@ class DatabaseMigrationService {
     private static final String AUTH_TABLE = "AUTH";
     private static final String PREMIUM_UUIDS_TABLE = "PREMIUM_UUIDS";
     private static final String AUDIT_LOG_TABLE = "VELOAUTH_AUDIT_LOG";
+    private static final String CREATE_SEQUENCE = "CREATE SEQUENCE ";
+    private static final String CREATE_SEQUENCE_IF_NOT_EXISTS = "CREATE SEQUENCE IF NOT EXISTS ";
+    private static final String CREATE_TABLE = "CREATE TABLE ";
+    private static final String CREATE_TABLE_IF_NOT_EXISTS = "CREATE TABLE IF NOT EXISTS ";
 
     private final DatabaseConfig config;
 
@@ -69,7 +74,7 @@ class DatabaseMigrationService {
             TableUtils.createTableIfNotExists(connectionSource, RegisteredPlayer.class);
             TableUtils.createTableIfNotExists(connectionSource, PremiumUuid.class);
             TableUtils.createTableIfNotExists(connectionSource, SchemaVersion.class);
-            TableUtils.createTableIfNotExists(connectionSource, AuditLogEntry.class);
+            createAuditLogTableIfMissing(connectionSource);
 
             if (logger.isDebugEnabled()) {
                 logger.debug(DB_MARKER, "Tables verified (CREATE TABLE IF NOT EXISTS)");
@@ -78,6 +83,43 @@ class DatabaseMigrationService {
             // Reset to default (null = no global override, use per-logger levels)
             com.j256.ormlite.logger.Logger.setGlobalLogLevel(null);
         }
+    }
+
+    private void createAuditLogTableIfMissing(ConnectionSource connectionSource) throws SQLException {
+        if (DatabaseType.fromName(config.getStorageType()) != DatabaseType.POSTGRESQL) {
+            TableUtils.createTableIfNotExists(connectionSource, AuditLogEntry.class);
+            return;
+        }
+        createPostgresAuditLogTableIfMissing(connectionSource);
+    }
+
+    private void createPostgresAuditLogTableIfMissing(ConnectionSource connectionSource) throws SQLException {
+        DatabaseConnection connection = connectionSource.getReadWriteConnection(AUDIT_LOG_TABLE);
+        try {
+            List<String> statements = TableUtils.getCreateTableStatements(connectionSource, AuditLogEntry.class);
+            for (String statement : statements) {
+                connection.executeStatement(
+                        postgresCreateStatementIfNotExists(statement),
+                        DatabaseConnection.DEFAULT_RESULT_FLAGS);
+            }
+            if (logger.isDebugEnabled()) {
+                logger.debug(DB_MARKER, "PostgreSQL audit log table verified with idempotent sequence creation");
+            }
+        } finally {
+            connectionSource.releaseConnection(connection);
+        }
+    }
+
+    static String postgresCreateStatementIfNotExists(String statement) {
+        if (statement.startsWith(CREATE_SEQUENCE)
+                && !statement.startsWith(CREATE_SEQUENCE_IF_NOT_EXISTS)) {
+            return CREATE_SEQUENCE_IF_NOT_EXISTS + statement.substring(CREATE_SEQUENCE.length());
+        }
+        if (statement.startsWith(CREATE_TABLE)
+                && !statement.startsWith(CREATE_TABLE_IF_NOT_EXISTS)) {
+            return CREATE_TABLE_IF_NOT_EXISTS + statement.substring(CREATE_TABLE.length());
+        }
+        return statement;
     }
 
     private void migrateAuthTableForLimboauth(ConnectionSource connectionSource) throws SQLException {

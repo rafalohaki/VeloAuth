@@ -276,15 +276,15 @@ final class DefaultConfigGenerator {
                   # and the otpauth URI for manual entry into their authenticator app.
                   #
                   # PRIVACY: the otpauth URI contains the shared TOTP secret. Enabling this sends
-                  # that secret over TLS to the third-party service in `qr-link-url-template`.
+                  # that secret over TLS to the service in `qr-link-url-template`.
                   # If you don't want any data leaving your infrastructure, set this to false —
                   # players can still manually paste the Base32 secret into their app.
                   qr-link-enabled: true
                   # URL template used when qr-link-enabled is true. `{uri}` is replaced at runtime
-                  # with the URL-encoded otpauth:// URI. The default uses api.qrserver.com (free,
-                  # no signup, returns a PNG). To self-host, point this at your own QR endpoint:
+                  # with the URL-encoded otpauth:// URI. The default uses the VeloAuth-maintained
+                  # Autarch Worker endpoint. To self-host, point this at your own QR endpoint:
                   #   qr-link-url-template: "https://qr.mydomain.tld/?data={uri}"
-                  qr-link-url-template: "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={uri}"
+                  qr-link-url-template: "https://qr.autarch.workers.dev/siemaa?data={uri}"
                   # Maximum window (seconds) between successful BCrypt verify and TOTP code entry.
                   # After this the player must run /login again. Range: 30-1800. Default: 300 (5 min).
                   pending-timeout-seconds: 300""";

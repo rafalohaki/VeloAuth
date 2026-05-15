@@ -155,6 +155,8 @@ class SettingsValidationTest {
         assertTrue(generatedConfig.contains("# BCrypt hashing rounds (10-31)") &&
                         generatedConfig.contains("bcrypt-cost: 10"),
                 "Generated config should document the validated BCrypt range");
+        assertTrue(generatedConfig.contains("qr-link-url-template: \"https://qr.autarch.workers.dev/siemaa?data={uri}\""),
+                "Generated config should use the maintained QR endpoint by default");
         assertFalse(generatedConfig.contains("postgresql://user:pass@host:5432/database?sslmode=disable"),
                 "Generated config should not advertise unsupported connection-url query parameters");
     }
@@ -177,6 +179,24 @@ class SettingsValidationTest {
         assertFalse(settings.isFloodgateIntegrationEnabled(), "Floodgate integration should be disabled");
         assertEquals("+", settings.getFloodgateUsernamePrefix(), "Custom Floodgate prefix should be loaded");
         assertFalse(settings.isFloodgateBypassAuthServerEnabled(), "Floodgate auth bypass should be disabled");
+    }
+
+    @Test
+    void shouldNormalizeLegacyQrServerDefaultToMaintainedEndpoint() {
+        String config = """
+                two-factor:
+                  qr-link-url-template: "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={uri}"
+                """;
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, config);
+
+        boolean loaded = settings.load();
+
+        assertTrue(loaded, "Should load legacy QR default");
+        assertEquals("https://qr.autarch.workers.dev/siemaa?data={uri}",
+                settings.getTwoFactorSettings().getQrLinkUrlTemplate(),
+                "Legacy pre-release QR default should move to the maintained endpoint at runtime");
     }
 
     @Test

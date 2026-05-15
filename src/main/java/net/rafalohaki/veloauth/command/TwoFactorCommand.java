@@ -30,13 +30,13 @@ import java.util.Optional;
  * <ul>
  *   <li>{@code /2fa setup}      — generate a fresh secret, park it in {@link net.rafalohaki.veloauth.auth.totp.PendingTotpStore}
  *                                 as a {@link PendingTotpState.Kind#SETUP} pending state, and show the player the
- *                                 secret + otpauth URI + (optional) ASCII QR. Only allowed when the player has no
+ *                                 secret + otpauth URI + optional clickable QR link. Only allowed when the player has no
  *                                 active TOTP token.</li>
  *   <li>{@code /2fa verify <c>} — confirms either a setup (writes the secret to DB) or a post-BCrypt login
  *                                 (transfers the player to a backend).</li>
  *   <li>{@code /2fa disable <c>}— wipes the TOTP token from the DB after verifying the player owns the current
  *                                 authenticator (i.e. they pass a valid code).</li>
- *   <li>{@code /2fa qr}         — re-shows the otpauth URI + ASCII QR for the player's existing token. Useful when
+ *   <li>{@code /2fa qr}         — re-shows the otpauth URI + clickable QR link for the player's existing token. Useful when
  *                                 a phone is lost and the player needs to re-enroll on a new device.</li>
  *   <li>{@code /2fa status}     — prints whether the account currently has 2FA enabled.</li>
  * </ul>
@@ -151,7 +151,7 @@ class TwoFactorCommand implements SimpleCommand {
     /**
      * Sends the clickable {@code [ Scan QR ]} line. We render it as an Adventure Component
      * with a {@code clickEvent(openUrl(...))} so the player's Minecraft client opens the URL
-     * in their default browser, where the third-party service draws a real PNG QR code.
+     * in their default browser, where the configured service draws a real PNG QR code.
      * <p>
      * Why a link instead of an in-chat ASCII QR: Minecraft's chat font is monospaced but
      * taller than wide, and many resource packs / client mods replace glyph metrics; in

@@ -55,14 +55,14 @@ Run this **after** logging in (the normal `/login <password>` flow). VeloAuth wi
 
 1. The Base32 secret (in case your app prefers manual entry).
 2. The `otpauth://` URI.
-3. An ASCII QR code (unless the operator disabled `show-ascii-qr`).
+3. A clickable QR link, if the operator keeps `qr-link-enabled: true`.
 
 If `qr-link-enabled: true` (default), the chat also contains a clickable `[ Click here to
 scan the QR code in your browser ]` line — clicking it opens your default browser to a
-third-party QR rendering service that draws a real, scannable QR image. Once you see it,
+configured QR rendering service that draws a real, scannable QR image. Once you see it,
 scan with your authenticator app.
 
-If you'd rather not click the link (privacy: it sends your TOTP secret to a third party
+If you'd rather not click the link (privacy: it sends your TOTP secret to the configured service
 over TLS), paste the Base32 secret manually into your authenticator's "enter setup key"
 field. Both paths produce the same result. Then confirm:
 
@@ -129,7 +129,8 @@ It's on by default. The relevant block in `config.yml`:
 two-factor:
   enabled: true
   issuer: "VeloAuth"
-  show-ascii-qr: true
+  qr-link-enabled: true
+  qr-link-url-template: "https://qr.autarch.workers.dev/siemaa?data={uri}"
   pending-timeout-seconds: 300
 ```
 
@@ -146,8 +147,8 @@ two-factor:
   `otpauth://` URI and can either type the secret into their authenticator app or paste the
   URI on a phone that supports it.
 - `qr-link-url-template` — the URL the clickable QR link opens. `{uri}` is replaced at runtime
-  with the URL-encoded `otpauth://` URI. Default uses [api.qrserver.com](https://api.qrserver.com)
-  (free, no signup, returns a PNG). Self-hosting: point this at your own QR endpoint, e.g.
+  with the URL-encoded `otpauth://` URI. Default uses the VeloAuth-maintained
+  `https://qr.autarch.workers.dev/siemaa?data={uri}` endpoint. Self-hosting: point this at your own QR endpoint, e.g.
   `https://qr.mydomain.tld/?data={uri}`. Validation requires `http(s)://` scheme + literal
   `{uri}` placeholder.
 - `pending-timeout-seconds` — how long a post-`/login` player has to enter a TOTP code before
