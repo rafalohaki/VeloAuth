@@ -215,8 +215,6 @@ class SimpleMessagesKeysTest {
             "error.permission",
             // Plugin initialization
             "plugin.initialization.ready",
-            "plugin.initialization.shutdown",
-            "plugin.initialization.closed",
             "plugin.initialization.components_ready",
             // Config display
             "config.display.header",

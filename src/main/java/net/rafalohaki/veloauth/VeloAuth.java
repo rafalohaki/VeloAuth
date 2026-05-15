@@ -235,18 +235,17 @@ public class VeloAuth {
      */
     @Subscribe
     public void onProxyShutdown(ProxyShutdownEvent event) {
-        if (messages != null && logger.isInfoEnabled()) {
-            logger.info(messages.get("plugin.initialization.shutdown"));
-        } else if (logger.isInfoEnabled()) {
-            logger.info("VeloAuth - Shutdown");
+        // Operator-facing log: hardcoded English (matches the 1.2.0 P1.2 strategy that converted
+        // every operator log out of i18n). Avoids encoding-mismatch artifacts when the host
+        // container ships without UTF-8 locale (Polish "Zamknięty" would render as "Zamkni?ty").
+        if (logger.isInfoEnabled()) {
+            logger.info("=== VeloAuth - Shutdown ===");
         }
-        
+
         shutdown();
-        
-        if (messages != null && logger.isInfoEnabled()) {
-            logger.info(messages.get("plugin.initialization.closed"));
-        } else if (logger.isInfoEnabled()) {
-            logger.info("VeloAuth - Closed");
+
+        if (logger.isInfoEnabled()) {
+            logger.info("=== VeloAuth - Closed ===");
         }
     }
 
