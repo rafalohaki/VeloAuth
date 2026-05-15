@@ -34,6 +34,7 @@ final class DefaultConfigGenerator {
                 PREMIUM_SECTION,
                 FLOODGATE_SECTION,
                 ALERTS_SECTION,
+                AUDIT_LOG_SECTION,
                 "" // trailing newline
         ).replace(BUILT_IN_LANGUAGE_CODES_PLACEHOLDER, BuiltInLanguages.quotedCodeList());
 
@@ -240,4 +241,13 @@ final class DefaultConfigGenerator {
                     # Discord webhook URL (get from Discord server settings)
                     # Example: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
                     webhook-url: "\"""";
+
+    private static final String AUDIT_LOG_SECTION = """
+
+                # Audit log (writes authentication events to VELOAUTH_AUDIT_LOG)
+                audit-log:
+                  # Enable/disable audit logging (writes are async via virtual threads, fail-open)
+                  enabled: true
+                  # Keep entries this many days; older rows are pruned daily (1-3650)
+                  retention-days: 90""";
 }

@@ -310,7 +310,10 @@ final class JdbcAuthDao {
             return player;
         } catch (IllegalArgumentException e) {
             if (logger.isWarnEnabled()) {
-                logger.warn("Invalid AUTH row in database for {}", nickname, e);
+                logger.warn("Invalid AUTH row in database for {}: {}", nickname, e.getMessage());
+            }
+            if (logger.isDebugEnabled()) {
+                logger.debug("Invalid AUTH row failure details for {}", nickname, e);
             }
             throw new SQLException("Invalid AUTH row stored in database for player: " + nickname, e);
         }

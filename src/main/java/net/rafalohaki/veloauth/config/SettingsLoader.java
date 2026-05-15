@@ -37,10 +37,23 @@ final class SettingsLoader {
         loadPremiumSettings(config, state, logger);
         loadFloodgateSettings(config, state);
         loadAlertSettings(config, state);
+        loadAuditLogSettings(config, state);
         loadDebugSettings(config, state);
         loadLanguageSettings(config, state);
         processDatabaseSettings(state, logger);
         return state;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void loadAuditLogSettings(Map<String, Object> config, LoadedState state) {
+        Object section = config.get("audit-log");
+        if (!(section instanceof Map<?, ?>)) {
+            return;
+        }
+        Map<String, Object> auditLog = (Map<String, Object>) section;
+        Settings.AuditLogSettings target = state.auditLogSettings;
+        target.setEnabled(YamlParserUtils.getBoolean(auditLog, YAML_FIELD_ENABLED, target.isEnabled()));
+        target.setRetentionDays(YamlParserUtils.getInt(auditLog, "retention-days", target.getRetentionDays()));
     }
 
     @SuppressWarnings("unchecked")
@@ -369,6 +382,7 @@ final class SettingsLoader {
         final Settings.FloodgateSettings floodgateSettings = new Settings.FloodgateSettings();
         final Settings.AlertSettings alertSettings = new Settings.AlertSettings();
         final Settings.PasswordPolicy passwordPolicy = new Settings.PasswordPolicy();
+        final Settings.AuditLogSettings auditLogSettings = new Settings.AuditLogSettings();
 
         static LoadedState from(Settings settings) {
             LoadedState state = new LoadedState();
@@ -404,7 +418,14 @@ final class SettingsLoader {
             copyFloodgateSettings(settings.getFloodgateSettings(), state.floodgateSettings);
             copyAlertSettings(settings.getAlertSettings(), state.alertSettings);
             copyPasswordPolicy(settings.getPasswordPolicy(), state.passwordPolicy);
+            copyAuditLogSettings(settings.getAuditLogSettings(), state.auditLogSettings);
             return state;
+        }
+
+        private static void copyAuditLogSettings(Settings.AuditLogSettings source,
+                                                 Settings.AuditLogSettings target) {
+            target.setEnabled(source.isEnabled());
+            target.setRetentionDays(source.getRetentionDays());
         }
 
         private static void copyPasswordPolicy(Settings.PasswordPolicy source, Settings.PasswordPolicy target) {

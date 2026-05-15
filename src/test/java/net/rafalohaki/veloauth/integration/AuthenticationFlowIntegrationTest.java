@@ -45,7 +45,7 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@SuppressWarnings({"java:S100", "java:S1450"}) // Test method names use descriptive underscores; test fields are acceptable
+@SuppressWarnings({"java:S100", "java:S1450", "deprecation"}) // Test method names use descriptive underscores; test fields are acceptable
 class AuthenticationFlowIntegrationTest {
 
     private PreLoginHandler preLoginHandler;

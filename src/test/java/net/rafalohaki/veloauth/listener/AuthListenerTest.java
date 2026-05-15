@@ -50,7 +50,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@SuppressWarnings({"java:S100", "java:S1450"})
+@SuppressWarnings({"java:S100", "java:S1450", "deprecation", "unchecked"})
 class AuthListenerTest {
 
     private static final PlainTextComponentSerializer PLAIN_TEXT = PlainTextComponentSerializer.plainText();

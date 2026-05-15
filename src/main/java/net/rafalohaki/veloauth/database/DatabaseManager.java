@@ -4,6 +4,7 @@ import com.j256.ormlite.dao.Dao;
 import com.j256.ormlite.dao.DaoManager;
 import com.j256.ormlite.jdbc.DataSourceConnectionSource;
 import com.j256.ormlite.jdbc.JdbcConnectionSource;
+import com.j256.ormlite.misc.TransactionManager;
 import com.j256.ormlite.support.ConnectionSource;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -13,7 +14,6 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
-import java.lang.ref.WeakReference;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Locale;
@@ -46,9 +46,12 @@ import java.util.concurrent.locks.ReentrantLock;
  *       player data updates to force re-fetch from database on next access.</li>
  * </ul>
  * 
- * <h3>Weak Reference Design</h3>
- * Uses {@link WeakReference} to AuthCache to avoid circular dependency and allow
- * garbage collection if AuthCache is no longer needed.
+ * <h3>AuthCache Reference</h3>
+ * Holds a strong reference to AuthCache. AuthCache does not retain a reference
+ * back to DatabaseManager, so there is no cycle — the previous WeakReference
+ * scheme was protecting against a non-existent leak and made cache invalidation
+ * silently no-op once AuthCache was GC'd. The lifecycle owner ({@code VeloAuth})
+ * keeps both references alive for the same duration.
  */
 public class DatabaseManager {
 
@@ -76,10 +79,12 @@ public class DatabaseManager {
     private ConnectionSource connectionSource;
     private Dao<RegisteredPlayer, String> playerDao;
     private PremiumUuidDao premiumUuidDao;
+    private AuditLogDao auditLogDao;
+    private SchemaVersionDao schemaVersionDao;
     private JdbcAuthDao jdbcAuthDao;
     private volatile boolean connected;
     
-    private WeakReference<net.rafalohaki.veloauth.cache.AuthCache> authCacheRef;
+    private volatile net.rafalohaki.veloauth.cache.AuthCache authCache;
 
     /**
      * Tworzy nowy DatabaseManager.
@@ -160,6 +165,7 @@ public class DatabaseManager {
         migrationService.createTablesAndMigrate(connectionSource,
                 messages.get("database.manager.creating_tables"),
                 messages.get("database.manager.tables_created"));
+        recordSchemaBaseline();
         markAsConnected();
         healthCheck.start();
 
@@ -215,7 +221,19 @@ public class DatabaseManager {
     private void initializeDaos() throws SQLException {
         playerDao = DaoManager.createDao(connectionSource, RegisteredPlayer.class);
         premiumUuidDao = new PremiumUuidDao(connectionSource);
+        schemaVersionDao = new SchemaVersionDao(connectionSource);
+        auditLogDao = new AuditLogDao(connectionSource);
         jdbcAuthDao = new JdbcAuthDao(config);
+    }
+
+    private void recordSchemaBaseline() {
+        if (schemaVersionDao == null) {
+            return;
+        }
+        if (schemaVersionDao.getCurrentVersion().isPresent()) {
+            return;
+        }
+        schemaVersionDao.recordVersion(1, "baseline v1.2.0 schema");
     }
 
     private void markAsConnected() {
@@ -337,15 +355,22 @@ public class DatabaseManager {
             }
 
             String oldNick = byUuid.getNickname();
+            String oldLowercaseNickname = byUuid.getLowercaseNickname();
             logger.info(DB_MARKER, "[NICK CHANGE] Premium player {} changed nickname: {} → {}",
                     premiumUuid, oldNick, originalNickname);
 
-            playerCache.remove(byUuid.getLowercaseNickname());
-            // updateId() must be called BEFORE setNickname() — lowercaseNickname is the @id field,
-            // and update() cannot change the id (it uses id in WHERE). See ORMLite Dao.updateId().
-            playerDao.updateId(byUuid, normalizedNickname);
-            byUuid.setNickname(originalNickname);
-            playerDao.update(byUuid);
+            TransactionManager.callInTransaction(connectionSource, () -> {
+                // updateId() must be called BEFORE setNickname() — lowercaseNickname is the @id field,
+                // and update() cannot change the id (it uses id in WHERE). See ORMLite Dao.updateId().
+                playerDao.updateId(byUuid, normalizedNickname);
+                byUuid.setNickname(originalNickname);
+                playerDao.update(byUuid);
+                return null;
+            });
+
+            // Cache mutations happen only after a successful commit so we never reflect
+            // partial state from a rolled-back transaction.
+            playerCache.remove(oldLowercaseNickname);
             playerCache.put(normalizedNickname, byUuid);
 
             logRuntimeDetection(originalNickname, isPlayerPremiumRuntime(byUuid), byUuid.getHash());
@@ -475,9 +500,7 @@ public class DatabaseManager {
     }
 
     private DbResult<RegisteredPlayer> handleDatabaseError(String normalizedNickname, SQLException e) {
-        if (logger.isErrorEnabled()) {
-            logger.error(DB_MARKER, "Error searching for player: {}", normalizedNickname, e);
-        }
+        logDatabaseOperationFailure("player lookup", normalizedNickname, e);
         return genericDatabaseErrorResult();
     }
 
@@ -487,6 +510,15 @@ public class DatabaseManager {
 
     private <T> DbResult<T> genericDatabaseErrorResult() {
         return DbResult.databaseError(genericDatabaseErrorMessage());
+    }
+
+    private void logDatabaseOperationFailure(String operation, String identifier, Throwable throwable) {
+        if (logger.isErrorEnabled()) {
+            logger.error(DB_MARKER, "Database operation '{}' failed for {}", operation, identifier);
+        }
+        if (logger.isDebugEnabled()) {
+            logger.debug(DB_MARKER, "Database operation '{}' failure details for {}", operation, identifier, throwable);
+        }
     }
 
     /**
@@ -523,9 +555,7 @@ public class DatabaseManager {
             }
             return DbResult.success(success);
         } catch (SQLException e) {
-            if (logger.isErrorEnabled()) {
-                logger.error(DB_MARKER, "Error saving player: {}", player.getNickname(), e);
-            }
+            logDatabaseOperationFailure("player save", player.getNickname(), e);
             return genericDatabaseErrorResult();
         }
     }
@@ -540,18 +570,6 @@ public class DatabaseManager {
     }
 
     private net.rafalohaki.veloauth.cache.AuthCache resolveAuthCacheForUpdate() {
-        if (authCacheRef == null) {
-            return null;
-        }
-
-        net.rafalohaki.veloauth.cache.AuthCache authCache = authCacheRef.get();
-        if (authCache == null) {
-            if (logger.isDebugEnabled()) {
-                logger.debug(DB_MARKER, "AuthCache reference is null (GC collected) - skipping cache invalidation");
-            }
-            return null;
-        }
-
         return authCache;
     }
 
@@ -616,9 +634,7 @@ public class DatabaseManager {
         try {
             return DbResult.success(jdbcAuthDao.countRegistrationsByIp(ip));
         } catch (SQLException e) {
-            if (logger.isErrorEnabled()) {
-                logger.error(DB_MARKER, "Error counting registrations by IP: {}", ip, e);
-            }
+            logDatabaseOperationFailure("count registrations by IP", ip, e);
             return genericDatabaseErrorResult();
         }
     }
@@ -656,9 +672,7 @@ public class DatabaseManager {
             }
             return DbResult.success(false);
         } catch (SQLException e) {
-            if (logger.isErrorEnabled()) {
-                logger.error(DB_MARKER, "Error deleting player: {}", lowercaseNickname, e);
-            }
+            logDatabaseOperationFailure("player delete", lowercaseNickname, e);
             return genericDatabaseErrorResult();
         }
     }
@@ -679,14 +693,10 @@ public class DatabaseManager {
                 }
                 return DbResult.success(premium);
             } catch (SQLException e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error(DB_MARKER, "Error checking premium status for player: {}", username, e);
-                }
+                logDatabaseOperationFailure("premium status check", username, e);
                 return genericDatabaseErrorResult();
             } catch (RuntimeException e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error(DB_MARKER, "Runtime error checking premium status for player: {}", username, e);
-                }
+                logDatabaseOperationFailure("premium status check", username, e);
                 return genericDatabaseErrorResult();
             }
         });
@@ -781,6 +791,14 @@ public class DatabaseManager {
         return premiumUuidDao;
     }
 
+    public AuditLogDao getAuditLogDao() {
+        return auditLogDao;
+    }
+
+    public SchemaVersionDao getSchemaVersionDao() {
+        return schemaVersionDao;
+    }
+
     /**
      * Saves or updates a premium UUID entry in the PREMIUM_UUIDS table.
      * Keeps PREMIUM_UUIDS in sync with AUTH.PREMIUMUUID field.
@@ -803,16 +821,10 @@ public class DatabaseManager {
                 }
                 return DbResult.success(success);
             } catch (SQLException e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error(DB_MARKER, "Error syncing PREMIUM_UUIDS for {}: {}",
-                            username, premiumUuid, e);
-                }
+                logDatabaseOperationFailure("premium UUID sync", username, e);
                 return genericDatabaseErrorResult();
             } catch (RuntimeException e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error(DB_MARKER, "Error syncing PREMIUM_UUIDS for {}: {}",
-                            username, premiumUuid, e);
-                }
+                logDatabaseOperationFailure("premium UUID sync", username, e);
                 return genericDatabaseErrorResult();
             }
         });
@@ -820,7 +832,7 @@ public class DatabaseManager {
     
     public void setAuthCacheReference(net.rafalohaki.veloauth.cache.AuthCache authCache) {
         if (authCache != null) {
-            this.authCacheRef = new WeakReference<>(authCache);
+            this.authCache = authCache;
             if (logger.isDebugEnabled()) {
                 logger.debug(DB_MARKER, "AuthCache reference set for cache invalidation coordination");
             }

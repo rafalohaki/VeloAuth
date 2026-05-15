@@ -28,8 +28,16 @@ public final class SettingsValidator {
         validateConnection(settings);
         validatePremium(settings);
         validateFloodgate(settings);
+        validateAuditLog(settings);
         settings.normalizeLanguage();
         logger.debug("Configuration validation completed successfully");
+    }
+
+    static void validateAuditLog(Settings settings) {
+        int retention = settings.getAuditLogSettings().getRetentionDays();
+        if (retention < 1 || retention > 3650) {
+            throw new IllegalArgumentException("Audit log retention-days must be in range 1-3650");
+        }
     }
 
     static void validateDatabase(Settings settings) {

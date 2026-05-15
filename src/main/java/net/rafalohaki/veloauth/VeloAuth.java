@@ -22,6 +22,7 @@ import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.listener.AuthListener;
 import net.rafalohaki.veloauth.listener.ListenerFactory;
 import net.rafalohaki.veloauth.alert.PremiumResolverAlertService;
+import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.premium.PremiumResolverService;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.bstats.velocity.Metrics;
@@ -70,8 +71,10 @@ public class VeloAuth {
     private AuthListener authListener;
     private PremiumResolverService premiumResolverService;
     private PremiumResolverAlertService premiumResolverAlertService;
+    private AuditLogService auditLogService;
     private ScheduledExecutorService premiumCacheCleanupScheduler;
     private ScheduledExecutorService premiumDbCleanupScheduler;
+    private ScheduledExecutorService auditLogCleanupScheduler;
 
     // Status pluginu
     // CRITICAL: This flag protects against early connections during initialization
@@ -262,6 +265,7 @@ public class VeloAuth {
             initializeConfiguration();
             initializeMessages();
             initializeDatabase();
+            initializeAuditLog();
             initializeCache();
             initializeCommands();
             initializeConnectionManager();
@@ -342,6 +346,40 @@ public class VeloAuth {
         if (logger.isDebugEnabled()) {
             logger.debug("✅ Database initialized in {} ms (Type: {})", 
                     System.currentTimeMillis() - startTime, settings.getDatabaseStorageType());
+        }
+    }
+
+    private void initializeAuditLog() {
+        Settings.AuditLogSettings auditSettings = settings.getAuditLogSettings();
+        boolean enabled = auditSettings.isEnabled();
+        auditLogService = new AuditLogService(databaseManager.getAuditLogDao(), enabled);
+
+        if (!enabled) {
+            if (logger.isInfoEnabled()) {
+                logger.info("Audit log disabled by configuration");
+            }
+            return;
+        }
+
+        int retentionDays = auditSettings.getRetentionDays();
+        auditLogCleanupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "VeloAuth-AuditLogCleanup");
+            t.setDaemon(true);
+            return t;
+        });
+        auditLogCleanupScheduler.scheduleAtFixedRate(() -> {
+            try {
+                int pruned = auditLogService.prune(retentionDays);
+                if (pruned > 0 && logger.isInfoEnabled()) {
+                    logger.info("Audit log cleanup removed {} entries older than {} days", pruned, retentionDays);
+                }
+            } catch (RuntimeException e) {
+                logger.error("Audit log cleanup failed", e);
+            }
+        }, 1, 24, TimeUnit.HOURS);
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("Audit log initialized (retention: {} days)", retentionDays);
         }
     }
 
@@ -585,6 +623,7 @@ public class VeloAuth {
 
             shutdownCleanupScheduler(premiumCacheCleanupScheduler, "Premium cache cleanup scheduler");
             shutdownCleanupScheduler(premiumDbCleanupScheduler, "Premium DB cleanup scheduler");
+            shutdownCleanupScheduler(auditLogCleanupScheduler, "Audit log cleanup scheduler");
 
             if (premiumResolverService != null) {
                 premiumResolverService.shutdown();
@@ -760,6 +799,16 @@ public class VeloAuth {
      */
     public AuthCache getAuthCache() {
         return authCache;
+    }
+
+    /**
+     * Zwraca audit log service (zawsze ne-null po inicjalizacji,
+     * ale wewnętrznie no-op gdy wyłączony przez config).
+     *
+     * @return AuditLogService
+     */
+    public AuditLogService getAuditLogService() {
+        return auditLogService;
     }
 
     /**

@@ -40,8 +40,57 @@ class DatabaseMigrationServiceTest {
         assertTrue(indexExists("AUTH", "idx_auth_uuid"));
         assertTrue(indexExists("AUTH", "idx_auth_logindate"));
         assertTrue(indexExists("AUTH", "idx_auth_regdate"));
+        assertTrue(indexExists("AUTH", "idx_auth_premiumuuid"));
         assertTrue(indexExists("PREMIUM_UUIDS", "idx_premium_uuids_nickname"));
         assertTrue(indexExists("PREMIUM_UUIDS", "idx_premium_uuids_last_seen"));
+        assertTrue(indexExists("VELOAUTH_AUDIT_LOG", "idx_audit_player"));
+        assertTrue(indexExists("VELOAUTH_AUDIT_LOG", "idx_audit_timestamp"));
+    }
+
+    @Test
+    void initialize_shouldCreateSchemaVersionTableAndRecordBaseline() throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+
+        assertTrue(tableExists("VELOAUTH_SCHEMA_VERSION"));
+        assertTrue(tableExists("VELOAUTH_AUDIT_LOG"));
+
+        SchemaVersionDao schemaVersionDao = manager.getSchemaVersionDao();
+        assertTrue(schemaVersionDao.getCurrentVersion().isPresent(),
+                "Baseline schema version row should exist after first init");
+        assertTrue(schemaVersionDao.hasVersion(1),
+                "Baseline version 1 should be recorded");
+    }
+
+    @Test
+    void initialize_shouldBeIdempotentAcrossMultipleRuns() throws Exception {
+        assertTrue(manager.initialize().join());
+        manager.shutdown();
+
+        DatabaseManager second = new DatabaseManager(config, new Messages());
+        try {
+            assertTrue(second.initialize().join(), "Second init should succeed");
+            assertTrue(second.getSchemaVersionDao().hasVersion(1),
+                    "Baseline row must remain after second init");
+        } finally {
+            second.shutdown();
+        }
+        manager = new DatabaseManager(config, new Messages());
+        assertTrue(manager.initialize().join(), "Third init should also succeed");
+    }
+
+    private boolean tableExists(String tableName) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(config.getJdbcUrl())) {
+            DatabaseMetaData metaData = connection.getMetaData();
+            try (ResultSet tables = metaData.getTables(null, null, null, null)) {
+                while (tables.next()) {
+                    String existing = tables.getString("TABLE_NAME");
+                    if (existing != null && existing.equalsIgnoreCase(tableName)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private boolean indexExists(String tableName, String indexName) throws SQLException {

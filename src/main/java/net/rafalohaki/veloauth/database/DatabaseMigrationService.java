@@ -3,8 +3,10 @@ package net.rafalohaki.veloauth.database;
 import com.j256.ormlite.support.ConnectionSource;
 import com.j256.ormlite.support.DatabaseConnection;
 import com.j256.ormlite.table.TableUtils;
+import net.rafalohaki.veloauth.model.AuditLogEntry;
 import net.rafalohaki.veloauth.model.PremiumUuid;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
+import net.rafalohaki.veloauth.model.SchemaVersion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Marker;
@@ -25,6 +27,8 @@ class DatabaseMigrationService {
     private static final String ALTER_TABLE = "ALTER TABLE ";
     private static final String ADD_COLUMN = " ADD COLUMN ";
     private static final String AUTH_TABLE = "AUTH";
+    private static final String PREMIUM_UUIDS_TABLE = "PREMIUM_UUIDS";
+    private static final String AUDIT_LOG_TABLE = "VELOAUTH_AUDIT_LOG";
 
     private final DatabaseConfig config;
 
@@ -64,6 +68,8 @@ class DatabaseMigrationService {
 
             TableUtils.createTableIfNotExists(connectionSource, RegisteredPlayer.class);
             TableUtils.createTableIfNotExists(connectionSource, PremiumUuid.class);
+            TableUtils.createTableIfNotExists(connectionSource, SchemaVersion.class);
+            TableUtils.createTableIfNotExists(connectionSource, AuditLogEntry.class);
 
             if (logger.isDebugEnabled()) {
                 logger.debug(DB_MARKER, "Tables verified (CREATE TABLE IF NOT EXISTS)");
@@ -193,10 +199,16 @@ class DatabaseMigrationService {
                 buildCreateIndexSql(quote, "idx_auth_logindate", AUTH_TABLE, "LOGINDATE"));
         createIndexIfMissing(connectionSource, AUTH_TABLE, "idx_auth_regdate",
                 buildCreateIndexSql(quote, "idx_auth_regdate", AUTH_TABLE, "REGDATE"));
-        createIndexIfMissing(connectionSource, "PREMIUM_UUIDS", "idx_premium_uuids_nickname",
-                buildCreateIndexSql(quote, "idx_premium_uuids_nickname", "PREMIUM_UUIDS", "NICKNAME"));
-        createIndexIfMissing(connectionSource, "PREMIUM_UUIDS", "idx_premium_uuids_last_seen",
-                buildCreateIndexSql(quote, "idx_premium_uuids_last_seen", "PREMIUM_UUIDS", "LAST_SEEN"));
+        createIndexIfMissing(connectionSource, PREMIUM_UUIDS_TABLE, "idx_premium_uuids_nickname",
+                buildCreateIndexSql(quote, "idx_premium_uuids_nickname", PREMIUM_UUIDS_TABLE, "NICKNAME"));
+        createIndexIfMissing(connectionSource, PREMIUM_UUIDS_TABLE, "idx_premium_uuids_last_seen",
+                buildCreateIndexSql(quote, "idx_premium_uuids_last_seen", PREMIUM_UUIDS_TABLE, "LAST_SEEN"));
+        createIndexIfMissing(connectionSource, AUTH_TABLE, "idx_auth_premiumuuid",
+                buildCreateIndexSql(quote, "idx_auth_premiumuuid", AUTH_TABLE, "PREMIUMUUID"));
+        createIndexIfMissing(connectionSource, AUDIT_LOG_TABLE, "idx_audit_player",
+                buildCreateIndexSql(quote, "idx_audit_player", AUDIT_LOG_TABLE, "PLAYER_LOWERCASE"));
+        createIndexIfMissing(connectionSource, AUDIT_LOG_TABLE, "idx_audit_timestamp",
+                buildCreateIndexSql(quote, "idx_audit_timestamp", AUDIT_LOG_TABLE, "TIMESTAMP"));
     }
 
     private String buildCreateIndexSql(String quote, String indexName, String tableName, String columnName) {

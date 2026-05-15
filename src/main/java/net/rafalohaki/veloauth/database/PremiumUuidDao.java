@@ -55,9 +55,7 @@ public class PremiumUuidDao {
         try {
             return findByNicknameStrict(nickname);
         } catch (SQLException e) {
-            logger.error(DB_MARKER,
-                    "Database error looking up premium UUID for nickname '{}' — returning empty (fail-open: caller may treat this as 'not premium')",
-                    nickname, e);
+            logFailOpenLookupFailure("nickname", nickname, e);
             return Optional.empty();
         }
     }
@@ -75,9 +73,7 @@ public class PremiumUuidDao {
         try {
             return findByUuidStrict(uuid);
         } catch (SQLException e) {
-            logger.error(DB_MARKER,
-                    "Database error looking up premium UUID for UUID '{}' — returning empty (fail-open: caller may treat this as 'not premium')",
-                    uuid, e);
+            logFailOpenLookupFailure("uuid", uuid, e);
             return Optional.empty();
         }
     }
@@ -95,8 +91,24 @@ public class PremiumUuidDao {
         try {
             return saveOrUpdateStrict(uuid, nickname);
         } catch (Exception e) {
-            logger.error(DB_MARKER, "Error saving/updating premium UUID: {} -> {}", uuid, nickname, e);
+            if (logger.isErrorEnabled()) {
+                logger.error(DB_MARKER, "Error saving/updating premium UUID mapping: {} -> {}", uuid, nickname);
+            }
+            if (logger.isDebugEnabled()) {
+                logger.debug(DB_MARKER, "Premium UUID save/update failure details for {} -> {}", uuid, nickname, e);
+            }
             return false;
+        }
+    }
+
+    private void logFailOpenLookupFailure(String keyType, Object keyValue, SQLException e) {
+        if (logger.isErrorEnabled()) {
+            logger.error(DB_MARKER,
+                    "Database error looking up premium UUID by {} '{}' — returning empty (fail-open: caller may treat this as 'not premium')",
+                    keyType, keyValue);
+        }
+        if (logger.isDebugEnabled()) {
+            logger.debug(DB_MARKER, "Premium UUID lookup failure details for {} '{}'", keyType, keyValue, e);
         }
     }
 

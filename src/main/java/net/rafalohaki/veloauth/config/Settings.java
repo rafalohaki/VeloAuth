@@ -34,6 +34,7 @@ public class Settings {
     private final FloodgateSettings floodgateSettings = new FloodgateSettings();
     private final AlertSettings alertSettings = new AlertSettings();
     private final PasswordPolicy passwordPolicy = new PasswordPolicy();
+    private final AuditLogSettings auditLogSettings = new AuditLogSettings();
     @SuppressWarnings("java:S2068")
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
     
@@ -152,6 +153,12 @@ public class Settings {
         copyFloodgateSettings(state.floodgateSettings);
         copyAlertSettings(state.alertSettings);
         copyPasswordPolicy(state.passwordPolicy);
+        copyAuditLogSettings(state.auditLogSettings);
+    }
+
+    private void copyAuditLogSettings(AuditLogSettings source) {
+        auditLogSettings.setEnabled(source.isEnabled());
+        auditLogSettings.setRetentionDays(source.getRetentionDays());
     }
 
     private void copyPasswordPolicy(PasswordPolicy source) {
@@ -370,6 +377,10 @@ public class Settings {
         return alertSettings;
     }
 
+    public AuditLogSettings getAuditLogSettings() {
+        return auditLogSettings;
+    }
+
     // ===== Inner Settings Classes =====
 
     /**
@@ -494,6 +505,20 @@ public class Settings {
         void setCheckIntervalMinutes(int value) { this.checkIntervalMinutes = value; }
         public int getAlertCooldownMinutes() { return alertCooldownMinutes; }
         void setAlertCooldownMinutes(int value) { this.alertCooldownMinutes = value; }
+    }
+
+    /**
+     * Audit log persistence configuration. Default enabled with 90-day retention.
+     * Disabling stops both writes and the cleanup scheduler.
+     */
+    public static class AuditLogSettings {
+        private boolean enabled = true;
+        private int retentionDays = 90;
+
+        public boolean isEnabled() { return enabled; }
+        void setEnabled(boolean value) { this.enabled = value; }
+        public int getRetentionDays() { return retentionDays; }
+        void setRetentionDays(int value) { this.retentionDays = value; }
     }
 
     /**

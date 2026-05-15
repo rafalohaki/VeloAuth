@@ -174,6 +174,34 @@ class DatabaseManagerTest {
     }
 
     @Test
+    void findPlayerByUuidOrNickname_shouldAtomicallyMigrateNicknameToNewLowercaseId() throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+
+        UUID premiumUuid = UUID.randomUUID();
+        insertRawPlayer("OldNick", null, premiumUuid.toString());
+
+        DatabaseManager.DbResult<RegisteredPlayer> migrated =
+                manager.findPlayerByUuidOrNickname("NewNick", premiumUuid).join();
+
+        assertFalse(migrated.isDatabaseError(), "Migration must not surface a DB error");
+        assertNotNull(migrated.getValue(), "Player should be located via premium UUID");
+        RegisteredPlayer post = migrated.getValue();
+        assertEquals("NewNick", post.getNickname(), "Display nickname should be updated");
+        assertEquals("newnick", post.getLowercaseNickname(), "Lowercase id should be updated");
+
+        // Post-commit state is consistent — both columns reflect the new nickname.
+        DatabaseManager.DbResult<RegisteredPlayer> byNew = manager.findPlayerByNickname("NewNick").join();
+        assertFalse(byNew.isDatabaseError());
+        assertNotNull(byNew.getValue());
+        assertEquals("NewNick", byNew.getValue().getNickname());
+
+        // Old lowercase id is gone — no orphan row left from a non-atomic update.
+        DatabaseManager.DbResult<RegisteredPlayer> byOld = manager.findPlayerByNickname("OldNick").join();
+        assertFalse(byOld.isDatabaseError());
+        assertNull(byOld.getValue(), "Old nickname should no longer resolve");
+    }
+
+    @Test
     void shutdown_shouldCloseConfiguredHikariDataSource() {
         DatabaseConfig hikariConfig = DatabaseConfig.forRemoteWithHikari(HikariConfigParams.builder()
                 .storageType("H2")
@@ -181,7 +209,7 @@ class DatabaseManagerTest {
                 .user("sa")
                 .password("")
                 .connectionPoolSize(10)
-                .maxLifetime(60_000)
+                .maxLifetime(1_800_000)
                 .build());
         DatabaseManager hikariManager = new DatabaseManager(hikariConfig, messages);
         HikariDataSource dataSource = (HikariDataSource) hikariConfig.getDataSource();
