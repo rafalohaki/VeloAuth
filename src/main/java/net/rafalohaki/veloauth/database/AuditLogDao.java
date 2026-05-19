@@ -32,7 +32,7 @@ public class AuditLogDao {
     /**
      * Persists one entry. Returns true on success, false on any failure.
      */
-    public boolean record(AuditLogEntry entry) {
+    public boolean save(AuditLogEntry entry) {
         if (entry == null) {
             return false;
         }

@@ -94,7 +94,7 @@ class UnregisterCommand implements SimpleCommand {
                 AuditLogService audit = ctx.plugin().getAuditLogService();
                 if (audit != null) {
                     String adminIp = source instanceof Player p ? PlayerAddressUtils.getPlayerIp(p) : null;
-                    audit.record(AuditEventType.UNREGISTER, nickname, adminIp, "admin=" + adminName);
+                    audit.save(AuditEventType.UNREGISTER, nickname, adminIp, "admin=" + adminName);
                 }
 
             } else {

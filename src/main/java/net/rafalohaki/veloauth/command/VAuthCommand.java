@@ -139,7 +139,7 @@ class VAuthCommand implements SimpleCommand {
         String adminName = source instanceof Player p ? p.getUsername() : "CONSOLE";
         String adminIp = source instanceof Player p ? PlayerAddressUtils.getPlayerIp(p) : null;
         String details = "admin=" + adminName + " uuid=" + registered.getUuid();
-        audit.record(AuditEventType.TWO_FACTOR_DISABLED, nickname, adminIp, details);
+        audit.save(AuditEventType.TWO_FACTOR_DISABLED, nickname, adminIp, details);
     }
 
     private void handleReloadCommand(CommandSource source) {

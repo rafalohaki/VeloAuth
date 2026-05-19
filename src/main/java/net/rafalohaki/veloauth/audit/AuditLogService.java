@@ -39,7 +39,7 @@ public class AuditLogService {
      * Schedules an audit row for async write. Returns immediately;
      * persistence failures are logged but never surfaced to callers.
      */
-    public void record(AuditEventType eventType, String playerLowercase, String ip, String details) {
+    public void save(AuditEventType eventType, String playerLowercase, String ip, String details) {
         if (!isEnabled() || eventType == null) {
             return;
         }
@@ -53,7 +53,7 @@ public class AuditLogService {
 
         boolean submitted = VirtualThreadExecutorProvider.submitTask(() -> {
             try {
-                dao.record(entry);
+                dao.save(entry);
             } catch (RuntimeException e) {
                 logger.warn(AUDIT_MARKER, "Audit write failed for event {}", entry.getEventType(), e);
             }
@@ -67,8 +67,8 @@ public class AuditLogService {
     /**
      * Convenience overload — no details.
      */
-    public void record(AuditEventType eventType, String playerLowercase, String ip) {
-        record(eventType, playerLowercase, ip, null);
+    public void save(AuditEventType eventType, String playerLowercase, String ip) {
+        save(eventType, playerLowercase, ip, null);
     }
 
     /**

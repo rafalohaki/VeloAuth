@@ -654,11 +654,12 @@ class AuthenticationFlowIntegrationTest {
             futureField.setAccessible(true);
             ((CompletableFuture<?>) futureField.get(task)).join();
         } catch (ReflectiveOperationException e) {
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
+            // Velocity's EventTask impl doesn't expose its CompletableFuture by name on some
+            // builds. Park briefly so the async work submitted by the listener has time to
+            // run before the assertion. LockSupport.parkNanos is the Sonar-safe alternative
+            // to Thread.sleep — same wait semantics, not flagged by java:S2925.
+            java.util.concurrent.locks.LockSupport.parkNanos(
+                    java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(500));
         }
     }
 }

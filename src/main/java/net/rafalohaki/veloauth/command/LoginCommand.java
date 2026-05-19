@@ -194,7 +194,7 @@ class LoginCommand implements SimpleCommand {
         if (audit == null) {
             return;
         }
-        audit.record(type, authContext.username(),
+        audit.save(type, authContext.username(),
                 PlayerAddressUtils.getPlayerIp(authContext.player()), details);
     }
 }

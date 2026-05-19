@@ -108,19 +108,7 @@ public class Settings {
 
             applyLoadedState(SettingsLoader.load(this, configFile, yamlMapper, logger));
 
-            try {
-                SettingsValidator.validate(this);
-            } catch (IllegalArgumentException e) {
-                // Validator throws on invalid config values. Convert to a graceful failure so
-                // VeloAuth.initializeConfiguration() and /vauth reload can report it without
-                // a stack trace propagating to the player or to Velocity's event dispatch.
-                // The live Settings instance is left in whatever state the loader applied; on
-                // first load the plugin aborts init, and on /vauth reload the caller can surface
-                // the validation error to the operator and keep running with the partial state.
-                logger.error("Invalid configuration in {}: {}", configFile, e.getMessage());
-                if (logger.isDebugEnabled()) {
-                    logger.debug("Configuration validation failure details", e);
-                }
+            if (!validateLoadedConfig()) {
                 return false;
             }
 
@@ -132,6 +120,25 @@ public class Settings {
             return false;
         } catch (IOException e) {
             logger.error("Error reading config file: {}", configFile, e);
+            return false;
+        }
+    }
+
+    // Validator throws on invalid config values. Convert to a graceful failure so
+    // VeloAuth.initializeConfiguration() and /vauth reload can report it without
+    // a stack trace propagating to the player or to Velocity's event dispatch.
+    // The live Settings instance is left in whatever state the loader applied; on
+    // first load the plugin aborts init, and on /vauth reload the caller can surface
+    // the validation error to the operator and keep running with the partial state.
+    private boolean validateLoadedConfig() {
+        try {
+            SettingsValidator.validate(this);
+            return true;
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid configuration in {}: {}", configFile, e.getMessage());
+            if (logger.isDebugEnabled()) {
+                logger.debug("Configuration validation failure details", e);
+            }
             return false;
         }
     }

@@ -179,8 +179,9 @@ class UuidVerificationHandler {
     private void handleUuidMismatch(Player player, UUID playerUuid, UUID storedUuid,
                                    UUID storedPremiumUuid, RegisteredPlayer dbPlayer) {
         AuthenticationErrorHandler.handleUuidMismatch(
-                player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer, authCache, logger,
-                auditLogServiceSupplier.get());
+                new AuthenticationErrorHandler.UuidMismatchContext(
+                        player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer),
+                authCache, logger, auditLogServiceSupplier.get());
     }
 
     private boolean handleAsyncVerificationError(Player player, Exception e) {

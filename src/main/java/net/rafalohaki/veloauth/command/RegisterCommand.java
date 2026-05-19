@@ -92,89 +92,125 @@ class RegisterCommand implements SimpleCommand {
             return;
         }
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
-        // Fail-closed when we can't identify the IP and IP-limiting is enabled. Without an
-        // InetAddress we cannot acquire the per-IP lock that closes the TOCTOU on
-        // `ip-limit-registrations`; allowing the register to proceed would let two concurrent
-        // null-address registers both bypass the cap. Null addresses are rare (buggy upstream
-        // proxy / non-standard transport); the operator can disable ip-limit-registrations
-        // if they accept that risk.
-        if (playerAddress == null && ctx.settings().getIpLimitRegistrations() > 0) {
-            ctx.logger().warn(DB_MARKER,
-                    "Refusing registration of {} — cannot resolve remote IP (ip-limit-registrations enabled)",
-                    player.getUsername());
-            player.sendMessage(ctx.sm().bruteForceBlocked());
-            ctx.releaseCommandLock(player.getUniqueId());
+        if (!canProceedWithoutAddress(player, playerAddress)) {
             return;
         }
-        // Close the TOCTOU window on ip-limit-registrations: serialize concurrent /register
-        // from the same IP. Without this gate, two parallel registers could both observe
-        // count < limit and both succeed, exceeding the configured ceiling.
-        boolean ipLockAcquired = playerAddress != null && ctx.tryAcquireRegistrationLock(playerAddress);
-        if (playerAddress != null && !ipLockAcquired) {
-            ctx.sendCommandInProgress(player);
-            ctx.releaseCommandLock(player.getUniqueId());
+        IpLockState ipLock = tryAcquireRegistrationIpLock(player, playerAddress);
+        if (!ipLock.proceed()) {
             return;
         }
         try {
-            if (playerAddress != null && ctx.ipRateLimiter().isRateLimited(playerAddress)) {
-                player.sendMessage(ctx.sm().bruteForceBlocked());
-                return;
-            }
-
-            AuthenticationContext authContext = ctx.validateAndAuthenticatePlayer(player, "registration");
-            if (authContext == null) {
-                return;
-            }
-
-            if (authContext.registeredPlayer() != null) {
-                authContext.player().sendMessage(ctx.sm().alreadyRegistered());
-                return;
-            }
-
-            // Check IP registration limit (now inside the per-IP lock — no TOCTOU race).
-            String playerIp = PlayerAddressUtils.getPlayerIp(authContext.player());
-            long ipCount = ctx.databaseManager().countRegistrationsByIp(playerIp).join();
-            if (ipCount >= ctx.settings().getIpLimitRegistrations()) {
-                player.sendMessage(Component.text(ctx.messages().get("register.ip_limit_reached")));
-                return;
-            }
-
-            String hashedPassword = BCrypt.with(BCrypt.Version.VERSION_2Y)
-                    .hashToString(ctx.settings().getBcryptCost(), password.toCharArray());
-
-            RegisteredPlayer newPlayer = new RegisteredPlayer(
-                    authContext.username(), hashedPassword,
-                    PlayerAddressUtils.getPlayerIp(authContext.player()),
-                    authContext.player().getUniqueId().toString()
-            );
-
-            var saveResult = ctx.databaseManager().savePlayer(newPlayer).join();
-            if (ctx.handleDatabaseError(saveResult, authContext.player(), "Failed to save new player")) {
-                return;
-            }
-
-            boolean saved = Boolean.TRUE.equals(saveResult.getValue());
-            if (!saved) {
-                ctx.sendDatabaseErrorMessage(authContext.player());
-                return;
-            }
-
-            if (PostAuthFlow.execute(ctx, authContext, newPlayer, "registered")) {
-                authContext.player().sendMessage(ctx.sm().registerSuccess());
-                AuditLogService audit = ctx.plugin().getAuditLogService();
-                if (audit != null) {
-                    audit.record(AuditEventType.REGISTER, authContext.username(),
-                            PlayerAddressUtils.getPlayerIp(authContext.player()));
-                }
-            }
+            executeRegistrationFlow(player, password, playerAddress);
         } catch (CompletionException e) {
             ctx.logger().error(DB_MARKER, "Database error during registration for player {}", player.getUsername(), e);
             ctx.sendDatabaseErrorMessage(player);
         } finally {
             ctx.releaseCommandLock(player.getUniqueId());
-            if (ipLockAcquired) {
+            if (ipLock.acquired()) {
                 ctx.releaseRegistrationLock(playerAddress);
             }
+        }
+    }
+
+    // Fail-closed when we can't identify the IP and IP-limiting is enabled. Without an
+    // InetAddress we cannot acquire the per-IP lock that closes the TOCTOU on
+    // `ip-limit-registrations`; allowing the register to proceed would let two concurrent
+    // null-address registers both bypass the cap. Null addresses are rare (buggy upstream
+    // proxy / non-standard transport); the operator can disable ip-limit-registrations
+    // if they accept that risk.
+    private boolean canProceedWithoutAddress(Player player, InetAddress playerAddress) {
+        if (playerAddress != null || ctx.settings().getIpLimitRegistrations() <= 0) {
+            return true;
+        }
+        ctx.logger().warn(DB_MARKER,
+                "Refusing registration of {} — cannot resolve remote IP (ip-limit-registrations enabled)",
+                player.getUsername());
+        player.sendMessage(ctx.sm().bruteForceBlocked());
+        ctx.releaseCommandLock(player.getUniqueId());
+        return false;
+    }
+
+    // Closes the TOCTOU window on ip-limit-registrations: serializes concurrent /register
+    // from the same IP. Without this gate, two parallel registers could both observe
+    // count < limit and both succeed, exceeding the configured ceiling.
+    private IpLockState tryAcquireRegistrationIpLock(Player player, InetAddress playerAddress) {
+        if (playerAddress == null) {
+            return new IpLockState(true, false);
+        }
+        if (ctx.tryAcquireRegistrationLock(playerAddress)) {
+            return new IpLockState(true, true);
+        }
+        ctx.sendCommandInProgress(player);
+        ctx.releaseCommandLock(player.getUniqueId());
+        return new IpLockState(false, false);
+    }
+
+    private record IpLockState(boolean proceed, boolean acquired) { }
+
+    private void executeRegistrationFlow(Player player, String password, InetAddress playerAddress) {
+        if (playerAddress != null && ctx.ipRateLimiter().isRateLimited(playerAddress)) {
+            player.sendMessage(ctx.sm().bruteForceBlocked());
+            return;
+        }
+
+        AuthenticationContext authContext = ctx.validateAndAuthenticatePlayer(player, "registration");
+        if (authContext == null) {
+            return;
+        }
+
+        if (authContext.registeredPlayer() != null) {
+            authContext.player().sendMessage(ctx.sm().alreadyRegistered());
+            return;
+        }
+
+        if (exceedsIpRegistrationLimit(authContext)) {
+            player.sendMessage(Component.text(ctx.messages().get("register.ip_limit_reached")));
+            return;
+        }
+
+        RegisteredPlayer newPlayer = buildNewPlayer(authContext, password);
+        if (!persistNewPlayer(authContext, newPlayer)) {
+            return;
+        }
+
+        if (PostAuthFlow.execute(ctx, authContext, newPlayer, "registered")) {
+            authContext.player().sendMessage(ctx.sm().registerSuccess());
+            emitRegisterAudit(authContext);
+        }
+    }
+
+    private boolean exceedsIpRegistrationLimit(AuthenticationContext authContext) {
+        String playerIp = PlayerAddressUtils.getPlayerIp(authContext.player());
+        long ipCount = ctx.databaseManager().countRegistrationsByIp(playerIp).join();
+        return ipCount >= ctx.settings().getIpLimitRegistrations();
+    }
+
+    private RegisteredPlayer buildNewPlayer(AuthenticationContext authContext, String password) {
+        String hashedPassword = BCrypt.with(BCrypt.Version.VERSION_2Y)
+                .hashToString(ctx.settings().getBcryptCost(), password.toCharArray());
+        return new RegisteredPlayer(
+                authContext.username(), hashedPassword,
+                PlayerAddressUtils.getPlayerIp(authContext.player()),
+                authContext.player().getUniqueId().toString());
+    }
+
+    private boolean persistNewPlayer(AuthenticationContext authContext, RegisteredPlayer newPlayer) {
+        var saveResult = ctx.databaseManager().savePlayer(newPlayer).join();
+        if (ctx.handleDatabaseError(saveResult, authContext.player(), "Failed to save new player")) {
+            return false;
+        }
+        if (!Boolean.TRUE.equals(saveResult.getValue())) {
+            ctx.sendDatabaseErrorMessage(authContext.player());
+            return false;
+        }
+        return true;
+    }
+
+    private void emitRegisterAudit(AuthenticationContext authContext) {
+        AuditLogService audit = ctx.plugin().getAuditLogService();
+        if (audit != null) {
+            audit.save(AuditEventType.REGISTER, authContext.username(),
+                    PlayerAddressUtils.getPlayerIp(authContext.player()));
         }
     }
 }

@@ -436,7 +436,7 @@ class TwoFactorCommand implements SimpleCommand {
         if (audit == null) {
             return;
         }
-        audit.record(type, nickname, ip, details);
+        audit.save(type, nickname, ip, details);
     }
 
 }

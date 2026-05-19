@@ -100,7 +100,7 @@ public final class PendingTotpStore {
         String nick = state.dbPlayer() != null ? state.dbPlayer().getNickname() : null;
         String details = "kind=" + state.kind();
         try {
-            auditLogService.record(AuditEventType.TWO_FACTOR_PENDING_EXPIRED, nick, state.ip(), details);
+            auditLogService.save(AuditEventType.TWO_FACTOR_PENDING_EXPIRED, nick, state.ip(), details);
         } catch (RuntimeException e) {
             logger.warn(AUDIT_MARKER,
                     "Failed to emit TWO_FACTOR_PENDING_EXPIRED audit for {} ({})", key, nick, e);

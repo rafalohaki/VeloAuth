@@ -34,6 +34,7 @@ class DatabaseMigrationService {
     private static final String CREATE_SEQUENCE_IF_NOT_EXISTS = "CREATE SEQUENCE IF NOT EXISTS ";
     private static final String CREATE_TABLE = "CREATE TABLE ";
     private static final String CREATE_TABLE_IF_NOT_EXISTS = "CREATE TABLE IF NOT EXISTS ";
+    private static final String COLUMN_PREMIUM_UUID = "PREMIUMUUID";
 
     private final DatabaseConfig config;
 
@@ -142,7 +143,7 @@ class DatabaseMigrationService {
     }
 
     private ColumnMigrationResult checkExistingColumns(java.sql.Connection connection) throws SQLException {
-        boolean hasPremiumUuid = columnExists(connection, AUTH_TABLE, "PREMIUMUUID");
+        boolean hasPremiumUuid = columnExists(connection, AUTH_TABLE, COLUMN_PREMIUM_UUID);
         boolean hasTotpToken = columnExists(connection, AUTH_TABLE, "TOTPTOKEN");
         boolean hasIssuedTime = columnExists(connection, AUTH_TABLE, "ISSUEDTIME");
         boolean hasConflictMode = columnExists(connection, AUTH_TABLE, "CONFLICT_MODE");
@@ -153,7 +154,7 @@ class DatabaseMigrationService {
 
     private void addMissingColumns(java.sql.Connection connection, ColumnMigrationResult result, String quote) throws SQLException {
         if (!result.hasPremiumUuid) {
-            addColumn(connection, quote, "PREMIUMUUID", "VARCHAR(36)", "Added column PREMIUMUUID to AUTH table");
+            addColumn(connection, quote, COLUMN_PREMIUM_UUID, "VARCHAR(36)", "Added column " + COLUMN_PREMIUM_UUID + " to AUTH table");
         }
         if (!result.hasTotpToken) {
             addColumn(connection, quote, "TOTPTOKEN", "VARCHAR(32)", "Added column TOTPTOKEN to AUTH table");
@@ -246,7 +247,7 @@ class DatabaseMigrationService {
         createIndexIfMissing(connectionSource, PREMIUM_UUIDS_TABLE, "idx_premium_uuids_last_seen",
                 buildCreateIndexSql(quote, "idx_premium_uuids_last_seen", PREMIUM_UUIDS_TABLE, "LAST_SEEN"));
         createIndexIfMissing(connectionSource, AUTH_TABLE, "idx_auth_premiumuuid",
-                buildCreateIndexSql(quote, "idx_auth_premiumuuid", AUTH_TABLE, "PREMIUMUUID"));
+                buildCreateIndexSql(quote, "idx_auth_premiumuuid", AUTH_TABLE, COLUMN_PREMIUM_UUID));
         createIndexIfMissing(connectionSource, AUDIT_LOG_TABLE, "idx_audit_player",
                 buildCreateIndexSql(quote, "idx_audit_player", AUDIT_LOG_TABLE, "PLAYER_LOWERCASE"));
         createIndexIfMissing(connectionSource, AUDIT_LOG_TABLE, "idx_audit_timestamp",

@@ -44,36 +44,35 @@ public final class AuthenticationErrorHandler {
     }
 
     /**
+     * Immutable context bundle for a UUID mismatch event. Replaces the long parameter list
+     * that {@link #handleUuidMismatch} used to take so callers can build the payload once
+     * and so this module stays under the project parameter-count budget.
+     */
+    public record UuidMismatchContext(Player player, UUID playerUuid, UUID storedUuid,
+                                      UUID storedPremiumUuid,
+                                      net.rafalohaki.veloauth.model.RegisteredPlayer dbPlayer) {
+    }
+
+    /**
      * Handles UUID mismatch between player connection and database.
      * Logs detailed security warning and cleans up invalid cache entries.
      * Enhanced logging includes both UUID and PREMIUMUUID comparison.
-     *
-     * @param player            Player with UUID mismatch
-     * @param playerUuid        UUID from player connection
-     * @param storedUuid        UUID from database
-     * @param storedPremiumUuid PREMIUMUUID from database (may be null)
-     * @param dbPlayer          RegisteredPlayer from database for additional context
-     * @param authCache         AuthCache instance for session management
-     * @param logger            Logger instance for security logging
      */
-    public static void handleUuidMismatch(Player player, UUID playerUuid, UUID storedUuid,
-                                         UUID storedPremiumUuid,
-                                         net.rafalohaki.veloauth.model.RegisteredPlayer dbPlayer,
-                                         AuthCache authCache, Logger logger) {
-        handleUuidMismatch(player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer,
-                authCache, logger, null);
+    public static void handleUuidMismatch(UuidMismatchContext ctx, AuthCache authCache, Logger logger) {
+        handleUuidMismatch(ctx, authCache, logger, null);
     }
 
     /**
      * Overload that also emits an UUID_MISMATCH audit event when {@code auditLogService}
-     * is non-null and enabled. Kept as a separate overload so legacy call sites compile unchanged.
+     * is non-null and enabled.
      */
-    public static void handleUuidMismatch(Player player, UUID playerUuid, UUID storedUuid,
-                                         UUID storedPremiumUuid,
-                                         net.rafalohaki.veloauth.model.RegisteredPlayer dbPlayer,
-                                         AuthCache authCache, Logger logger,
-                                         AuditLogService auditLogService) {
-        // Enhanced logging with detailed UUID comparison (Requirements 8.2, 8.3)
+    public static void handleUuidMismatch(UuidMismatchContext ctx, AuthCache authCache, Logger logger,
+                                          AuditLogService auditLogService) {
+        Player player = ctx.player();
+        UUID playerUuid = ctx.playerUuid();
+        UUID storedUuid = ctx.storedUuid();
+        UUID storedPremiumUuid = ctx.storedPremiumUuid();
+
         logger.warn(SECURITY_MARKER,
                 "[UUID MISMATCH DETECTED] Nickname: {}, Connection UUID: {}, DB UUID: {}, DB PREMIUMUUID: {}, " +
                 "ConflictMode: {}, IP: {}",
@@ -81,10 +80,9 @@ public final class AuthenticationErrorHandler {
                 playerUuid,
                 storedUuid != null ? storedUuid : "null",
                 storedPremiumUuid != null ? storedPremiumUuid : "null",
-                dbPlayer != null ? dbPlayer.getConflictMode() : "unknown",
+                ctx.dbPlayer() != null ? ctx.dbPlayer().getConflictMode() : "unknown",
                 PlayerAddressUtils.getPlayerIp(player));
 
-        // Cache invalidation for security (Requirement 8.2)
         if (logger.isDebugEnabled()) {
             logger.debug(SECURITY_MARKER,
                 "[CACHE INVALIDATION] Removing player {} (UUID: {}) from cache due to UUID mismatch",
@@ -98,7 +96,7 @@ public final class AuthenticationErrorHandler {
             String details = "connection=" + playerUuid
                     + " stored=" + (storedUuid != null ? storedUuid : "null")
                     + " premium=" + (storedPremiumUuid != null ? storedPremiumUuid : "null");
-            auditLogService.record(AuditEventType.UUID_MISMATCH, player.getUsername(),
+            auditLogService.save(AuditEventType.UUID_MISMATCH, player.getUsername(),
                     PlayerAddressUtils.getPlayerIp(player), details);
         }
     }

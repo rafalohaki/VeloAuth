@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -41,20 +42,20 @@ class AuditLogServiceTest {
     void record_persistsEntryAsync() throws Exception {
         AuditLogService service = new AuditLogService(dao, true);
 
-        service.record(AuditEventType.LOGIN_OK, "alice", "127.0.0.1", "smoke");
+        service.save(AuditEventType.LOGIN_OK, "alice", "127.0.0.1", "smoke");
 
         waitForCount(1L, dao);
         assertEquals(1L, dao.count());
     }
 
     @Test
-    void record_isNoOpWhenDisabled() throws Exception {
+    void record_isNoOpWhenDisabled() {
         AuditLogService service = new AuditLogService(dao, false);
 
-        service.record(AuditEventType.LOGIN_FAIL, "bob", "10.0.0.1", "bad pass");
+        service.save(AuditEventType.LOGIN_FAIL, "bob", "10.0.0.1", "bad pass");
 
-        // give the executor a moment in case something slipped through
-        TimeUnit.MILLISECONDS.sleep(100);
+        // No sleep needed — when disabled, save() is a synchronous no-op (no executor submit),
+        // so any write would have already happened by the time save() returns.
         assertEquals(0L, dao.count());
         assertFalse(service.isEnabled());
     }
@@ -65,9 +66,9 @@ class AuditLogServiceTest {
         long now = System.currentTimeMillis();
         long oldTimestamp = now - TimeUnit.DAYS.toMillis(120);
 
-        dao.record(new net.rafalohaki.veloauth.model.AuditLogEntry(
+        dao.save(new net.rafalohaki.veloauth.model.AuditLogEntry(
                 "LOGIN_OK", "old", "1.1.1.1", oldTimestamp, null));
-        dao.record(new net.rafalohaki.veloauth.model.AuditLogEntry(
+        dao.save(new net.rafalohaki.veloauth.model.AuditLogEntry(
                 "LOGIN_OK", "fresh", "1.1.1.2", now, null));
         assertEquals(2L, dao.count());
 
@@ -76,7 +77,7 @@ class AuditLogServiceTest {
         assertEquals(1L, dao.count());
     }
 
-    private void waitForCount(long expected, AuditLogDao dao) throws InterruptedException {
+    private void waitForCount(long expected, AuditLogDao dao) {
         AtomicLong observed = new AtomicLong(-1L);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (System.nanoTime() < deadline) {
@@ -84,7 +85,7 @@ class AuditLogServiceTest {
             if (observed.get() >= expected) {
                 return;
             }
-            TimeUnit.MILLISECONDS.sleep(25);
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(25));
         }
         assertEquals(expected, observed.get(), "Audit log did not reach expected count in time");
     }

@@ -311,17 +311,13 @@ public class Messages {
             if (character != '\'') {
                 sb.append(character);
                 index++;
-                continue;
-            }
-
-            if (index + 1 < message.length() && message.charAt(index + 1) == '\'') {
+            } else if (index + 1 < message.length() && message.charAt(index + 1) == '\'') {
                 sb.append("''");
                 index += 2;
-                continue;
+            } else {
+                sb.append("''");
+                index++;
             }
-
-            sb.append("''");
-            index++;
         }
         return sb.toString();
     }

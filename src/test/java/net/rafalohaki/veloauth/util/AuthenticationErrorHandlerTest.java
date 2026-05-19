@@ -61,7 +61,9 @@ class AuthenticationErrorHandlerTest {
                         InetAddress.getByAddress(new byte[] {(byte) 203, 0, 113, 10}), 25565));
 
         AuthenticationErrorHandler.handleUuidMismatch(
-                player, PLAYER_UUID, STORED_UUID, PREMIUM_UUID, dbPlayer, authCache, logger);
+                new AuthenticationErrorHandler.UuidMismatchContext(
+                        player, PLAYER_UUID, STORED_UUID, PREMIUM_UUID, dbPlayer),
+                authCache, logger);
 
         verify(authCache).removeAuthorizedPlayer(PLAYER_UUID);
         verify(authCache).endSession(PLAYER_UUID);
@@ -75,7 +77,9 @@ class AuthenticationErrorHandlerTest {
                         InetAddress.getByAddress(new byte[] {(byte) 203, 0, 113, 10}), 25565));
 
         AuthenticationErrorHandler.handleUuidMismatch(
-                player, PLAYER_UUID, null, null, null, authCache, logger);
+                new AuthenticationErrorHandler.UuidMismatchContext(
+                        player, PLAYER_UUID, null, null, null),
+                authCache, logger);
 
         verify(authCache).removeAuthorizedPlayer(PLAYER_UUID);
         verify(authCache).endSession(PLAYER_UUID);

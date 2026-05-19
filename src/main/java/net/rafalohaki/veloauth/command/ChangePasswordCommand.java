@@ -170,7 +170,7 @@ class ChangePasswordCommand implements SimpleCommand {
         }
         AuditLogService audit = ctx.plugin().getAuditLogService();
         if (audit != null) {
-            audit.record(AuditEventType.PASSWORD_CHANGE, authCtx.username(),
+            audit.save(AuditEventType.PASSWORD_CHANGE, authCtx.username(),
                     PlayerAddressUtils.getPlayerIp(authCtx.player()));
         }
     }

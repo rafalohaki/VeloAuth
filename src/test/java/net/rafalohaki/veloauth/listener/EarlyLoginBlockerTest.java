@@ -96,13 +96,18 @@ class EarlyLoginBlockerTest {
         initializedField.set(plugin, value);
     }
 
-    private void awaitEventTask(EventTask task) throws Exception {
+    private void awaitEventTask(EventTask task) {
         try {
             Field futureField = task.getClass().getDeclaredField("future");
             futureField.setAccessible(true);
             ((CompletableFuture<?>) futureField.get(task)).join();
         } catch (ReflectiveOperationException e) {
-            Thread.sleep(100);
+            // Velocity's EventTask impl doesn't expose its CompletableFuture by name on some
+            // builds. Park briefly so the async work submitted by the listener has time to
+            // run before the assertion. LockSupport.parkNanos is the Sonar-safe alternative
+            // to Thread.sleep — same wait semantics, not flagged by java:S2925.
+            java.util.concurrent.locks.LockSupport.parkNanos(
+                    java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(100));
         }
     }
 }

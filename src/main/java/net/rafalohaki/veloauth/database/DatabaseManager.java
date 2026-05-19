@@ -582,12 +582,12 @@ public class DatabaseManager {
     }
     
     private void notifyAuthCacheOfUpdate(RegisteredPlayer player) {
-        net.rafalohaki.veloauth.cache.AuthCache authCache = resolveAuthCacheForUpdate();
-        if (authCache == null) {
+        net.rafalohaki.veloauth.cache.AuthCache cache = resolveAuthCacheForUpdate();
+        if (cache == null) {
             return;
         }
 
-        invalidateAuthCachePlayerData(authCache, player);
+        invalidateAuthCachePlayerData(cache, player);
     }
 
     private net.rafalohaki.veloauth.cache.AuthCache resolveAuthCacheForUpdate() {
