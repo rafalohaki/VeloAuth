@@ -273,6 +273,76 @@ class AuthListenerTest {
         verify(authCache, atLeastOnce()).endSession(playerUuid);
     }
 
+    @Test
+    void onPreLogin_premiumNickWithoutDbRecord_andFlagEnabled_forcesOfflineMode() {
+        String username = "CrackedOnPremium";
+        UUID premiumUuid = UUID.randomUUID();
+        when(settings.isAllowCrackedOnPremiumNicks()).thenReturn(true);
+        when(preLoginHandler.resolvePremiumStatusAsync(username))
+                .thenReturn(CompletableFuture.completedFuture(
+                        new PreLoginHandler.PremiumResolutionResult(true, premiumUuid)));
+        when(databaseManager.findPlayerByUuidOrNickname(username, premiumUuid))
+                .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
+
+        PreLoginEvent event = new PreLoginEvent(createConnection("192.0.2.30"), username);
+
+        EventTask task = authListener.onPreLogin(event);
+
+        assertNotNull(task, "Premium resolution path must run asynchronously");
+        awaitEventTask(task);
+        assertTrue(event.getResult().isForceOfflineMode(),
+                "Flag-enabled bypass must force offline mode so cracked clients can register the nick");
+    }
+
+    @Test
+    void onPreLogin_premiumNickWithoutDbRecord_andFlagDisabled_forcesOnlineMode() {
+        String username = "DefaultPremiumNick";
+        UUID premiumUuid = UUID.randomUUID();
+        when(settings.isAllowCrackedOnPremiumNicks()).thenReturn(false);
+        when(preLoginHandler.resolvePremiumStatusAsync(username))
+                .thenReturn(CompletableFuture.completedFuture(
+                        new PreLoginHandler.PremiumResolutionResult(true, premiumUuid)));
+        when(databaseManager.findPlayerByUuidOrNickname(username, premiumUuid))
+                .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
+
+        PreLoginEvent event = new PreLoginEvent(createConnection("192.0.2.31"), username);
+
+        EventTask task = authListener.onPreLogin(event);
+
+        assertNotNull(task);
+        awaitEventTask(task);
+        assertTrue(event.getResult().isOnlineModeAllowed(),
+                "Default (flag off) must keep nickname-theft protection: Mojang handshake forced");
+    }
+
+    @Test
+    void onPreLogin_premiumNickWithExistingPremiumRecord_andFlagEnabled_stillForcesOnlineMode() {
+        String username = "LegitPremiumOwner";
+        UUID premiumUuid = UUID.randomUUID();
+        when(settings.isAllowCrackedOnPremiumNicks()).thenReturn(true);
+        when(preLoginHandler.resolvePremiumStatusAsync(username))
+                .thenReturn(CompletableFuture.completedFuture(
+                        new PreLoginHandler.PremiumResolutionResult(true, premiumUuid)));
+
+        RegisteredPlayer storedPlayer = new RegisteredPlayer();
+        storedPlayer.setNickname(username);
+        storedPlayer.setUuid(premiumUuid.toString());
+        storedPlayer.setPremiumUuid(premiumUuid.toString());
+        when(databaseManager.findPlayerByUuidOrNickname(username, premiumUuid))
+                .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(storedPlayer)));
+        when(databaseManager.isPlayerPremiumRuntime(storedPlayer)).thenReturn(true);
+        when(preLoginHandler.isNicknameConflict(storedPlayer, true, true, premiumUuid)).thenReturn(false);
+
+        PreLoginEvent event = new PreLoginEvent(createConnection("192.0.2.32"), username);
+
+        EventTask task = authListener.onPreLogin(event);
+
+        assertNotNull(task);
+        awaitEventTask(task);
+        assertTrue(event.getResult().isOnlineModeAllowed(),
+                "SECURITY: returning premium owner with matching DB record must NEVER skip Mojang handshake even when the bypass flag is on");
+    }
+
     private InboundConnection createConnection(String address) {
         InboundConnection connection = org.mockito.Mockito.mock(InboundConnection.class);
         when(connection.getRemoteAddress()).thenReturn(

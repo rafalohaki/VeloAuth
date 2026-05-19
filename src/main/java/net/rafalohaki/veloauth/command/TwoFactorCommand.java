@@ -1,6 +1,5 @@
 package net.rafalohaki.veloauth.command;
 
-import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.Component;
@@ -88,17 +87,13 @@ class TwoFactorCommand implements SimpleCommand {
 
     @Override
     public void execute(Invocation invocation) {
-        CommandSource source = invocation.source();
-        String[] args = invocation.arguments();
-
-        Player player = CommandHelper.validatePlayerSource(source, ctx.messages());
-        if (player == null) {
+        CommandHelper.CommandInputs inputs = CommandHelper.requirePlayerWithAtLeastOneArg(
+                invocation, ctx.messages(), ctx.sm().twoFactorUsage());
+        if (inputs == null) {
             return;
         }
-        if (args.length == 0) {
-            player.sendMessage(ctx.sm().twoFactorUsage());
-            return;
-        }
+        Player player = inputs.player();
+        String[] args = inputs.args();
 
         String sub = args[0].toLowerCase(java.util.Locale.ROOT);
         switch (sub) {

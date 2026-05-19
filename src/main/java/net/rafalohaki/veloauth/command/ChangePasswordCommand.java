@@ -1,7 +1,6 @@
 package net.rafalohaki.veloauth.command;
 
 import at.favre.lib.crypto.bcrypt.BCrypt;
-import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.audit.AuditEventType;
@@ -29,47 +28,30 @@ class ChangePasswordCommand implements SimpleCommand {
         this.ctx = ctx;
     }
 
-    /**
-     * Restricts this command to players who are already authenticated.
-     * Unauthenticated players cannot change passwords — prevents brute-force vector.
-     */
     @Override
     public boolean hasPermission(Invocation invocation) {
-        if (!(invocation.source() instanceof Player player)) {
-            return true;
-        }
-        return ctx.authCache().isPlayerAuthorized(
-                player.getUniqueId(), PlayerAddressUtils.getPlayerIp(player));
+        // Restricts /changepassword to authorized players — unauthenticated callers cannot
+        // change passwords, which closes a brute-force vector.
+        return CommandHelper.isPlayerAuthorized(invocation, ctx);
     }
 
     @Override
     @SuppressWarnings("FutureReturnValueIgnored")
     public void execute(Invocation invocation) {
-        CommandSource source = invocation.source();
-        String[] args = invocation.arguments();
+        CommandHelper.CommandInputs inputs = CommandHelper.requirePlayerAndArgs(
+                invocation, ctx.messages(), 2, "auth.changepassword.usage");
+        if (inputs == null) {
+            return;
+        }
+        Player player = inputs.player();
+        String oldPassword = inputs.args()[0];
+        String newPassword = inputs.args()[1];
 
-        Player player = CommandHelper.validatePlayerSource(source, ctx.messages());
-        if (player == null) {
+        if (!CommandHelper.requireValidPassword(player, newPassword, ctx.settings(), ctx.messages())) {
             return;
         }
 
-        ValidationUtils.ValidationResult validationResult = ValidationUtils.validateArgumentCount(args, 2, ctx.messages().get("auth.changepassword.usage"));
-        if (!validationResult.valid()) {
-            player.sendMessage(ValidationUtils.createWarningComponent(validationResult.getErrorMessage()));
-            return;
-        }
-
-        String oldPassword = args[0];
-        String newPassword = args[1];
-
-        ValidationUtils.ValidationResult passwordValidation =
-                ValidationUtils.validatePassword(newPassword, ctx.settings(), ctx.messages());
-        if (!passwordValidation.valid()) {
-            player.sendMessage(ValidationUtils.createErrorComponent(passwordValidation.getErrorMessage()));
-            return;
-        }
-
-        ctx.runAsyncCommand(source, () -> processPasswordChange(player, oldPassword, newPassword),
+        ctx.runAsyncCommand(invocation.source(), () -> processPasswordChange(player, oldPassword, newPassword),
                 ERROR_DATABASE_QUERY);
     }
 

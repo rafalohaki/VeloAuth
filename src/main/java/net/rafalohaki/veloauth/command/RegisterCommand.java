@@ -1,7 +1,6 @@
 package net.rafalohaki.veloauth.command;
 
 import at.favre.lib.crypto.bcrypt.BCrypt;
-import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.Component;
@@ -33,56 +32,29 @@ class RegisterCommand implements SimpleCommand {
         this.ctx = ctx;
     }
 
-    /**
-     * Hides this command from players who are already authenticated.
-     * When a player is on a backend server (not auth server), the command
-     * will not appear in tab-completion and cannot be executed.
-     * Console always has access.
-     */
     @Override
     public boolean hasPermission(Invocation invocation) {
-        if (!(invocation.source() instanceof Player player)) {
-            return true; // Console always has access
-        }
-        // Only show/allow command when player is on auth server (needs to authenticate)
-        return ctx.plugin().getConnectionManager().isPlayerOnAuthServer(player);
+        return CommandHelper.isPlayerOnAuthServer(invocation, ctx);
     }
 
     @Override
     @SuppressWarnings("FutureReturnValueIgnored")
     public void execute(Invocation invocation) {
-        CommandSource source = invocation.source();
-        String[] args = invocation.arguments();
+        CommandHelper.CommandInputs inputs = CommandHelper.requirePlayerAndArgs(
+                invocation, ctx.messages(), 2, "auth.register.usage");
+        if (inputs == null) {
+            return;
+        }
+        Player player = inputs.player();
+        String password = inputs.args()[0];
+        String confirmPassword = inputs.args()[1];
 
-        Player player = CommandHelper.validatePlayerSource(source, ctx.messages());
-        if (player == null) {
+        if (!CommandHelper.requireValidPassword(player, password, ctx.settings(), ctx.messages())
+                || !CommandHelper.requirePasswordsMatch(player, password, confirmPassword, ctx.messages())) {
             return;
         }
 
-        ValidationUtils.ValidationResult validationResult = ValidationUtils.validateArgumentCount(args, 2, ctx.messages().get("auth.register.usage"));
-        if (!validationResult.valid()) {
-            player.sendMessage(ValidationUtils.createWarningComponent(validationResult.getErrorMessage()));
-            return;
-        }
-
-        String password = args[0];
-        String confirmPassword = args[1];
-
-        ValidationUtils.ValidationResult passwordValidation =
-                ValidationUtils.validatePassword(password, ctx.settings(), ctx.messages());
-        if (!passwordValidation.valid()) {
-            player.sendMessage(ValidationUtils.createErrorComponent(passwordValidation.getErrorMessage()));
-            return;
-        }
-
-        ValidationUtils.ValidationResult matchValidation =
-                ValidationUtils.validatePasswordMatch(password, confirmPassword, ctx.messages());
-        if (!matchValidation.valid()) {
-            player.sendMessage(ValidationUtils.createErrorComponent(matchValidation.getErrorMessage()));
-            return;
-        }
-
-        ctx.runAsyncCommandWithTimeout(source, () -> processRegistration(player, password),
+        ctx.runAsyncCommandWithTimeout(invocation.source(), () -> processRegistration(player, password),
                 ERROR_DATABASE_QUERY, "auth.registration.timeout");
     }
 

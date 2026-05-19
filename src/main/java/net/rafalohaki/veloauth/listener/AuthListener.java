@@ -38,8 +38,6 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import net.rafalohaki.veloauth.model.CachedAuthUser;
-import net.rafalohaki.veloauth.cache.AuthCache.PremiumCacheEntry;
 
 /**
  * Listener eventów autoryzacji VeloAuth.
@@ -160,26 +158,9 @@ public class AuthListener {
      * Re-authorizes a premium player whose cache entry expired.
      * Premium players are cryptographically verified by Velocity (Mojang handshake),
      * so {@code player.isOnlineMode()} is trustworthy and we can safely re-create the cache entry.
-     *
-     * @param player   The premium player to re-authorize
-     * @param playerIp Player's current IP address
      */
     private void refreshPremiumAuthorization(Player player, String playerIp) {
-        UUID playerUuid = player.getUniqueId();
-        UUID premiumUuid = Optional.ofNullable(authCache.getPremiumStatus(player.getUsername()))
-                .map(PremiumCacheEntry::getPremiumUuid)
-                .orElse(playerUuid);
-
-        CachedAuthUser cachedUser = new CachedAuthUser(
-                playerUuid,
-                player.getUsername(),
-                playerIp,
-                System.currentTimeMillis(),
-                true,
-                premiumUuid);
-
-        authCache.authorize(playerUuid, cachedUser, player.getUsername(), playerIp);
-
+        net.rafalohaki.veloauth.listener.PremiumAuthorizer.authorize(player, playerIp, authCache);
         if (logger.isDebugEnabled()) {
             logger.debug(AUTH_MARKER, "Refreshed premium authorization for {} (expired cache re-created)",
                     player.getUsername());

@@ -1,7 +1,6 @@
 package net.rafalohaki.veloauth.command;
 
 import at.favre.lib.crypto.bcrypt.BCrypt;
-import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.audit.AuditEventType;
@@ -31,39 +30,25 @@ class LoginCommand implements SimpleCommand {
         this.ctx = ctx;
     }
 
-    /**
-     * Hides this command from players who are already authenticated.
-     * When a player is on a backend server (not auth server), the command
-     * will not appear in tab-completion and cannot be executed.
-     * Console always has access.
-     */
     @Override
     public boolean hasPermission(Invocation invocation) {
-        if (!(invocation.source() instanceof Player player)) {
-            return true; // Console always has access
-        }
-        // Only show/allow command when player is on auth server (needs to authenticate)
-        return ctx.plugin().getConnectionManager().isPlayerOnAuthServer(player);
+        return CommandHelper.isPlayerOnAuthServer(invocation, ctx);
     }
 
     @Override
     @SuppressWarnings("FutureReturnValueIgnored")
     public void execute(Invocation invocation) {
-        CommandSource source = invocation.source();
-        String[] args = invocation.arguments();
-        Player player = CommandHelper.validatePlayerSource(source, ctx.messages());
+        Player player = CommandHelper.validatePlayerSource(invocation.source(), ctx.messages());
         if (player == null) {
             return;
         }
-
+        String[] args = invocation.arguments();
         if (args.length != 1) {
             player.sendMessage(ctx.sm().usageLogin());
             return;
         }
-
         String password = args[0];
-
-        ctx.runAsyncCommand(source, () -> processLogin(player, password), ERROR_DATABASE_QUERY);
+        ctx.runAsyncCommand(invocation.source(), () -> processLogin(player, password), ERROR_DATABASE_QUERY);
     }
 
     private void processLogin(Player player, String password) {

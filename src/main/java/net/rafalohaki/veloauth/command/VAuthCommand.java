@@ -35,13 +35,10 @@ class VAuthCommand implements SimpleCommand {
 
     @Override
     public void execute(Invocation invocation) {
-        CommandSource source = invocation.source();
-        String[] args = invocation.arguments();
+        CommandHelper.runAsAdmin(invocation, ctx.messages(), this::dispatchSubcommand);
+    }
 
-        if (!CommandHelper.checkAdminPermission(source, ctx.messages())) {
-            return;
-        }
-
+    private void dispatchSubcommand(CommandSource source, String[] args) {
         if (args.length == 0) {
             sendAdminHelp(source);
             return;

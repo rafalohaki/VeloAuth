@@ -127,54 +127,64 @@ public final class LanguageFileManager {
                 logger.warn("Cannot merge - JAR language file not found: {}", filename);
                 return;
             }
-            
-            // Load JAR properties
-            java.util.Properties jarProps = new java.util.Properties();
-            try (InputStreamReader jarReader = new InputStreamReader(jarStream, StandardCharsets.UTF_8)) {
-                jarProps.load(jarReader);
+
+            java.util.Properties jarProps = loadProperties(jarStream);
+            java.util.Properties externalProps;
+            try (InputStream extStream = Files.newInputStream(targetFile)) {
+                externalProps = loadProperties(extStream);
             }
-            
-            // Load existing external properties
-            java.util.Properties externalProps = new java.util.Properties();
-            try (InputStream extStream = Files.newInputStream(targetFile);
-                 InputStreamReader extReader = new InputStreamReader(extStream, StandardCharsets.UTF_8)) {
-                externalProps.load(extReader);
-            }
-            
-            // Find missing keys
-            java.util.List<String> missingKeys = new java.util.ArrayList<>();
-            for (String key : jarProps.stringPropertyNames()) {
-                if (!externalProps.containsKey(key)) {
-                    missingKeys.add(key);
-                    externalProps.setProperty(key, jarProps.getProperty(key));
-                }
-            }
-            
-            if (!missingKeys.isEmpty()) {
-                // Append missing keys to file using .properties-spec escaping so future
-                // values with backslashes, newlines, leading spaces or special chars
-                // (#, !, =, :) do not corrupt the file when re-loaded.
-                try (java.io.BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8,
-                        java.nio.file.StandardOpenOption.APPEND)) {
-                    writer.newLine();
-                    writer.write("# === Auto-added missing keys ===");
-                    writer.newLine();
-                    for (String key : missingKeys) {
-                        writer.write(escapePropertyKey(key) + "=" + escapePropertyValue(jarProps.getProperty(key)));
-                        writer.newLine();
-                    }
-                }
-                // Summary at INFO (one short line per file), full key list at DEBUG.
-                // On first startup after an upgrade this fires once per language file × N new keys —
-                // a single INFO line per file is enough for operators; DEBUG keeps the full diff
-                // for anyone tracing translation-key issues.
-                logger.info("Added {} missing keys to {} (run with DEBUG to list them)",
-                        missingKeys.size(), filename);
-                if (logger.isDebugEnabled()) {
-                    logger.debug("Added missing keys to {}: {}", filename, missingKeys);
-                }
-            } else {
+
+            java.util.List<String> missingKeys = findMissingKeys(jarProps, externalProps);
+            if (missingKeys.isEmpty()) {
                 logger.debug("Language file {} is up to date", filename);
+                return;
+            }
+            // .properties-spec escaping so future values with backslashes, newlines, leading
+            // spaces or special chars (#, !, =, :) do not corrupt the file when re-loaded.
+            appendMissingKeysSection(targetFile, jarProps, missingKeys, "# === Auto-added missing keys ===");
+
+            // Summary at INFO (one short line per file), full key list at DEBUG.
+            // On first startup after an upgrade this fires once per language file × N new keys —
+            // a single INFO line per file is enough for operators; DEBUG keeps the full diff
+            // for anyone tracing translation-key issues.
+            logger.info("Added {} missing keys to {} (run with DEBUG to list them)",
+                    missingKeys.size(), filename);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Added missing keys to {}: {}", filename, missingKeys);
+            }
+        }
+    }
+
+    private static java.util.Properties loadProperties(InputStream stream) throws IOException {
+        java.util.Properties props = new java.util.Properties();
+        try (InputStreamReader reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
+            props.load(reader);
+        }
+        return props;
+    }
+
+    private static java.util.List<String> findMissingKeys(
+            java.util.Properties source, java.util.Properties target) {
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        for (String key : source.stringPropertyNames()) {
+            if (!target.containsKey(key)) {
+                missing.add(key);
+            }
+        }
+        return missing;
+    }
+
+    private static void appendMissingKeysSection(
+            Path targetFile, java.util.Properties source,
+            java.util.List<String> missingKeys, String header) throws IOException {
+        try (java.io.BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.APPEND)) {
+            writer.newLine();
+            writer.write(header);
+            writer.newLine();
+            for (String key : missingKeys) {
+                writer.write(escapePropertyKey(key) + "=" + escapePropertyValue(source.getProperty(key)));
+                writer.newLine();
             }
         }
     }
@@ -303,54 +313,36 @@ public final class LanguageFileManager {
     private void fillMissingKeysFromEnglish(String language) {
         Path englishFile = langDirectory.resolve(BuiltInLanguages.englishFileName());
         Path targetFile = langDirectory.resolve(MESSAGES_PREFIX + language + PROPERTIES_SUFFIX);
-        
+
         if (!Files.exists(englishFile) || !Files.exists(targetFile)) {
             return;
         }
-        
+
         try {
-            // Load English properties as template
-            java.util.Properties englishProps = new java.util.Properties();
-            try (InputStream enStream = Files.newInputStream(englishFile);
-                 InputStreamReader enReader = new InputStreamReader(enStream, StandardCharsets.UTF_8)) {
-                englishProps.load(enReader);
+            java.util.Properties englishProps;
+            try (InputStream enStream = Files.newInputStream(englishFile)) {
+                englishProps = loadProperties(enStream);
             }
-            
-            // Load target language properties
-            java.util.Properties targetProps = new java.util.Properties();
-            try (InputStream targetStream = Files.newInputStream(targetFile);
-                 InputStreamReader targetReader = new InputStreamReader(targetStream, StandardCharsets.UTF_8)) {
-                targetProps.load(targetReader);
+            java.util.Properties targetProps;
+            try (InputStream targetStream = Files.newInputStream(targetFile)) {
+                targetProps = loadProperties(targetStream);
             }
-            
-            // Find missing keys
-            java.util.List<String> missingKeys = new java.util.ArrayList<>();
-            for (String key : englishProps.stringPropertyNames()) {
-                if (!targetProps.containsKey(key)) {
-                    missingKeys.add(key);
-                }
+
+            java.util.List<String> missingKeys = findMissingKeys(englishProps, targetProps);
+            if (missingKeys.isEmpty()) {
+                return;
             }
-            
-            if (!missingKeys.isEmpty()) {
-                // Append missing keys with English values (as placeholder for translation),
-                // escaping per .properties spec so future English values containing newlines,
-                // backslashes, leading whitespace, or =:#! survive the round-trip.
-                try (java.io.BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8,
-                        java.nio.file.StandardOpenOption.APPEND)) {
-                    writer.newLine();
-                    writer.write("# === Missing keys (English fallback - please translate) ===");
-                    writer.newLine();
-                    for (String key : missingKeys) {
-                        writer.write(escapePropertyKey(key) + "=" + escapePropertyValue(englishProps.getProperty(key)));
-                        writer.newLine();
-                    }
-                }
-                // Same INFO summary + DEBUG details split as in mergeLanguageFile (line ~167).
-                logger.info("Added {} missing keys to messages_{}.properties from English template (run with DEBUG to list them)",
-                        missingKeys.size(), language);
-                if (logger.isDebugEnabled()) {
-                    logger.debug("Added missing keys to messages_{}.properties: {}", language, missingKeys);
-                }
+            // Append missing keys with English values (as placeholder for translation),
+            // escaping per .properties spec so future English values containing newlines,
+            // backslashes, leading whitespace, or =:#! survive the round-trip.
+            appendMissingKeysSection(targetFile, englishProps, missingKeys,
+                    "# === Missing keys (English fallback - please translate) ===");
+
+            // Same INFO summary + DEBUG details split as in mergeLanguageFile.
+            logger.info("Added {} missing keys to messages_{}.properties from English template (run with DEBUG to list them)",
+                    missingKeys.size(), language);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Added missing keys to messages_{}.properties: {}", language, missingKeys);
             }
         } catch (IOException e) {
             logger.warn("Failed to fill missing keys for language {}: {}", language, e.getMessage());

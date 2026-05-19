@@ -1,8 +1,11 @@
 package net.rafalohaki.veloauth.command;
 
 import com.velocitypowered.api.command.CommandSource;
+import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
+import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 
 import java.util.concurrent.CompletableFuture;
@@ -33,6 +36,137 @@ public final class CommandHelper {
             return null;
         }
         return player;
+    }
+
+    /**
+     * Player-source + argument-count validation bundled into one call. Returns the player and
+     * args when both checks pass; returns {@code null} when either fails (an error message has
+     * already been sent to the source). Consolidates the boilerplate that every player command
+     * used to copy at the top of its {@code execute}.
+     */
+    public static CommandInputs requirePlayerAndArgs(
+            SimpleCommand.Invocation invocation, Messages messages, int requiredArgs, String usageKey) {
+        Player player = validatePlayerSource(invocation.source(), messages);
+        if (player == null) {
+            return null;
+        }
+        String[] args = invocation.arguments();
+        if (args.length != requiredArgs) {
+            player.sendMessage(ValidationUtils.createWarningComponent(messages.get(usageKey)));
+            return null;
+        }
+        return new CommandInputs(player, args);
+    }
+
+    /**
+     * Player-source check + at-least-one-arg requirement. Used by commands that dispatch on
+     * a subcommand keyword (e.g. {@code /2fa setup}).
+     */
+    public static CommandInputs requirePlayerWithAtLeastOneArg(
+            SimpleCommand.Invocation invocation, Messages messages,
+            net.kyori.adventure.text.Component usageMessage) {
+        Player player = validatePlayerSource(invocation.source(), messages);
+        if (player == null) {
+            return null;
+        }
+        String[] args = invocation.arguments();
+        if (args.length == 0) {
+            player.sendMessage(usageMessage);
+            return null;
+        }
+        return new CommandInputs(player, args);
+    }
+
+    /**
+     * Carrier for the result of {@link #requirePlayerAndArgs(SimpleCommand.Invocation, Messages, int, String)}
+     * — keeps the (player, args) pair as one return value so callers don't repeat the early-return guard.
+     */
+    public record CommandInputs(Player player, String[] args) { }
+
+    /**
+     * {@link SimpleCommand#hasPermission} helper for commands that should only be reachable
+     * while the player is parked on the auth limbo. Console always returns {@code true}.
+     */
+    public static boolean isPlayerOnAuthServer(SimpleCommand.Invocation invocation, CommandContext ctx) {
+        if (!(invocation.source() instanceof Player player)) {
+            return true;
+        }
+        return ctx.plugin().getConnectionManager().isPlayerOnAuthServer(player);
+    }
+
+    /**
+     * {@link SimpleCommand#hasPermission} helper for commands that require an already-authorized
+     * player (e.g. {@code /changepassword}). Console always returns {@code true}.
+     */
+    public static boolean isPlayerAuthorized(SimpleCommand.Invocation invocation, CommandContext ctx) {
+        if (!(invocation.source() instanceof Player player)) {
+            return true;
+        }
+        return ctx.authCache().isPlayerAuthorized(
+                player.getUniqueId(), PlayerAddressUtils.getPlayerIp(player));
+    }
+
+    /**
+     * Runs {@link ValidationUtils#validatePassword} and short-circuits the caller with a player
+     * error message when the password is rejected.
+     *
+     * @return {@code true} when the password passes policy; {@code false} after sending the error.
+     */
+    public static boolean requireValidPassword(
+            Player player, String password, Settings settings, Messages messages) {
+        ValidationUtils.ValidationResult result =
+                ValidationUtils.validatePassword(password, settings, messages);
+        if (!result.valid()) {
+            player.sendMessage(ValidationUtils.createErrorComponent(result.getErrorMessage()));
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Runs {@link ValidationUtils#validatePasswordMatch} and short-circuits the caller with a
+     * player error message when the two passwords disagree.
+     */
+    public static boolean requirePasswordsMatch(
+            Player player, String password, String confirm, Messages messages) {
+        ValidationUtils.ValidationResult result =
+                ValidationUtils.validatePasswordMatch(password, confirm, messages);
+        if (!result.valid()) {
+            player.sendMessage(ValidationUtils.createErrorComponent(result.getErrorMessage()));
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Admin-permission gate bundled with the {@code (source, args)} unpack. Returns the inputs
+     * when {@code source} holds {@code veloauth.admin}; returns {@code null} after sending the
+     * standard permission error otherwise. Pairs with {@link AdminCommandInputs}.
+     */
+    public static AdminCommandInputs requireAdmin(
+            SimpleCommand.Invocation invocation, Messages messages) {
+        CommandSource source = invocation.source();
+        if (!checkAdminPermission(source, messages)) {
+            return null;
+        }
+        return new AdminCommandInputs(source, invocation.arguments());
+    }
+
+    /** Carrier for {@link #requireAdmin}. */
+    public record AdminCommandInputs(CommandSource source, String[] args) { }
+
+    /**
+     * Convenience wrapper: gate by admin permission, then run {@code body} with the unpacked
+     * {@code (source, args)}. Callers that need the typical "permission check → bail on null →
+     * unpack inputs" boilerplate use this directly instead of repeating those 6-7 lines.
+     */
+    public static void runAsAdmin(SimpleCommand.Invocation invocation, Messages messages,
+                                  java.util.function.BiConsumer<CommandSource, String[]> body) {
+        AdminCommandInputs inputs = requireAdmin(invocation, messages);
+        if (inputs == null) {
+            return;
+        }
+        body.accept(inputs.source(), inputs.args());
     }
 
     /**

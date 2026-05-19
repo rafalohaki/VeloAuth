@@ -148,28 +148,28 @@ public final class DatabaseConfig {
     @SuppressWarnings("java:S2139")
     // S2139: Class.forName loads JDBC drivers from trusted DatabaseType enum only, not user input
     public static DatabaseConfig forRemoteWithHikari(HikariConfigParams params) {
-        DatabaseType dbType = DatabaseType.fromName(params.getStorageType());
+        DatabaseType dbType = DatabaseType.fromName(params.storageType());
         if (dbType == null) {
-            throw new IllegalArgumentException("Unsupported database type: " + params.getStorageType());
+            throw new IllegalArgumentException("Unsupported database type: " + params.storageType());
         }
 
-        String jdbcUrl = buildJdbcUrl(dbType, params.getHostname(), params.getPort(), 
-                                      params.getDatabase(), params.getConnectionParameters(), 
-                                      params.getPostgreSQLSettings());
+        String jdbcUrl = buildJdbcUrl(dbType, params.hostname(), params.port(), 
+                                      params.database(), params.connectionParameters(), 
+                                      params.postgreSQLSettings());
         String driverClass = resolveDriverClass(dbType);
 
         // Debug logging for connection URL (only if debug enabled)
-        if (params.isDebugEnabled()) {
+        if (params.debugEnabled()) {
             logger.debug("[VeloAuth DEBUG] JDBC URL: {}", jdbcUrl);
             logger.debug("[VeloAuth DEBUG] Database Type: {}", dbType);
-            logger.debug("[VeloAuth DEBUG] Hostname: {}:{}", params.getHostname(), params.getPort());
-            logger.debug("[VeloAuth DEBUG] SSL Settings: {}", (params.getPostgreSQLSettings() != null ? "enabled" : "using defaults"));
+            logger.debug("[VeloAuth DEBUG] Hostname: {}:{}", params.hostname(), params.port());
+            logger.debug("[VeloAuth DEBUG] SSL Settings: {}", (params.postgreSQLSettings() != null ? "enabled" : "using defaults"));
         }
 
         HikariConfig hikariConfig = new HikariConfig();
-        configureBasicHikariSettings(hikariConfig, jdbcUrl, params.getUser(), params.getPassword(), 
-                                     params.getConnectionPoolSize(), params.getMaxLifetime());
-        configureDatabaseOptimizations(hikariConfig, dbType, params.getPostgreSQLSettings());
+        configureBasicHikariSettings(hikariConfig, jdbcUrl, params.user(), params.password(), 
+                                     params.connectionPoolSize(), params.maxLifetime());
+        configureDatabaseOptimizations(hikariConfig, dbType, params.postgreSQLSettings());
 
         hikariConfig.setDriverClassName(driverClass);
         try {
@@ -186,7 +186,7 @@ public final class DatabaseConfig {
 
         HikariDataSource dataSource = new HikariDataSource(hikariConfig);
 
-        return new DatabaseConfig(new InternalParams(params.getStorageType(), null, 0, null, null, null, params.getConnectionPoolSize(), dataSource, jdbcUrl));
+        return new DatabaseConfig(new InternalParams(params.storageType(), null, 0, null, null, null, params.connectionPoolSize(), dataSource, jdbcUrl));
     }
 
 

@@ -7,12 +7,10 @@ import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.cache.AuthCache.PremiumCacheEntry;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
-import net.rafalohaki.veloauth.model.CachedAuthUser;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import org.slf4j.Logger;
 
 import java.util.Optional;
-import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
 
@@ -56,26 +54,13 @@ public class PostLoginHandler {
             logger.info("Premium player {} verified", player.getUsername());
         }
 
-        UUID playerUuid = player.getUniqueId();
-        UUID premiumUuid = Optional.ofNullable(authCache.getPremiumStatus(player.getUsername()))
-                .map(PremiumCacheEntry::getPremiumUuid)
-                .orElse(playerUuid);
-
-        CachedAuthUser cachedUser = new CachedAuthUser(
-                playerUuid,
-                player.getUsername(),
-                playerIp,
-                System.currentTimeMillis(),
-                true,
-                premiumUuid);
-
-        authCache.authorize(playerUuid, cachedUser, player.getUsername(), playerIp);
+        PremiumAuthorizer.authorize(player, playerIp, authCache);
 
         // Premium player is now authorized in cache
         // ServerPreConnectEvent will redirect to auth server automatically
         // Then onServerConnected will trigger auto-transfer to backend
         if (logger.isDebugEnabled()) {
-            logger.debug("Premium player {} authorized - ServerPreConnectEvent will route to auth server", 
+            logger.debug("Premium player {} authorized - ServerPreConnectEvent will route to auth server",
                     player.getUsername());
         }
     }

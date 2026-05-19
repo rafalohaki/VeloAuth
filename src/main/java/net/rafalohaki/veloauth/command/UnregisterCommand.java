@@ -33,22 +33,15 @@ class UnregisterCommand implements SimpleCommand {
     @Override
     @SuppressWarnings("FutureReturnValueIgnored")
     public void execute(Invocation invocation) {
-        CommandSource source = invocation.source();
-        String[] args = invocation.arguments();
-
-        if (!CommandHelper.checkAdminPermission(source, ctx.messages())) {
-            return;
-        }
-
-        if (args.length != 1) {
-            CommandHelper.sendError(source, ctx.messages(), "admin.unregister.usage");
-            return;
-        }
-
-        String nickname = args[0];
-
-        CommandHelper.runAsyncCommand(() -> processAdminUnregistration(source, nickname),
-                ctx.messages(), source, ERROR_DATABASE_QUERY);
+        CommandHelper.runAsAdmin(invocation, ctx.messages(), (source, args) -> {
+            if (args.length != 1) {
+                CommandHelper.sendError(source, ctx.messages(), "admin.unregister.usage");
+                return;
+            }
+            String nickname = args[0];
+            CommandHelper.runAsyncCommand(() -> processAdminUnregistration(source, nickname),
+                    ctx.messages(), source, ERROR_DATABASE_QUERY);
+        });
     }
 
     private void processAdminUnregistration(CommandSource source, String nickname) {
