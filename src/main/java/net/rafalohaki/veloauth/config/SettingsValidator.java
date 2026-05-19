@@ -111,6 +111,7 @@ public final class SettingsValidator {
 
     static void validatePremium(Settings settings) {
         warnUnimplementedPremiumOptions(settings);
+        warnAllowCrackedOnPremiumNicks(settings);
 
         if (!settings.isPremiumCheckEnabled()) {
             return;
@@ -131,6 +132,12 @@ public final class SettingsValidator {
             logger.warn("Config 'premium.online-mode-need-auth' is set but NOT YET IMPLEMENTED. Premium players are not required to authenticate.");
         }
         // auth-server.timeout-seconds is now implemented via AuthTimeoutScheduler (P0.2).
+    }
+
+    private static void warnAllowCrackedOnPremiumNicks(Settings settings) {
+        if (settings.isAllowCrackedOnPremiumNicks()) {
+            logger.warn("Config 'premium.allow-cracked-on-premium-nicks=true' — VeloAuth will NOT force Mojang auth for premium nicks without a DB record. Cracked clients can register premium nicknames first; nickname-theft protection is reduced.");
+        }
     }
 
     private static final int MIN_BCRYPT_COST = 10;

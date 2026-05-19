@@ -222,6 +222,8 @@ final class SettingsLoader {
         target.setCheckEnabled(YamlParserUtils.getBoolean(premium, "check-enabled", target.isCheckEnabled()));
         target.setOnlineModeNeedAuth(YamlParserUtils.getBoolean(premium,
                 "online-mode-need-auth", target.isOnlineModeNeedAuth()));
+        target.setAllowCrackedOnPremiumNicks(YamlParserUtils.getBoolean(premium,
+                "allow-cracked-on-premium-nicks", target.isAllowCrackedOnPremiumNicks()));
     }
 
     private static void warnAboutLegacyPremiumKeys(Map<String, Object> premium, Logger logger) {

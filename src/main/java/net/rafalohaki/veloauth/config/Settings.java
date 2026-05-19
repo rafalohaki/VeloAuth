@@ -204,6 +204,7 @@ public class Settings {
     private void copyPremiumSettings(PremiumSettings source) {
         premiumSettings.setCheckEnabled(source.isCheckEnabled());
         premiumSettings.setOnlineModeNeedAuth(source.isOnlineModeNeedAuth());
+        premiumSettings.setAllowCrackedOnPremiumNicks(source.isAllowCrackedOnPremiumNicks());
         premiumSettings.getResolver().copyFrom(source.getResolver());
     }
 
@@ -357,6 +358,10 @@ public class Settings {
         return premiumSettings.isOnlineModeNeedAuth();
     }
 
+    public boolean isAllowCrackedOnPremiumNicks() {
+        return premiumSettings.isAllowCrackedOnPremiumNicks();
+    }
+
     public PremiumResolverSettings getPremiumResolverSettings() {
         return premiumSettings.getResolver();
     }
@@ -487,11 +492,14 @@ public class Settings {
         private final PremiumResolverSettings resolver = new PremiumResolverSettings();
         private boolean checkEnabled = true;
         private boolean onlineModeNeedAuth = false;
+        private boolean allowCrackedOnPremiumNicks = false;
 
         public boolean isCheckEnabled() { return checkEnabled; }
         void setCheckEnabled(boolean value) { this.checkEnabled = value; }
         public boolean isOnlineModeNeedAuth() { return onlineModeNeedAuth; }
         void setOnlineModeNeedAuth(boolean value) { this.onlineModeNeedAuth = value; }
+        public boolean isAllowCrackedOnPremiumNicks() { return allowCrackedOnPremiumNicks; }
+        void setAllowCrackedOnPremiumNicks(boolean value) { this.allowCrackedOnPremiumNicks = value; }
         public PremiumResolverSettings getResolver() { return resolver; }
     }
 

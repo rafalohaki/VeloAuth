@@ -356,7 +356,8 @@ public class AuthListener {
             return;
         }
 
-        setPremiumLoginMode(event, result.premium());
+        boolean playerExistsInDb = dbResult.getValue() != null;
+        setPremiumLoginMode(event, username, result.premium(), playerExistsInDb);
     }
 
     private void handlePremiumLookupDatabaseError(
@@ -391,13 +392,26 @@ public class AuthListener {
         return true;
     }
 
-    private void setPremiumLoginMode(PreLoginEvent event, boolean premium) {
-        if (premium) {
-            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
+    private void setPremiumLoginMode(PreLoginEvent event, String username, boolean premium, boolean playerExistsInDb) {
+        if (!premium) {
+            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
             return;
         }
 
-        event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+        // Premium nickname with no record in VeloAuth DB yet. Operators that explicitly accept
+        // cracked players on premium nicks opt in via premium.allow-cracked-on-premium-nicks.
+        // When that flag is set we skip Mojang session-server auth so a cracked client can
+        // register the nickname first. Premium owners returning to a registered nick still
+        // take the forceOnlineMode path below (their DB row matches their Mojang UUID).
+        if (!playerExistsInDb && settings.isAllowCrackedOnPremiumNicks()) {
+            logger.warn(SECURITY_MARKER,
+                    "[PREMIUM BYPASS] Forcing offline mode for premium nick {} (no DB record, allow-cracked-on-premium-nicks=true)",
+                    username);
+            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+            return;
+        }
+
+        event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
     }
 
 

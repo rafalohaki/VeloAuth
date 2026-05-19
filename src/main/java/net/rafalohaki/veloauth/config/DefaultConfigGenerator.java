@@ -184,7 +184,7 @@ final class DefaultConfigGenerator {
                     min-special: 0""";
 
     private static final String PREMIUM_SECTION = """
-                
+
                 # Premium account detection configuration
                 premium:
                   # Enable premium account verification
@@ -192,6 +192,22 @@ final class DefaultConfigGenerator {
                   # NOTE: This option is not yet implemented and has no effect
                   # Force auth for premium players on online-mode proxies
                   online-mode-need-auth: false
+                  # Allow cracked players to register / log in on premium nicknames.
+                  #
+                  # Default (false): when somebody connects with a nickname that Mojang knows
+                  # (premium), VeloAuth forces Mojang session-server auth via Velocity's
+                  # PreLoginComponentResult.forceOnlineMode() — even when velocity.toml has
+                  # online-mode = false. Cracked clients on a premium nick are rejected with
+                  # "You are not logged into your Minecraft account." This protects premium
+                  # owners from nickname theft.
+                  #
+                  # true: for premium nicknames that have NO record in VeloAuth's database yet,
+                  # forceOfflineMode() is used instead, so a cracked client can register the
+                  # nickname first. Once registered as offline, the real premium owner can no
+                  # longer take over that nickname automatically — they will hit the nickname
+                  # conflict path. Enable only if your server explicitly accepts cracked
+                  # players on premium nicks and you accept that trade-off.
+                  allow-cracked-on-premium-nicks: false
                   resolver:
                     # Query Mojang API
                     mojang-enabled: true

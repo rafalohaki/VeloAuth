@@ -248,8 +248,16 @@ When a premium player logs in with a different username than what is stored (Moj
 
 ## FAQ / Troubleshooting
 
-**Q: A cracked player tries to join with a premium nickname and gets "You are not logged into your Minecraft account." VeloAuth never sees the join.**
-This message comes from **Velocity's own online-mode check**, not from VeloAuth. When `online-mode = true` in `velocity.toml`, Velocity rejects unauthenticated connections to premium nicknames before any plugin runs. If your server must accept cracked players on premium nicknames, set `online-mode = false` in `velocity.toml` — VeloAuth's resolver + nickname-protection then takes over and gates the player correctly.
+**Q: A cracked player tries to join with a premium nickname and gets "You are not logged into your Minecraft account."**
+This is **VeloAuth actively enforcing nickname-theft protection**, not Velocity's own online-mode check. When premium detection finds the nickname in Mojang's database and no record exists in VeloAuth's DB yet, VeloAuth calls Velocity's `PreLoginComponentResult.forceOnlineMode()` — which forces Mojang session-server auth **regardless** of `online-mode = false` in `velocity.toml`. A cracked client cannot pass that handshake and gets kicked.
+
+If your server explicitly accepts cracked players on premium nicknames, you have three options:
+
+1. **Recommended — opt in per-nickname behavior:** set `premium.allow-cracked-on-premium-nicks: true` in `plugins/VeloAuth/config.yml`. Premium nicks with no DB record will be forced into offline mode so a cracked client can register first. Premium owners returning to a nickname that's *already registered as premium* still get the normal Mojang handshake.
+2. **Disable premium detection entirely:** set `premium.check-enabled: false`. Removes nickname-theft protection for **all** nicks — every connection is forced offline.
+3. **Pre-register the nickname:** have an admin (or the cracked player) register the nickname through `/register` before the premium owner tries to join. The existing nickname-conflict path then routes that nickname to offline mode automatically.
+
+Important trade-off for options 1 and 2: once a premium nickname is registered as offline in VeloAuth, the real Mojang owner can no longer take it back automatically — they will hit the nickname-conflict flow.
 
 **Q: The `Failed to transfer player X: TextComponentImpl{content="...", style=StyleImpl{...}}` spam in logs is gone — anything I need to do?**
 No action needed. VeloAuth 1.2.0+ renders kick reasons as plain text via `KickReasonRenderer`. Log lines now read e.g. `Failed to transfer player Alice to server lobby (Status: CONNECTION_CANCELLED): You must link your Discord account to play.`
