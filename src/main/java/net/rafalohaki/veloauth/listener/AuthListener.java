@@ -337,7 +337,8 @@ public class AuthListener {
             return;
         }
 
-        boolean playerExistsInDb = dbResult.getValue() != null;
+        boolean playerExistsInDb = dbResult.getValue() != null 
+            || databaseManager.getPremiumUuidDao().findByNickname(username).isPresent();
         setPremiumLoginMode(event, username, result.premium(), playerExistsInDb);
     }
 
