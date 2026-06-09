@@ -67,6 +67,13 @@
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <version>9.5.0</version>
+            <exclusions>
+                <!-- protobuf is only needed for X DevAPI, which VeloAuth never uses -->
+                <exclusion>
+                    <groupId>com.google.protobuf</groupId>
+                    <artifactId>protobuf-java</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
@@ -303,6 +310,19 @@
                         </goals>
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <artifactSet>
+                                <excludes>
+                                    <!--
+                                      Velocity provides slf4j-api on the proxy classpath — bundling a
+                                      second copy (transitive from HikariCP) risks LinkageError.
+                                      checker-qual / error_prone_annotations are compile-time-only
+                                      annotation carriers (transitive from Caffeine) — dead weight.
+                                    -->
+                                    <exclude>org.slf4j:slf4j-api</exclude>
+                                    <exclude>org.checkerframework:checker-qual</exclude>
+                                    <exclude>com.google.errorprone:error_prone_annotations</exclude>
+                                </excludes>
+                            </artifactSet>
                             <relocations>
                                 <relocation>
                                     <pattern>org.bstats</pattern>
@@ -316,9 +336,28 @@
                                     <pattern>at.favre.lib.crypto</pattern>
                                     <shadedPattern>net.rafalohaki.veloauth.libs.bcrypt</shadedPattern>
                                 </relocation>
+                                <!--
+                                  at.favre.lib:bytes (transitive from bcrypt) lives outside the
+                                  at.favre.lib.crypto pattern above — relocate it separately so no
+                                  un-relocated at.favre class ships in the JAR.
+                                -->
+                                <relocation>
+                                    <pattern>at.favre.lib.bytes</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.bytes</shadedPattern>
+                                </relocation>
                                 <relocation>
                                     <pattern>com.fasterxml.jackson</pattern>
                                     <shadedPattern>net.rafalohaki.veloauth.libs.jackson</shadedPattern>
+                                </relocation>
+                                <!--
+                                  SnakeYAML (transitive from jackson-dataformat-yaml) is bundled by
+                                  many other plugins — must be relocated to avoid LinkageError in
+                                  Velocity's per-plugin classloaders. Shade rewrites the references
+                                  inside jackson-dataformat-yaml bytecode automatically.
+                                -->
+                                <relocation>
+                                    <pattern>org.yaml.snakeyaml</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.snakeyaml</shadedPattern>
                                 </relocation>
                                 <!--
                                   HikariCP relocation prevents LinkageError when another Velocity plugin
@@ -348,6 +387,18 @@
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
                             </transformers>
                             <filters>
+                                <!--
+                                  Shade does not relocate multi-release (META-INF/versions/N) class
+                                  copies — they'd ship at the original org.yaml.snakeyaml coordinates
+                                  and defeat the relocation. The relocated base-version copy is used
+                                  instead; the versioned Logger shims are safe to drop.
+                                -->
+                                <filter>
+                                    <artifact>org.yaml:snakeyaml</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/versions/**</exclude>
+                                    </excludes>
+                                </filter>
                                 <filter>
                                     <artifact>*:*</artifact>
                                     <excludes>

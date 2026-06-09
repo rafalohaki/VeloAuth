@@ -94,7 +94,14 @@ class ChangePasswordCommand implements SimpleCommand {
     }
 
     private boolean verifyOldPassword(AuthenticationContext authCtx, String oldPassword) {
-        BCrypt.Result result = BCrypt.verifyer().verify(oldPassword.toCharArray(), authCtx.registeredPlayer().getHash());
+        String hash = authCtx.registeredPlayer().getHash();
+        if (hash == null || hash.isBlank()) {
+            // Premium accounts have no password hash — same guard as LoginCommand,
+            // otherwise BCrypt.verify throws IllegalArgumentException on null hash.
+            authCtx.player().sendMessage(ctx.sm().notRegistered());
+            return false;
+        }
+        BCrypt.Result result = BCrypt.verifyer().verify(oldPassword.toCharArray(), hash);
         if (!result.verified) {
             authCtx.player().sendMessage(ctx.sm().incorrectOldPassword());
             SecurityUtils.registerFailedLogin(authCtx.playerAddress(), authCtx.username(), ctx.authCache());

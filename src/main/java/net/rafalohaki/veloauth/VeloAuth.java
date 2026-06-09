@@ -680,8 +680,18 @@ public class VeloAuth {
 
             logger.info("VeloAuth shutdown completed successfully");
 
-        } catch (IllegalStateException e) {
-            logger.error("State error during graceful shutdown", e);
+        } catch (RuntimeException e) {
+            // A failing component must not abort the sequence before Hikari, the cleanup
+            // schedulers and the VT executor get closed — close them here as a last resort.
+            logger.error("Error during graceful shutdown - forcing remaining components closed", e);
+            if (databaseManager != null) {
+                try {
+                    databaseManager.shutdown();
+                } catch (RuntimeException dbEx) {
+                    logger.error("DatabaseManager shutdown failed during forced cleanup", dbEx);
+                }
+            }
+            VirtualThreadExecutorProvider.shutdown();
         }
     }
 

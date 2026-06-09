@@ -1,11 +1,13 @@
 package net.rafalohaki.veloauth.database;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import com.j256.ormlite.dao.Dao;
 import com.j256.ormlite.dao.DaoManager;
 import com.j256.ormlite.jdbc.DataSourceConnectionSource;
 import com.j256.ormlite.jdbc.JdbcConnectionSource;
 import com.j256.ormlite.misc.TransactionManager;
 import com.j256.ormlite.support.ConnectionSource;
+import net.rafalohaki.veloauth.cache.VeloAuthCaches;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
@@ -15,11 +17,11 @@ import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
@@ -29,7 +31,7 @@ import java.util.function.Supplier;
  * Manager bazy danych z obsługą ORMLite, connection pooling i thread-safety.
  * Obsługuje PostgreSQL, MySQL, H2 i SQLite z automatycznym tworzeniem tabel.
  * <p>
- * Używa Virtual Threads dla wydajnych operacji I/O i ConcurrentHashMap dla cache.
+ * Używa Virtual Threads dla wydajnych operacji I/O i ograniczonego cache Caffeine.
  * 
  * <h2>Extracted Components</h2>
  * <ul>
@@ -40,8 +42,9 @@ import java.util.function.Supplier;
  * <h2>Cache Invalidation Strategy</h2>
  * DatabaseManager coordinates with AuthCache to maintain cache consistency:
  * <ul>
- *   <li><b>DatabaseManager.playerCache</b> - Stores RegisteredPlayer entities by lowercase nickname
- *       for database query reduction. Updated immediately on save/delete operations.</li>
+ *   <li><b>DatabaseManager.playerCache</b> - Bounded Caffeine cache of RegisteredPlayer entities
+ *       by lowercase nickname for database query reduction (size + access-TTL eviction).
+ *       Updated immediately on save/delete operations.</li>
  *   <li><b>AuthCache.authorizedPlayers</b> - Stores active session state by UUID.
  *       Invalidated via {@link #notifyAuthCacheOfUpdate(RegisteredPlayer)} after successful
  *       player data updates to force re-fetch from database on next access.</li>
@@ -67,8 +70,12 @@ public class DatabaseManager {
     private static final String EXECUTOR_SHUTTING_DOWN = ": Executor is shutting down";
     private static final long FAIL_SECURE_IP_REGISTRATION_COUNT = Long.MAX_VALUE;
 
+    /** Bounded read-through cache for AUTH rows — caps memory on servers with large
+     *  player tables (a plain map grew one entry per unique nickname, forever). */
+    private static final int PLAYER_CACHE_MAX_SIZE = 10_000;
+    private static final Duration PLAYER_CACHE_ACCESS_TTL = Duration.ofMinutes(15);
 
-    private final ConcurrentHashMap<String, RegisteredPlayer> playerCache;
+    private final Cache<String, RegisteredPlayer> playerCache;
     /** Idempotency guard for {@link #initialize()} — prevents two concurrent init paths from
      *  both running {@code performDatabaseInitialization()}. */
     private final AtomicBoolean initializing = new AtomicBoolean(false);
@@ -107,7 +114,7 @@ public class DatabaseManager {
 
         this.config = config;
         this.messages = messages;
-        this.playerCache = new ConcurrentHashMap<>();
+        this.playerCache = VeloAuthCaches.accessTtl(PLAYER_CACHE_MAX_SIZE, PLAYER_CACHE_ACCESS_TTL);
         this.connected = false;
         this.dbExecutor = VirtualThreadExecutorProvider.getVirtualExecutor();
         this.jdbcAuthDao = new JdbcAuthDao(config);
@@ -313,7 +320,7 @@ public class DatabaseManager {
             logger.info(DB_MARKER, messages.get("database.manager.connection_closed"));
         }
         connected = false;
-        playerCache.clear();
+        playerCache.invalidateAll();
         if (logger.isDebugEnabled()) {
             logger.debug(CACHE_MARKER, "Player cache cleared");
         }
@@ -384,7 +391,7 @@ public class DatabaseManager {
 
             // Cache mutations happen only after a successful commit so we never reflect
             // partial state from a rolled-back transaction.
-            playerCache.remove(oldLowercaseNickname);
+            playerCache.invalidate(oldLowercaseNickname);
             playerCache.put(normalizedNickname, byUuid);
 
             logRuntimeDetection(originalNickname, isPlayerPremiumRuntime(byUuid), byUuid.getHash());
@@ -502,7 +509,7 @@ public class DatabaseManager {
     }
 
     private void handleCacheCorruption(String normalizedNickname) {
-        playerCache.remove(normalizedNickname);
+        playerCache.invalidate(normalizedNickname);
         if (logger.isWarnEnabled()) {
             logger.warn(CACHE_MARKER, "Cache corruption detected for {} - removing invalid entry", normalizedNickname);
         }
@@ -679,7 +686,7 @@ public class DatabaseManager {
     private DbResult<Boolean> executePlayerDelete(String lowercaseNickname) {
         try {
             boolean deleted = jdbcAuthDao.deletePlayer(lowercaseNickname);
-            playerCache.remove(lowercaseNickname);
+            playerCache.invalidate(lowercaseNickname);
 
             if (deleted) {
                 if (logger.isDebugEnabled()) {
@@ -752,7 +759,7 @@ public class DatabaseManager {
     // ===== Cache Operations =====
 
     public void clearCache() {
-        playerCache.clear();
+        playerCache.invalidateAll();
         if (logger.isDebugEnabled()) {
             logger.debug(CACHE_MARKER, "Cache graczy wyczyszczony");
         }
@@ -760,7 +767,7 @@ public class DatabaseManager {
 
     public void removeCachedPlayer(String lowercaseNickname) {
         if (lowercaseNickname != null) {
-            playerCache.remove(lowercaseNickname);
+            playerCache.invalidate(lowercaseNickname);
             if (logger.isDebugEnabled()) {
                 logger.debug(DB_MARKER, "Removed player from cache: {}", lowercaseNickname);
             }
@@ -768,11 +775,11 @@ public class DatabaseManager {
     }
 
     public int getCacheSize() {
-        return playerCache.size();
+        return (int) playerCache.estimatedSize();
     }
 
     private DbResult<RegisteredPlayer> checkCacheSafe(String normalizedNickname) {
-        RegisteredPlayer cached = playerCache.get(normalizedNickname);
+        RegisteredPlayer cached = playerCache.getIfPresent(normalizedNickname);
         
         if (cached == null) {
             return DbResult.success(null);

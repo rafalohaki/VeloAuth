@@ -198,16 +198,16 @@ public final class DatabaseConfig {
         hikariConfig.setUsername(user);
         hikariConfig.setPassword(password);
         hikariConfig.setMaximumPoolSize(connectionPoolSize);
-        hikariConfig.setMinimumIdle(5);
+        hikariConfig.setMinimumIdle(Math.min(5, connectionPoolSize));
         hikariConfig.setMaxLifetime(maxLifetime);
         hikariConfig.setConnectionTimeout(5000);
         hikariConfig.setIdleTimeout(300000);
         hikariConfig.setAutoCommit(true);
         hikariConfig.setPoolName("VeloAuth-HikariCP");
 
-        // Timeouts for database drivers
+        // loginTimeout is in seconds for both MySQL Connector/J and pgJDBC.
+        // socketTimeout is driver-specific (ms vs s) — set in configureDatabaseOptimizations.
         hikariConfig.addDataSourceProperty("loginTimeout", "3");
-        hikariConfig.addDataSourceProperty("socketTimeout", "3000");
 
         // Validation and leak detection
         hikariConfig.setValidationTimeout(5000);
@@ -221,7 +221,11 @@ public final class DatabaseConfig {
             hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
             hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
             hikariConfig.addDataSourceProperty("useServerPrepStmts", "true");
+            // Connector/J socketTimeout is in MILLISECONDS (dev.mysql.com, Networking Properties)
+            hikariConfig.addDataSourceProperty("socketTimeout", "10000");
         } else if (dbType == DatabaseType.POSTGRESQL) {
+            // pgJDBC socketTimeout is in SECONDS (pgjdbc connection parameters docs)
+            hikariConfig.addDataSourceProperty("socketTimeout", "10");
             hikariConfig.addDataSourceProperty("prepareThreshold", "1");
             hikariConfig.addDataSourceProperty("preparedStatementCacheQueries", "256");
             hikariConfig.addDataSourceProperty("preparedStatementCacheSizeMiB", "5");

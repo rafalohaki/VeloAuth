@@ -266,7 +266,7 @@ public class AuthCache {
         if (nickname == null || nickname.isEmpty()) {
             return;
         }
-        PremiumCacheEntry removed = premiumCache.asMap().remove(nickname.toLowerCase());
+        PremiumCacheEntry removed = premiumCache.asMap().remove(nickname.toLowerCase(java.util.Locale.ROOT));
         if (removed != null && logger.isDebugEnabled()) {
             logger.debug(messages.get("cache.debug.premium.removed"),
                     nickname, removed.isPremium());
@@ -277,7 +277,7 @@ public class AuthCache {
         if (nickname == null || nickname.isEmpty()) {
             return;
         }
-        String key = nickname.toLowerCase();
+        String key = nickname.toLowerCase(java.util.Locale.ROOT);
         long ttlMillis = (premiumUuid == null)
                 ? TimeUnit.MINUTES.toMillis(NEGATIVE_PREMIUM_TTL_MINUTES)
                 : TimeUnit.HOURS.toMillis(premiumTtlHours);
@@ -300,7 +300,7 @@ public class AuthCache {
             return null;
         }
         // Per-entry TTL is enforced by Caffeine's Expiry — an expired entry is invisible here.
-        return premiumCache.getIfPresent(nickname.toLowerCase());
+        return premiumCache.getIfPresent(nickname.toLowerCase(java.util.Locale.ROOT));
     }
 
     @javax.annotation.Nonnull

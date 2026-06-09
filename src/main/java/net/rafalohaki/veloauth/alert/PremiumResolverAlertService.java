@@ -131,8 +131,10 @@ public class PremiumResolverAlertService implements AutoCloseable {
             return; // Another thread won the race
         }
 
-        // Send alert
-        sendFailureAlert(total, failed, failureRate);
+        // Send alert off-thread: recordResolution() runs inside the premium-resolver future
+        // (a player's login path) and the Discord send blocks for up to 5s — exactly when
+        // resolvers are already failing. The daemon scheduler thread absorbs that latency.
+        scheduler.execute(() -> sendFailureAlert(total, failed, failureRate));
     }
 
     /**
@@ -272,6 +274,9 @@ public class PremiumResolverAlertService implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             scheduler.shutdownNow();
+        }
+        if (discordClient != null) {
+            discordClient.close();
         }
         logger.info(PREMIUM_MARKER, "Alert service shut down");
     }

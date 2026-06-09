@@ -166,6 +166,14 @@ public class DiscordWebhookClient {
     }
 
     /**
+     * Releases the underlying {@link HttpClient} (its selector/worker threads).
+     * Idempotent; safe to call during plugin shutdown.
+     */
+    public void close() {
+        httpClient.close();
+    }
+
+    /**
      * Handles HTTP response from Discord webhook.
      *
      * @param response HTTP response from Discord

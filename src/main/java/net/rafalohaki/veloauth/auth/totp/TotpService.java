@@ -71,51 +71,21 @@ public final class TotpService {
      * clock drifts by up to {@code tolerance × 30s}.
      */
     public boolean verify(String secretBase32, String code) {
-        if (secretBase32 == null || secretBase32.isBlank() || code == null) {
-            return false;
-        }
-        if (code.length() != CODE_DIGITS) {
-            return false;
-        }
-        int input;
-        try {
-            input = Integer.parseInt(code);
-        } catch (NumberFormatException e) {
-            return false;
-        }
-        byte[] key;
-        try {
-            key = Base32.decode(secretBase32);
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
-        if (key.length == 0) {
-            return false;
-        }
-        // Constant-time loop: compare against every window in the tolerance range without an
-        // early return. This collapses the timing oracle that would otherwise reveal *which*
-        // window matched. The brute-force tracker handles rate limiting independently.
-        long window = currentWindow();
-        boolean matched = false;
-        for (int offset = -windowTolerance; offset <= windowTolerance; offset++) {
-            // |= prevents the optimizer from short-circuiting once we've matched.
-            matched |= (input == generateCode(key, window + offset));
-        }
-        return matched;
+        return matchedWindow(secretBase32, code) != NO_WINDOW_MATCH;
     }
 
     /** Sentinel returned by {@link #matchedWindow} when no window in the tolerance band matched. */
     public static final long NO_WINDOW_MATCH = Long.MIN_VALUE;
 
     /**
-     * Internal lookup used by replay protection: returns the absolute window counter
-     * ({@code epochSeconds / 30}) of the window whose code matched, or {@link #NO_WINDOW_MATCH}.
-     * <p>
-     * Not constant-time on purpose — only callable by code that has already established (via
-     * {@link #verify}) that <em>some</em> match exists, so the timing signal here only reveals
-     * which window inside the tolerance band matched (≤ log₂(2·tolerance+1) bits — for default
-     * tolerance=1 that's log₂(3) ≈ 1.58 bits). The replay-protection caller persists the
+     * Returns the absolute window counter ({@code epochSeconds / 30}) of the window whose
+     * code matched, or {@link #NO_WINDOW_MATCH}. The replay-protection caller persists the
      * returned window so the same code can't be re-used inside the tolerance band.
+     * <p>
+     * Computes the HMAC for <em>every</em> window in the tolerance band — no early return —
+     * so the dominant timing cost is identical for hit and miss. This is the single
+     * verification primitive; {@link #verify} delegates here, so call sites need no
+     * particular ordering to stay timing-safe.
      */
     public long matchedWindow(String secretBase32, String code) {
         if (secretBase32 == null || secretBase32.isBlank() || code == null
@@ -138,13 +108,15 @@ public final class TotpService {
             return NO_WINDOW_MATCH;
         }
         long window = currentWindow();
+        long matched = NO_WINDOW_MATCH;
         for (int offset = -windowTolerance; offset <= windowTolerance; offset++) {
             long candidate = window + offset;
-            if (input == generateCode(key, candidate)) {
-                return candidate;
+            boolean hit = input == generateCode(key, candidate);
+            if (hit && matched == NO_WINDOW_MATCH) {
+                matched = candidate;
             }
         }
-        return NO_WINDOW_MATCH;
+        return matched;
     }
 
     /**

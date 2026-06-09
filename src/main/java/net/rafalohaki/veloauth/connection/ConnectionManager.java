@@ -94,17 +94,6 @@ public class ConnectionManager {
         }
     }
 
-    /**
-     * Transferuje gracza na serwer auth (limbo) z asynchronicznym sprawdzeniem konta.
-     * Używa synchronicznego połączenia z prawidłową obsługą błędów.
-     *
-     * @param player Gracz do transferu
-     * @return true jeśli transfer się udał
-     */
-    public boolean transferToAuthServer(Player player) {
-        return transferToAuthServerAsync(player).join();
-    }
-
     public CompletableFuture<Boolean> transferToAuthServerAsync(Player player) {
         try {
             resetTransferState(player.getUniqueId(), false);
@@ -444,7 +433,9 @@ public class ConnectionManager {
             if (!player.isActive() || !isPlayerOnAuthServer(player)) {
                 return;
             }
-            executeBackendRetryAfterLimbo(player, targetServer, serverName);
+            // Retry blokuje na join() — wykonaj na virtual thread, nie na wątku schedulera
+            VirtualThreadExecutorProvider.submitTask(() ->
+                    executeBackendRetryAfterLimbo(player, targetServer, serverName));
         }).delay(AUTO_TRANSFER_DELAY_MS, TimeUnit.MILLISECONDS).schedule();
 
         pendingTransfers.put(playerUuid, task);
@@ -484,10 +475,14 @@ public class ConnectionManager {
                 server = findAvailableBackendServer();
             }
             if (server.isPresent()) {
+                RegisteredServer target = server.get();
+                String targetName = target.getServerInfo().getName();
                 logger.info("Backend server available for {} after waiting - transferring to {}",
-                        player.getUsername(), server.get().getServerInfo().getName());
+                        player.getUsername(), targetName);
                 sendIfNotEmpty(player, "connection.connecting", NamedTextColor.GREEN);
-                executeBackendTransfer(player, server.get(), server.get().getServerInfo().getName());
+                // Transfer blokuje na join() — wykonaj na virtual thread, nie na wątku schedulera
+                VirtualThreadExecutorProvider.submitTask(() ->
+                        executeBackendTransfer(player, target, targetName));
             } else {
                 if (attempt % BACKEND_WAIT_REMINDER_INTERVAL == BACKEND_WAIT_REMINDER_INTERVAL - 1) {
                     // Remind every 30 seconds (suppressed if message key resolves to empty)

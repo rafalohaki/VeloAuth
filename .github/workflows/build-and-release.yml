@@ -65,9 +65,15 @@ jobs:
         
         
   release:
-    needs: [build]
+    needs: [check-changes, build]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
+    # Release on tag pushes always; on main/master pushes only when check-changes
+    # detected source changes (doc-only commits skip the release). check-changes is
+    # skipped entirely on tag refs, hence !cancelled() instead of the default success().
+    if: |
+      !cancelled() && needs.build.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      (startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.should-release == 'true')
     env:
       VERSION: ""
       RELEASE_NAME: ""
