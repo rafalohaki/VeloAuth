@@ -141,7 +141,13 @@ final class DefaultConfigGenerator {
                 connection:
                   # Connection timeout in seconds
                   # Should be <= Velocity read-timeout (default 30s)
-                  timeout-seconds: 30""";
+                  timeout-seconds: 30
+                  # Ping timeout in milliseconds for pre-transfer availability checks
+                  # (auth-server readiness, forced-host target, try-list / fallback backends).
+                  # Heavy JVM backend servers with large heaps and long GC pauses may not
+                  # answer a ping within the default 2000ms — raise this (e.g. 5000) to give
+                  # them more room. Too high delays fallback when a server is genuinely down.
+                  ping-timeout-ms: 2000""";
 
     private static final String SECURITY_SECTION = """
                 

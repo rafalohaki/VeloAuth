@@ -235,6 +235,58 @@ class SettingsValidationTest {
     }
 
     @Test
+    void shouldUseDefaultPingTimeoutMillisWhenNotConfigured() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, "language: en\n");
+
+        assertTrue(settings.load(), "Should load with default configuration");
+        assertEquals(2000, settings.getPingTimeoutMillis(),
+                "Default ping-timeout-ms should be 2000 when not specified in config");
+    }
+
+    @Test
+    void shouldLoadCustomPingTimeoutMillis() {
+        String config = """
+                connection:
+                  ping-timeout-ms: 5000
+                """;
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, config);
+
+        assertTrue(settings.load(), "Should load custom ping-timeout-ms");
+        assertEquals(5000, settings.getPingTimeoutMillis(),
+                "Custom ping-timeout-ms should be loaded from config");
+    }
+
+    @ParameterizedTest(name = "shouldReject ping-timeout-ms={0}")
+    @CsvSource({
+        "0",
+        "-1",
+        "30001"
+    })
+    void shouldRejectInvalidPingTimeoutMillis(int pingTimeoutMs) {
+        String invalidConfig = String.format("""
+                connection:
+                  ping-timeout-ms: %d
+                """, pingTimeoutMs);
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, invalidConfig);
+
+        assertFalse(settings.load(), "Should reject non-positive or over-limit ping-timeout-ms");
+    }
+
+    @Test
+    void generatedDefaultConfigShouldDocumentPingTimeoutMillis() throws IOException {
+        settings.load();
+        String generatedConfig = Files.readString(tempDir.resolve("config.yml"));
+
+        assertTrue(generatedConfig.contains("ping-timeout-ms: 2000"),
+                "Generated default config should document the ping-timeout-ms default");
+    }
+
+    @Test
     void shouldIgnoreConnectionUrlQueryParametersInsteadOfCorruptingDatabaseName() {
         String config = """
                 database:

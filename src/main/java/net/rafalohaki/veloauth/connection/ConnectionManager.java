@@ -201,7 +201,7 @@ public class ConnectionManager {
         }
 
         return targetServer.ping()
-                .orTimeout(1, TimeUnit.SECONDS)
+                .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
                 .handle((ping, throwable) -> ping != null)
                 .thenCompose(ready -> {
                     if (ready) {
@@ -649,9 +649,9 @@ public class ConnectionManager {
      * <p>
      * Previous behavior: the try-list phase pinged in parallel but the fallback (line 690 in
      * the old code) used a sequential stream of {@code isServerAvailable(...).join()} — worst
-     * case <em>N × 2 s</em> blocked on the calling thread. The new fallback fans out pings
-     * in parallel just like the try-list, so worst-case wall time stays at one 2 s ping
-     * timeout regardless of how many servers are registered.
+     * case <em>N × ping-timeout-ms</em> blocked on the calling thread. The new fallback fans
+     * out pings in parallel just like the try-list, so worst-case wall time stays at one
+     * {@code connection.ping-timeout-ms} timeout regardless of how many servers are registered.
      */
     private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerAsync() {
         String authServerName = settings.getAuthServerName();
@@ -693,7 +693,7 @@ public class ConnectionManager {
         @SuppressWarnings("unchecked")
         CompletableFuture<Boolean>[] pings = candidates.stream()
                 .map(server -> server.ping()
-                        .orTimeout(2, TimeUnit.SECONDS)
+                        .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
                         .handle((ignored, ex) -> ex == null))
                 .toArray(CompletableFuture[]::new);
 
@@ -785,7 +785,7 @@ public class ConnectionManager {
     private boolean isServerAvailable(RegisteredServer server, String serverName) {
         try {
             Boolean ok = server.ping()
-                    .orTimeout(2, TimeUnit.SECONDS)
+                    .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
                     .handle((ignored, ex) -> ex == null)
                     .join();
             if (Boolean.TRUE.equals(ok)) {

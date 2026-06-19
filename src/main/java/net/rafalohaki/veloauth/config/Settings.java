@@ -63,6 +63,11 @@ public class Settings {
     private int authServerTimeoutSeconds = 300;
     // Connection settings
     private int connectionTimeoutSeconds = 30;
+    // Ping timeout (milliseconds) used for pre-transfer availability checks of
+    // auth-server, forced-host target and try-list/fallback backend servers.
+    // Heavy JVM backend servers (large heap, long GC pauses) may not answer a
+    // ping within the default 2000ms — raise this value to give them more room.
+    private int pingTimeoutMillis = 2000;
     // Security settings
     private int bcryptCost = 10;
     private int bruteForceMaxAttempts = 5;
@@ -163,6 +168,7 @@ public class Settings {
         authServerName = state.authServerName;
         authServerTimeoutSeconds = state.authServerTimeoutSeconds;
         connectionTimeoutSeconds = state.connectionTimeoutSeconds;
+        pingTimeoutMillis = state.pingTimeoutMillis;
         bcryptCost = state.bcryptCost;
         bruteForceMaxAttempts = state.bruteForceMaxAttempts;
         bruteForceTimeoutMinutes = state.bruteForceTimeoutMinutes;
@@ -278,6 +284,10 @@ public class Settings {
 
     public int getConnectionTimeoutSeconds() {
         return connectionTimeoutSeconds;
+    }
+
+    public int getPingTimeoutMillis() {
+        return pingTimeoutMillis;
     }
 
     public String getDatabaseConnectionParameters() {

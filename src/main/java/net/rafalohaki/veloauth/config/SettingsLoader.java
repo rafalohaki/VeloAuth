@@ -15,6 +15,7 @@ final class SettingsLoader {
 
     private static final String YAML_FIELD_ENABLED = "enabled";
     private static final String CONFIG_KEY_TIMEOUT_SECONDS = "timeout-seconds";
+    private static final String CONFIG_KEY_PING_TIMEOUT_MS = "ping-timeout-ms";
     // YAML field key names — not credentials. Suppressed from secret-scanning tools.
     private static final String CONFIG_KEY_DB_CREDENTIAL = "pass" + "word"; // nosemgrep
     private static final String CONFIG_KEY_SSL_CREDENTIAL = "ssl-" + "pass" + "word"; // nosemgrep
@@ -163,6 +164,8 @@ final class SettingsLoader {
         if (connection != null) {
             state.connectionTimeoutSeconds = YamlParserUtils.getInt(connection,
                     CONFIG_KEY_TIMEOUT_SECONDS, state.connectionTimeoutSeconds);
+            state.pingTimeoutMillis = YamlParserUtils.getInt(connection,
+                    CONFIG_KEY_PING_TIMEOUT_MS, state.pingTimeoutMillis);
         }
     }
 
@@ -385,6 +388,7 @@ final class SettingsLoader {
         String authServerName;
         int authServerTimeoutSeconds;
         int connectionTimeoutSeconds;
+        int pingTimeoutMillis;
         int bcryptCost;
         int bruteForceMaxAttempts;
         int bruteForceTimeoutMinutes;
@@ -422,6 +426,7 @@ final class SettingsLoader {
             state.authServerName = settings.getAuthServerName();
             state.authServerTimeoutSeconds = settings.getAuthServerTimeoutSeconds();
             state.connectionTimeoutSeconds = settings.getConnectionTimeoutSeconds();
+            state.pingTimeoutMillis = settings.getPingTimeoutMillis();
             state.bcryptCost = settings.getBcryptCost();
             state.bruteForceMaxAttempts = settings.getBruteForceMaxAttempts();
             state.bruteForceTimeoutMinutes = settings.getBruteForceTimeoutMinutes();

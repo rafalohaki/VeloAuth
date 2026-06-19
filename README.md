@@ -150,6 +150,14 @@ auth-server:
   # Seconds before an unauthenticated player is kicked from the auth server.
   # Set to 0 to disable the kick (player can stay on auth/limbo indefinitely).
   timeout-seconds: 300
+
+# Optional tuning for heavy backend servers (large JVM heap, long GC pauses).
+# VeloAuth pings the auth server, forced-host target and try-list/fallback
+# backends before transferring a player. The default 2000ms may be too tight
+# for big Paper/Spigot servers that don't answer a ping within 2s during a
+# GC pause or warmup — raise it (e.g. 5000) so they aren't flagged offline.
+# connection:
+#   ping-timeout-ms: 2000
 ```
 
 #### Password complexity policy (optional, off by default)

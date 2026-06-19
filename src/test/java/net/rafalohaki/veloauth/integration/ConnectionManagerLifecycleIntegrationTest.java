@@ -62,6 +62,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(logger.isInfoEnabled()).thenReturn(false);
         when(settings.getAuthServerName()).thenReturn("auth");
         when(settings.getConnectionTimeoutSeconds()).thenReturn(1);
+        when(settings.getPingTimeoutMillis()).thenReturn(2000);
 
         Metrics.Factory metricsFactory = org.mockito.Mockito.mock(Metrics.Factory.class);
         VeloAuth plugin = new VeloAuth(proxyServer, logger, Path.of("."), metricsFactory);
