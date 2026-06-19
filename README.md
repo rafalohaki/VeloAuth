@@ -160,6 +160,22 @@ auth-server:
 #   ping-timeout-ms: 2000
 ```
 
+#### Diagnostic report (`/vauth report`)
+
+`/vauth report` generates a diagnostic bundle and uploads it to [mclo.gs](https://mclo.gs) so you can share it with support. The report contains:
+
+- **VeloAuth `config.yml`** — secrets redacted (`password`, `webhook-url`, `ssl-password`, `forwarding-secret`, connection-URL credentials → `<redacted>`)
+- **`velocity.toml`** — secrets redacted (same redaction rules)
+- **Recent proxy logs** — `logs/latest.log` (tail, capped at 10 MiB). mclo.gs attempts to strip IP addresses server-side, but this is not guaranteed — share the link only with trusted parties.
+- **Metadata** — VeloAuth/Velocity/Java versions, online-mode, server count, database type, ping timeout, premium-check settings (visible); auth server name, try-list, server list (hidden, visible to support only).
+
+Disable the command entirely:
+
+```yaml
+report:
+  enabled: false
+```
+
 #### Password complexity policy (optional, off by default)
 
 Default policy is **length-only** (8–72 chars) — friendly for casual servers, backward-compatible with LimboAuth. **If a player sets a weak password under default rules, that's on them.** Enable stricter rules only when you actually need them.
@@ -274,6 +290,7 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 | `/vauth stats` | `veloauth.admin` | Show plugin statistics |
 | `/vauth conflicts` | `veloauth.admin` | List nickname conflicts |
 | `/vauth 2fa-remove <nickname>` | `veloauth.admin` | Recovery: wipe a player's 2FA token (see [2FA.md](2FA.md)) |
+| `/vauth report` | `veloauth.admin` | Generate a diagnostic report and upload to [mclo.gs](https://mclo.gs) |
 
 ## How It Works
 
@@ -322,7 +339,7 @@ No action needed. VeloAuth 1.2.0+ renders kick reasons as plain text via `KickRe
 **Q: My `language: en` config still shows Polish strings in some logs.**
 Fixed in 1.2.0 — all operator-facing log messages and exception strings are now English regardless of `language` setting. The `language` key only controls **player-facing** messages.
 
-**Q: Database not connected" right after Velocity startup.**
+**Q: "Database not connected" right after Velocity startup.**
 Fixed in 1.2.0 — health check runs once synchronously before the 30s scheduler kicks in. The `isConnected()` gate used by admin commands now reflects pool state (initialized + not shut down) rather than waiting for the first health check.
 
 ## LimboAuth Migration

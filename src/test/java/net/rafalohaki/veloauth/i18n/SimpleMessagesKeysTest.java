@@ -159,7 +159,13 @@ class SimpleMessagesKeysTest {
             "admin.2fa.remove.success",
             "admin.2fa.remove.not_found",
             "admin.2fa.remove.not_enabled",
-            "admin.help.2fa_remove"
+            "admin.help.2fa_remove",
+            "admin.help.report",
+            "admin.report.disabled",
+            "admin.report.generating",
+            "admin.report.warning",
+            "admin.report.success",
+            "admin.report.failed"
     );
 
     /**

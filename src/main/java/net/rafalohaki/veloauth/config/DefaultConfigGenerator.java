@@ -36,6 +36,7 @@ final class DefaultConfigGenerator {
                 ALERTS_SECTION,
                 AUDIT_LOG_SECTION,
                 TWO_FACTOR_SECTION,
+                REPORT_SECTION,
                 "" // trailing newline
         ).replace(BUILT_IN_LANGUAGE_CODES_PLACEHOLDER, BuiltInLanguages.quotedCodeList());
 
@@ -131,8 +132,9 @@ final class DefaultConfigGenerator {
                 auth-server:
                   # Must match server name in velocity.toml [servers]
                   server-name: limbo
-                  # NOTE: This option is not yet implemented and has no effect
-                  # Seconds before unauthenticated player is kicked
+                  # Seconds before an unauthenticated player is kicked from the auth server.
+                  # Set to 0 (or any value <= 0) to disable the kick — the player can stay on
+                  # the auth/limbo server indefinitely.
                   timeout-seconds: 300""";
 
     private static final String CONNECTION_SECTION = """
@@ -321,4 +323,17 @@ final class DefaultConfigGenerator {
                   # Maximum window (seconds) between successful BCrypt verify and TOTP code entry.
                   # After this the player must run /login again. Range: 30-1800. Default: 300 (5 min).
                   pending-timeout-seconds: 300""";
+
+    private static final String REPORT_SECTION = """
+
+                # /vauth report — generates a diagnostic report and uploads it to
+                # https://mclo.gs so you can share it with support. The report bundles:
+                #   - VeloAuth config.yml (secrets redacted: passwords, webhook URLs, SSL keys)
+                #   - velocity.toml (secrets redacted: forwarding-secret, etc.)
+                #   - recent proxy logs (mclo.gs attempts to strip IP addresses server-side,
+                #     but this is not guaranteed — only share the link with trusted parties)
+                #   - metadata: VeloAuth/Velocity/Java versions, server count, online-mode, etc.
+                # Set to false to disable the /vauth report command entirely.
+                report:
+                  enabled: true""";
 }

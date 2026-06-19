@@ -82,6 +82,7 @@ class CommandContext {
     net.rafalohaki.veloauth.auth.totp.PendingTotpStore pendingTotpStore() { return plugin.getPendingTotpStore(); }
     net.rafalohaki.veloauth.auth.totp.TotpReplayGuard totpReplayGuard() { return plugin.getTotpReplayGuard(); }
     net.rafalohaki.veloauth.audit.AuditLogService auditLogService() { return plugin.getAuditLogService(); }
+    net.rafalohaki.veloauth.report.ReportService reportService() { return plugin.getReportService(); }
 
     /**
      * Template method for common authentication pre-checks:

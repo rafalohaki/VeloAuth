@@ -52,6 +52,7 @@ class VAuthCommand implements SimpleCommand {
             case "stats" -> handleStatsCommand(source);
             case "conflicts" -> handleConflictsCommand(source);
             case "2fa-remove" -> handleTwoFactorRemoveCommand(source, args);
+            case "report" -> handleReportCommand(source);
             default -> {
                 source.sendMessage(ValidationUtils.createErrorComponent(
                     ctx.messages().get("admin.unknown_command", subcommand)));
@@ -167,6 +168,36 @@ class VAuthCommand implements SimpleCommand {
         ctx.runAsyncCommand(source, () -> processStatsCommand(source), ERROR_DATABASE_QUERY);
     }
 
+    private void handleReportCommand(CommandSource source) {
+        if (!ctx.settings().isReportEnabled()) {
+            source.sendMessage(ValidationUtils.createErrorComponent(
+                    ctx.messages().get("admin.report.disabled")));
+            return;
+        }
+        source.sendMessage(ValidationUtils.createWarningComponent(
+                ctx.messages().get("admin.report.generating")));
+        source.sendMessage(ValidationUtils.createWarningComponent(
+                ctx.messages().get("admin.report.warning")));
+        ctx.runAsyncCommand(source, () -> processReport(source), "admin.report.failed");
+    }
+
+    private void processReport(CommandSource source) {
+        net.rafalohaki.veloauth.report.ReportService reportService = ctx.reportService();
+        if (reportService == null) {
+            source.sendMessage(ValidationUtils.createErrorComponent(
+                    ctx.messages().get("admin.report.failed", "report service not initialized")));
+            return;
+        }
+        net.rafalohaki.veloauth.report.ReportService.ReportResult result = reportService.generateAndUpload();
+        if (result.success()) {
+            source.sendMessage(ValidationUtils.createSuccessComponent(
+                    ctx.messages().get("admin.report.success", result.url())));
+        } else {
+            source.sendMessage(ValidationUtils.createErrorComponent(
+                    ctx.messages().get("admin.report.failed", result.error())));
+        }
+    }
+
     private void sendAdminHelp(CommandSource source) {
         source.sendMessage(ctx.sm().adminHelpHeader());
         source.sendMessage(ctx.sm().adminHelpReload());
@@ -175,6 +206,8 @@ class VAuthCommand implements SimpleCommand {
         source.sendMessage(ctx.sm().adminHelpConflicts());
         source.sendMessage(ctx.sm().key("admin.help.2fa_remove",
                 net.kyori.adventure.text.format.NamedTextColor.YELLOW));
+        source.sendMessage(ctx.sm().key("admin.help.report",
+                net.kyori.adventure.text.format.NamedTextColor.YELLOW));
     }
 
     @Override
@@ -182,7 +215,7 @@ class VAuthCommand implements SimpleCommand {
         String[] args = invocation.arguments();
 
         if (args.length == 1) {
-            return List.of("reload", "cache-reset", "stats", "conflicts", "2fa-remove");
+            return List.of("reload", "cache-reset", "stats", "conflicts", "2fa-remove", "report");
         }
 
         return List.of();

@@ -287,6 +287,42 @@ class SettingsValidationTest {
     }
 
     @Test
+    void shouldUseDefaultReportEnabledWhenNotConfigured() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, "language: en\n");
+
+        assertTrue(settings.load(), "Should load with default configuration");
+        assertTrue(settings.isReportEnabled(),
+                "Default report.enabled should be true when not specified in config");
+    }
+
+    @Test
+    void shouldLoadReportDisabled() {
+        String config = """
+                report:
+                  enabled: false
+                """;
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, config);
+
+        assertTrue(settings.load(), "Should load with report disabled");
+        assertFalse(settings.isReportEnabled(),
+                "report.enabled should be false when explicitly set to false in config");
+    }
+
+    @Test
+    void generatedDefaultConfigShouldDocumentReportEnabled() throws IOException {
+        settings.load();
+        String generatedConfig = Files.readString(tempDir.resolve("config.yml"));
+
+        assertTrue(generatedConfig.contains("report:"),
+                "Generated default config should contain the report section");
+        assertTrue(generatedConfig.contains("enabled: true"),
+                "Generated default config should document report.enabled: true");
+    }
+
+    @Test
     void shouldIgnoreConnectionUrlQueryParametersInsteadOfCorruptingDatabaseName() {
         String config = """
                 database:

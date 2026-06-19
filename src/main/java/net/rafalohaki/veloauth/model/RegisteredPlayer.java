@@ -407,10 +407,9 @@ public class RegisteredPlayer {
     @Override
     public boolean equals(Object obj) {
         if (this == obj) return true;
-        if (obj == null || getClass() != obj.getClass()) return false;
-
-        RegisteredPlayer that = (RegisteredPlayer) obj;
-        return Objects.equals(lowercaseNickname, that.lowercaseNickname);
+        // Java 21: pattern matching instanceof — eliminates explicit cast
+        return obj instanceof RegisteredPlayer that
+                && Objects.equals(lowercaseNickname, that.lowercaseNickname);
     }
 
     @Override
@@ -420,18 +419,14 @@ public class RegisteredPlayer {
 
     @Override
     public String toString() {
-        return "RegisteredPlayer{" +
-                "nickname='" + nickname + '\'' +
-                ", lowercaseNickname='" + lowercaseNickname + '\'' +
-                ", ip='[REDACTED]'" +
-                ", loginIp='[REDACTED]'" +
-                ", uuid='" + redactValue(uuid) + '\'' +
-                ", regDate=" + regDate +
-                ", loginDate=" + loginDate +
-                ", hasPasswordHash=" + (hash != null && !hash.isBlank()) +
-                ", hasPremiumUuid=" + (premiumUuid != null) +
-                ", conflictMode=" + conflictMode +
-                '}';
+        // Java 21: String.formatted() replaces manual + concatenation
+        return ("RegisteredPlayer{nickname='%s', lowercaseNickname='%s'," +
+                " ip='[REDACTED]', loginIp='[REDACTED]', uuid='%s'," +
+                " regDate=%d, loginDate=%d, hasPasswordHash=%b," +
+                " hasPremiumUuid=%b, conflictMode=%b}").formatted(
+                nickname, lowercaseNickname, redactValue(uuid),
+                regDate, loginDate, hash != null && !hash.isBlank(),
+                premiumUuid != null, conflictMode);
     }
 
     private static String requireNickname(String nickname) {

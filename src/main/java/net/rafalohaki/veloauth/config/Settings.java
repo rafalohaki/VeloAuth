@@ -77,6 +77,8 @@ public class Settings {
     private int maxPasswordLength = 72;
     // Debug settings
     private boolean debugEnabled = false;
+    // Report settings (/vauth report — uploads redacted config + logs to mclo.gs)
+    private boolean reportEnabled = true;
     // Language settings
     private String language = "en";
 
@@ -176,6 +178,7 @@ public class Settings {
         minPasswordLength = state.minPasswordLength;
         maxPasswordLength = state.maxPasswordLength;
         debugEnabled = state.debugEnabled;
+        reportEnabled = state.reportEnabled;
         language = state.language;
         copyPostgreSqlSettings(state.postgreSQLSettings);
         copyPremiumSettings(state.premiumSettings);
@@ -400,6 +403,10 @@ public class Settings {
 
     public boolean isDebugEnabled() {
         return debugEnabled;
+    }
+
+    public boolean isReportEnabled() {
+        return reportEnabled;
     }
 
     public Path getDataDirectory() {

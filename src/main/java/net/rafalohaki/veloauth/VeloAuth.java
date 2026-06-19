@@ -78,6 +78,7 @@ public class VeloAuth {
     private TotpService totpService;
     private PendingTotpStore pendingTotpStore;
     private TotpReplayGuard totpReplayGuard;
+    private net.rafalohaki.veloauth.report.ReportService reportService;
     private ScheduledExecutorService premiumCacheCleanupScheduler;
     private ScheduledExecutorService premiumDbCleanupScheduler;
     private ScheduledExecutorService auditLogCleanupScheduler;
@@ -274,6 +275,7 @@ public class VeloAuth {
             initializeTwoFactor();
             initializeCache();
             initializeCommands();
+            initializeReportService();
             initializeConnectionManager();
             initializePremiumResolver();
             initializeListeners();
@@ -491,6 +493,13 @@ public class VeloAuth {
         commandHandler.registerCommands();
         
         logger.debug("✅ Commands registered in {} ms", System.currentTimeMillis() - startTime);
+    }
+
+    private void initializeReportService() {
+        reportService = new net.rafalohaki.veloauth.report.ReportService(this, settings);
+        if (logger.isDebugEnabled()) {
+            logger.debug("📋 Report service initialized (enabled={})", settings.isReportEnabled());
+        }
     }
 
     private void initializeConnectionManager() {
@@ -875,6 +884,11 @@ public class VeloAuth {
     /** @return store of in-flight 2FA verification states (post-BCrypt and pending /2fa setup). */
     public PendingTotpStore getPendingTotpStore() {
         return pendingTotpStore;
+    }
+
+    /** @return diagnostic report service for /vauth report (mclo.gs integration). */
+    public net.rafalohaki.veloauth.report.ReportService getReportService() {
+        return reportService;
     }
 
     /** @return per-player TOTP replay guard (RFC 6238 §5.2 — one-time-only enforcement). */

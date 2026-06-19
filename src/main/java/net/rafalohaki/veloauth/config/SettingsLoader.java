@@ -41,6 +41,7 @@ final class SettingsLoader {
         loadAuditLogSettings(config, state);
         loadTwoFactorSettings(config, state);
         loadDebugSettings(config, state);
+        loadReportSettings(config, state);
         loadLanguageSettings(config, state);
         processDatabaseSettings(state, logger);
         return state;
@@ -115,6 +116,14 @@ final class SettingsLoader {
 
     private static void loadDebugSettings(Map<String, Object> config, LoadedState state) {
         state.debugEnabled = YamlParserUtils.getBoolean(config, "debug-enabled", state.debugEnabled);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void loadReportSettings(Map<String, Object> config, LoadedState state) {
+        Map<String, Object> report = (Map<String, Object>) config.get("report");
+        if (report != null) {
+            state.reportEnabled = YamlParserUtils.getBoolean(report, YAML_FIELD_ENABLED, state.reportEnabled);
+        }
     }
 
     private static void loadLanguageSettings(Map<String, Object> config, LoadedState state) {
@@ -396,6 +405,7 @@ final class SettingsLoader {
         int minPasswordLength;
         int maxPasswordLength;
         boolean debugEnabled;
+        boolean reportEnabled;
         String language;
         final Settings.PostgreSQLSettings postgreSQLSettings = new Settings.PostgreSQLSettings();
         final Settings.PremiumSettings premiumSettings = new Settings.PremiumSettings();
@@ -434,6 +444,7 @@ final class SettingsLoader {
             state.minPasswordLength = settings.getMinPasswordLength();
             state.maxPasswordLength = settings.getMaxPasswordLength();
             state.debugEnabled = settings.isDebugEnabled();
+            state.reportEnabled = settings.isReportEnabled();
             state.language = settings.getLanguage();
             copyPostgreSqlSettings(settings.getPostgreSQLSettings(), state.postgreSQLSettings);
             copyPremiumSettings(settings.getPremiumSettings(), state.premiumSettings);
