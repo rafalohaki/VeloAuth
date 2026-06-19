@@ -153,11 +153,11 @@ auth-server:
 
 # Optional tuning for heavy backend servers (large JVM heap, long GC pauses).
 # VeloAuth pings the auth server, forced-host target and try-list/fallback
-# backends before transferring a player. The default 2000ms may be too tight
-# for big Paper/Spigot servers that don't answer a ping within 2s during a
+# backends before transferring a player. The default 3000ms may be too tight
+# for big Paper/Spigot servers that don't answer a ping within 3s during a
 # GC pause or warmup — raise it (e.g. 5000) so they aren't flagged offline.
 # connection:
-#   ping-timeout-ms: 2000
+#   ping-timeout-ms: 3000
 ```
 
 #### Diagnostic report (`/vauth report`)

@@ -147,9 +147,9 @@ final class DefaultConfigGenerator {
                   # Ping timeout in milliseconds for pre-transfer availability checks
                   # (auth-server readiness, forced-host target, try-list / fallback backends).
                   # Heavy JVM backend servers with large heaps and long GC pauses may not
-                  # answer a ping within the default 2000ms — raise this (e.g. 5000) to give
+                  # answer a ping within the default 3000ms — raise this (e.g. 5000) to give
                   # them more room. Too high delays fallback when a server is genuinely down.
-                  ping-timeout-ms: 2000""";
+                  ping-timeout-ms: 3000""";
 
     private static final String SECURITY_SECTION = """
                 
@@ -240,11 +240,17 @@ final class DefaultConfigGenerator {
                     # Query WPME API
                     wpme-enabled: false
                     # Per-request timeout in milliseconds
-                    request-timeout-ms: 2000
+                    # Mojang/Ashcon typically respond in 200-800ms; 3000ms gives headroom
+                    # during congestion without making worst-case login too slow (~18s).
+                    request-timeout-ms: 3000
                     # Cache TTL for positive hits in minutes
-                    hit-ttl-minutes: 10
+                    # Premium status is stable (Mojang locks names for 37 days after change);
+                    # 30min TTL reduces API calls 3x while still picking up name changes.
+                    hit-ttl-minutes: 30
                     # Cache TTL for misses in minutes
-                    miss-ttl-minutes: 3
+                    # A non-premium nick cannot suddenly become premium (new account purchase
+                    # is rare); 10min is safe and reduces API calls 3.3x vs the old 3min.
+                    miss-ttl-minutes: 10
                     # Preserve username case in resolver cache
                     case-sensitive: true
                     # Maximum entries kept in the in-memory premium resolution cache. Once exceeded,

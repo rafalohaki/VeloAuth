@@ -240,8 +240,8 @@ class SettingsValidationTest {
         writeConfigFile(configFile, "language: en\n");
 
         assertTrue(settings.load(), "Should load with default configuration");
-        assertEquals(2000, settings.getPingTimeoutMillis(),
-                "Default ping-timeout-ms should be 2000 when not specified in config");
+        assertEquals(3000, settings.getPingTimeoutMillis(),
+                "Default ping-timeout-ms should be 3000 when not specified in config");
     }
 
     @Test
@@ -282,7 +282,7 @@ class SettingsValidationTest {
         settings.load();
         String generatedConfig = Files.readString(tempDir.resolve("config.yml"));
 
-        assertTrue(generatedConfig.contains("ping-timeout-ms: 2000"),
+        assertTrue(generatedConfig.contains("ping-timeout-ms: 3000"),
                 "Generated default config should document the ping-timeout-ms default");
     }
 

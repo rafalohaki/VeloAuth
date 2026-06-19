@@ -66,8 +66,8 @@ public class Settings {
     // Ping timeout (milliseconds) used for pre-transfer availability checks of
     // auth-server, forced-host target and try-list/fallback backend servers.
     // Heavy JVM backend servers (large heap, long GC pauses) may not answer a
-    // ping within the default 2000ms — raise this value to give them more room.
-    private int pingTimeoutMillis = 2000;
+    // ping within the default 3000ms — raise this value to give them more room.
+    private int pingTimeoutMillis = 3000;
     // Security settings
     private int bcryptCost = 10;
     private int bruteForceMaxAttempts = 5;
@@ -442,9 +442,9 @@ public class Settings {
         private boolean mojangEnabled = true;
         private boolean ashconEnabled = true;
         private boolean wpmeEnabled = false;
-        private int requestTimeoutMs = 2000;
-        private int hitTtlMinutes = 10;
-        private int missTtlMinutes = 3;
+        private int requestTimeoutMs = 3000;
+        private int hitTtlMinutes = 30;
+        private int missTtlMinutes = 10;
         private boolean caseSensitive = true;
         private int memoryCacheMaxSize = 10_000;
 

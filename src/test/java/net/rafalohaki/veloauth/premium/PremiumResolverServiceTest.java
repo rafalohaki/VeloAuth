@@ -63,13 +63,13 @@ class PremiumResolverServiceTest {
         when(settings.getPremiumResolverSettings()).thenReturn(resolverSettings);
         when(settings.getPremiumSettings()).thenReturn(premiumSettings);
         
-        // Default: all resolvers enabled with 2s timeout
+        // Default: all resolvers enabled with 3s timeout
         when(resolverSettings.isMojangEnabled()).thenReturn(true);
         when(resolverSettings.isAshconEnabled()).thenReturn(true);
         when(resolverSettings.isWpmeEnabled()).thenReturn(false);
-        when(resolverSettings.getRequestTimeoutMs()).thenReturn(2000);
-        when(resolverSettings.getHitTtlMinutes()).thenReturn(10);
-        when(resolverSettings.getMissTtlMinutes()).thenReturn(3);
+        when(resolverSettings.getRequestTimeoutMs()).thenReturn(3000);
+        when(resolverSettings.getHitTtlMinutes()).thenReturn(30);
+        when(resolverSettings.getMissTtlMinutes()).thenReturn(10);
         when(resolverSettings.isCaseSensitive()).thenReturn(true);
 
         service = new PremiumResolverService(logger, settings, dao);
