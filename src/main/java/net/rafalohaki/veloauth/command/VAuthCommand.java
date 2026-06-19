@@ -22,6 +22,7 @@ import org.slf4j.MarkerFactory;
 class VAuthCommand implements SimpleCommand {
 
     private static final String ERROR_DATABASE_QUERY = "error.database.query";
+    private static final String ERROR_REPORT_FAILED = "admin.report.failed";
     private static final String CONFLICT_PREFIX = "   §7";
     private static final String RELOAD_WARNING_KEY = "admin.reload.warning";
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
@@ -178,14 +179,14 @@ class VAuthCommand implements SimpleCommand {
                 ctx.messages().get("admin.report.generating")));
         source.sendMessage(ValidationUtils.createWarningComponent(
                 ctx.messages().get("admin.report.warning")));
-        ctx.runAsyncCommand(source, () -> processReport(source), "admin.report.failed");
+        ctx.runAsyncCommand(source, () -> processReport(source), ERROR_REPORT_FAILED);
     }
 
     private void processReport(CommandSource source) {
         net.rafalohaki.veloauth.report.ReportService reportService = ctx.reportService();
         if (reportService == null) {
             source.sendMessage(ValidationUtils.createErrorComponent(
-                    ctx.messages().get("admin.report.failed", "report service not initialized")));
+                    ctx.messages().get(ERROR_REPORT_FAILED, "report service not initialized")));
             return;
         }
         net.rafalohaki.veloauth.report.ReportService.ReportResult result = reportService.generateAndUpload();
@@ -194,7 +195,7 @@ class VAuthCommand implements SimpleCommand {
                     ctx.messages().get("admin.report.success", result.url())));
         } else {
             source.sendMessage(ValidationUtils.createErrorComponent(
-                    ctx.messages().get("admin.report.failed", result.error())));
+                    ctx.messages().get(ERROR_REPORT_FAILED, result.error())));
         }
     }
 

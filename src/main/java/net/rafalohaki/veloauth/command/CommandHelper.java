@@ -8,6 +8,8 @@ import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 
+import java.util.Arrays;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -81,7 +83,31 @@ public final class CommandHelper {
      * Carrier for the result of {@link #requirePlayerAndArgs(SimpleCommand.Invocation, Messages, int, String)}
      * — keeps the (player, args) pair as one return value so callers don't repeat the early-return guard.
      */
-    public record CommandInputs(Player player, String[] args) { }
+    public record CommandInputs(Player player, String[] args) {
+        // Explicit equals/hashCode/toString so the String[] field is compared/printed by
+        // content (Arrays.*) rather than by the record-default array identity. Callers only
+        // unpack this immediately, but a content-based contract avoids surprises if it ever
+        // lands in a collection or assertion.
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            return o instanceof CommandInputs other
+                    && Objects.equals(player, other.player)
+                    && Arrays.equals(args, other.args);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * Objects.hashCode(player) + Arrays.hashCode(args);
+        }
+
+        @Override
+        public String toString() {
+            return "CommandInputs[player=" + player + ", args=" + Arrays.toString(args) + "]";
+        }
+    }
 
     /**
      * {@link SimpleCommand#hasPermission} helper for commands that should only be reachable
@@ -153,7 +179,28 @@ public final class CommandHelper {
     }
 
     /** Carrier for {@link #requireAdmin}. */
-    public record AdminCommandInputs(CommandSource source, String[] args) { }
+    public record AdminCommandInputs(CommandSource source, String[] args) {
+        // See CommandInputs: content-based equals/hashCode/toString for the String[] field.
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            return o instanceof AdminCommandInputs other
+                    && Objects.equals(source, other.source)
+                    && Arrays.equals(args, other.args);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * Objects.hashCode(source) + Arrays.hashCode(args);
+        }
+
+        @Override
+        public String toString() {
+            return "AdminCommandInputs[source=" + source + ", args=" + Arrays.toString(args) + "]";
+        }
+    }
 
     /**
      * Convenience wrapper: gate by admin permission, then run {@code body} with the unpacked

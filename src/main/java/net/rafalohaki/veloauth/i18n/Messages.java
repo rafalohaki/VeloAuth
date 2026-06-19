@@ -244,9 +244,9 @@ public class Messages {
                             resolvedKey, currentLanguage);
                     return formatMessageSafely(message, resolvedKey, args);
                 } catch (MissingResourceException ignoredEn) {
-                    // Both the active language and the English fallback are missing the key;
-                    // fall through to the "Missing: <key>" placeholder below. Debug log so
-                    // translators have a hint when adding new strings.
+                    // Both the active language and the English fallback lack this entry, so we
+                    // fall through to the placeholder branch below. A debug line gives
+                    // translators a hint when they add new strings.
                     logger.debug("English fallback also missing key '{}'", resolvedKey);
                 }
             }

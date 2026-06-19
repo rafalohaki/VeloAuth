@@ -29,12 +29,20 @@ final class ReportRedactor {
      * YAML / TOML keys whose value is a secret and must be replaced.
      * Matched case-insensitively, value can be quoted or unquoted, single or double quoted.
      * Handles both YAML ({@code key: value}) and TOML ({@code key = value}) separators.
-     * The pattern captures the key and the optional quote char so the replacement can
-     * preserve the quoting style.
+     * The pattern captures the key, the separator and the optional <em>opening</em> quote so
+     * the replacement can mirror the quoting style.
+     * <p>
+     * The value is consumed by a single greedy {@code .*} anchored to end-of-line rather than
+     * the old {@code (.*?)} sandwiched between two independent {@code ["']?} groups. Two adjacent
+     * optional quote groups around a lazy capture are mutually ambiguous (both can match the same
+     * character), which made the matcher super-linear on long values. A lone greedy {@code .*}
+     * against an anchored line is linear. The closing quote is reconstructed in the replacement
+     * from the captured opening quote, so an unterminated quoted secret is still redacted (and
+     * even normalised to a closed quote) — it never leaks.
      */
     private static final Pattern SECRET_KEY_VALUE = Pattern.compile(
             "(?im)^\\s*(password|ssl-password|webhook-url|forwarding-secret|secret)" +
-            "(\\s*[:=]\\s*)([\"']?)(.*?)([\"']?)\\s*$"
+            "(\\s*[:=]\\s*)([\"']?).*$"
     );
 
     /**
@@ -59,7 +67,7 @@ final class ReportRedactor {
             return input;
         }
         return SECRET_KEY_VALUE.matcher(input).replaceAll(m ->
-                m.group(1) + m.group(2) + m.group(3) + REDACTED + m.group(5));
+                m.group(1) + m.group(2) + m.group(3) + REDACTED + m.group(3));
     }
 
     /**

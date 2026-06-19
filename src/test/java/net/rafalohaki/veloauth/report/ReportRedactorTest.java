@@ -157,6 +157,22 @@ class ReportRedactorTest {
     }
 
     @Test
+    void redact_longUnterminatedQuotedValue_redactsLinearly() {
+        // Regression guard for the regex super-linear backtracking fix (Sonar S5852).
+        // An opening quote with no closing quote on a very long value used to force the
+        // matcher to backtrack quadratically; with the \3 backreference it stays linear.
+        String value = "x".repeat(50_000);
+        String input = "  password: \"" + value + "\n";
+
+        long start = System.nanoTime();
+        String result = ReportRedactor.redact(input);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        assertFalse(result.contains(value), "Long secret leaked");
+        assertTrue(elapsedMs < 1_000, () -> "Redaction took too long (" + elapsedMs + "ms) — possible backtracking");
+    }
+
+    @Test
     void redact_nullInput_returnsNull() {
         assertEquals(null, ReportRedactor.redact(null));
     }
