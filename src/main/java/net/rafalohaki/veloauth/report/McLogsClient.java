@@ -4,11 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +17,8 @@ import java.util.Map;
  * Client for the mclo.gs log paste API ({@code https://api.mclo.gs/1/log}).
  * <p>
  * Posts log content + metadata as JSON and returns the public URL on success.
+ * Uses {@link HttpClient} (Java 11+) to match the project's HTTP convention
+ * ({@code DiscordWebhookClient}, {@code HttpJsonClient}).
  * All I/O is blocking — callers must run on a virtual thread, never on a Velocity event thread.
  * <p>
  * The mclo.gs API caps content at 10 MiB / 25 000 lines; the caller is responsible for
@@ -26,7 +28,7 @@ final class McLogsClient {
 
     private static final String API_URL = "https://api.mclo.gs/1/log";
     private static final String SOURCE = "VeloAuth";
-    private static final int TIMEOUT_MS = 15_000;
+    private static final Duration TIMEOUT = Duration.ofSeconds(15);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** Result of a mclo.gs upload. */
@@ -48,39 +50,26 @@ final class McLogsClient {
      * @return {@link UploadResult} with the URL on success or an error message on failure
      */
     static UploadResult upload(String content, List<MetadataEntry> metadata) {
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) URI.create(API_URL).toURL().openConnection();
-            connection.setRequestMethod("POST");
-            connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-            connection.setRequestProperty("User-Agent", "VeloAuth/" + net.rafalohaki.veloauth.BuildConstants.VERSION);
-            connection.setConnectTimeout(TIMEOUT_MS);
-            connection.setReadTimeout(TIMEOUT_MS);
-            connection.setDoOutput(true);
-            connection.setUseCaches(false);
+        try (HttpClient client = HttpClient.newBuilder().connectTimeout(TIMEOUT).build()) {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(API_URL))
+                    .header("Content-Type", "application/json; charset=UTF-8")
+                    .header("User-Agent", "VeloAuth/" + net.rafalohaki.veloauth.BuildConstants.VERSION)
+                    .timeout(TIMEOUT)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(serializeBody(content, metadata)))
+                    .build();
 
-            byte[] body = serializeBody(content, metadata);
-            try (OutputStream out = connection.getOutputStream()) {
-                out.write(body);
-            }
-
-            int status = connection.getResponseCode();
-            String responseBody;
-            try (InputStream input = status >= 200 && status < 300
-                    ? connection.getInputStream()
-                    : connection.getErrorStream()) {
-                responseBody = input == null ? "" : new String(input.readAllBytes(), StandardCharsets.UTF_8);
-            }
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            int status = response.statusCode();
             if (status < 200 || status >= 300) {
-                return UploadResult.fail("HTTP " + status + ": " + responseBody);
+                return UploadResult.fail("HTTP " + status + ": " + response.body());
             }
-            return parseResponse(responseBody);
+            return parseResponse(response.body());
         } catch (IOException e) {
             return UploadResult.fail("Network error: " + e.getMessage());
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return UploadResult.fail("Upload interrupted");
         }
     }
 
