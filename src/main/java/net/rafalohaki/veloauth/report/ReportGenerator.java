@@ -94,14 +94,7 @@ final class ReportGenerator {
     }
 
     private Path resolveVelocityConfigPath() {
-        Path pluginDir = plugin.getDataDirectory();
-        Path proxyRoot = pluginDir.getParent() == null
-                ? pluginDir
-                : pluginDir.getParent().getParent();
-        if (proxyRoot == null) {
-            proxyRoot = pluginDir;
-        }
-        return proxyRoot.resolve(VELOCITY_CONFIG_RELATIVE);
+        return LogReader.resolveProxyRoot(plugin.getDataDirectory()).resolve(VELOCITY_CONFIG_RELATIVE);
     }
 
     private List<McLogsClient.MetadataEntry> buildMetadata() {

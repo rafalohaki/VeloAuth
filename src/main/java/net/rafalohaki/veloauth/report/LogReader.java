@@ -39,14 +39,29 @@ final class LogReader {
      * @return path to {@code <proxy-root>/logs/latest.log}
      */
     static Path resolveLogPath(Path pluginDataDirectory) {
-        // plugins/VeloAuth -> plugins -> <proxy-root>
-        Path proxyRoot = pluginDataDirectory.getParent() == null
-                ? pluginDataDirectory
-                : pluginDataDirectory.getParent().getParent();
-        if (proxyRoot == null) {
-            proxyRoot = pluginDataDirectory;
+        return resolveProxyRoot(pluginDataDirectory).resolve(LOG_RELATIVE_PATH);
+    }
+
+    /**
+     * Resolves the Velocity proxy root from the plugin data directory
+     * ({@code plugins/VeloAuth -> plugins -> <proxy-root>}).
+     * <p>
+     * Velocity may hand the data directory to plugins as a <em>relative</em> path
+     * (e.g. {@code plugins/veloauth}). On a relative path {@link Path#getParent()}
+     * returns {@code null} once a single name component remains, so walking two
+     * parents up directly would yield {@code null} and silently fall back to the
+     * plugin directory. Normalising to an absolute path first (against the JVM
+     * working directory, which is the proxy root on a normal Velocity start)
+     * keeps the parent chain well-defined for both relative and absolute inputs.
+     */
+    static Path resolveProxyRoot(Path pluginDataDirectory) {
+        Path pluginDir = pluginDataDirectory.toAbsolutePath().normalize();
+        Path plugins = pluginDir.getParent();
+        if (plugins == null) {
+            return pluginDir;
         }
-        return proxyRoot.resolve(LOG_RELATIVE_PATH);
+        Path proxyRoot = plugins.getParent();
+        return proxyRoot != null ? proxyRoot : plugins;
     }
 
     /**
