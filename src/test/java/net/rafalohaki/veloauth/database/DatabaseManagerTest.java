@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+@SuppressWarnings("null") // Eclipse JDT false positives: assertNotNull / isDatabaseError guarantee non-null but JDT cannot track these contracts
 class DatabaseManagerTest {
 
     private Messages messages;

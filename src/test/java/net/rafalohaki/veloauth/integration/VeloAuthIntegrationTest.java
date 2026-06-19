@@ -48,7 +48,6 @@ class VeloAuthIntegrationTest {
 
     private static final String TEST_PLAYER_NAME = "TestPlayer";
     private static final String TEST_IP = "127.0.0.1";
-    private static final String LOGIN_COMMAND = "login";
     private VeloAuth plugin;
     private DatabaseManager databaseManager;
     private AuthCache authCache;

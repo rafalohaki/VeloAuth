@@ -228,7 +228,6 @@ public class AuthCache {
         return user;
     }
 
-    @javax.annotation.Nonnull
     public java.util.Optional<CachedAuthUser> findAuthorizedPlayer(@javax.annotation.Nullable UUID uuid) {
         return java.util.Optional.ofNullable(getAuthorizedPlayer(uuid));
     }
@@ -303,7 +302,6 @@ public class AuthCache {
         return premiumCache.getIfPresent(nickname.toLowerCase(java.util.Locale.ROOT));
     }
 
-    @javax.annotation.Nonnull
     public java.util.Optional<PremiumCacheEntry> findPremiumStatus(@javax.annotation.Nullable String nickname) {
         return java.util.Optional.ofNullable(getPremiumStatus(nickname));
     }
