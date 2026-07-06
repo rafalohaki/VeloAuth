@@ -948,7 +948,7 @@ public class DatabaseManager {
 
         @javax.annotation.Nonnull
         public java.util.Optional<T> getValueOptional() {
-            return java.util.Objects.requireNonNull(java.util.Optional.ofNullable(value), "Optional cannot be null");
+            return java.util.Optional.ofNullable(value);
         }
 
         public boolean isDatabaseError() {

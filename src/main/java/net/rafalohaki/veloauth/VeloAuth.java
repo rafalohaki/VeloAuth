@@ -641,6 +641,7 @@ public class VeloAuth {
             // 2. Unregister command handlers
             if (commandHandler != null) {
                 commandHandler.unregisterCommands();
+                commandHandler.shutdown();
                 logger.debug("Commands unregistered");
             }
 
@@ -765,7 +766,11 @@ public class VeloAuth {
                 if (logger.isInfoEnabled()) {
                     logger.info(messages.get("config.reloaded_success"));
                 }
-                logger.warn("Changes to database, auth-server, premium-resolver, and floodgate settings require a full server restart to take effect.");
+                logger.warn("Changes to the following settings require a full server restart to take effect: "
+                        + "database, auth-server, premium-resolver, floodgate, brute-force, conflict-mode-ttl, cache, "
+                        + "session-timeout, premium-cache, connection pool, and rate-limiter settings. "
+                        + "Only bcrypt-cost, password-length, ip-limit-registrations, debug, report, and language "
+                        + "apply immediately.");
                 logStartupInfo(0); // Pass 0 as duration for reload
                 return languageReloaded; // Return true only if both succeeded
             } else {

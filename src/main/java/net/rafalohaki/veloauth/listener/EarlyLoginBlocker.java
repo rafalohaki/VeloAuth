@@ -12,6 +12,13 @@ import org.slf4j.Logger;
  * Startup queue for connections arriving before VeloAuth finishes initialization.
  * Instead of kicking players, holds their PreLogin event until the plugin is ready,
  * then allows normal processing to continue.
+ * <p>
+ * Registered at {@code priority = 100} (NORMAL). {@code AuthListener.onPreLogin} at
+ * {@code Short.MAX_VALUE} runs first and itself checks {@code plugin.isInitialized()},
+ * so startup protection is enforced there. This class provides defense-in-depth: if
+ * {@code AuthListener} fails to register (e.g. {@code ListenerFactory} error), this
+ * blocker still gates {@code PreLoginEvent}. To make it the primary gate instead,
+ * raise its priority to {@code Short.MAX_VALUE}.
  */
 public class EarlyLoginBlocker {
 

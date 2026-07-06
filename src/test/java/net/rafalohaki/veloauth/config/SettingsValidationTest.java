@@ -8,8 +8,10 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -345,6 +347,112 @@ class SettingsValidationTest {
         assertEquals("pass", settings.getDatabasePassword(), "Should parse database password from connection-url");
         assertEquals("?prepareThreshold=0", settings.getDatabaseConnectionParameters(),
                 "Unsupported query parameters in connection-url should not override explicit connection-parameters");
+    }
+
+    @Test
+    void connectionUrlPasswordContainingColonShouldBePreservedInFull() {
+        // Regression: parseAuthPart used split(":") which tokenized on every colon and
+        // kept only element [1], silently truncating "p@ss:word" to "p@ss".
+        String config = """
+                database:
+                  storage-type: POSTGRESQL
+                  connection-url: "postgresql://user:p@ss:word@db.example.com:5432/veloauth"
+                """;
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, config);
+
+        boolean loaded = settings.load();
+        assertTrue(loaded, "Should load connection-url with a password containing a colon");
+        assertEquals("user", settings.getDatabaseUser(), "User is the segment before the first colon");
+        assertEquals("p@ss:word", settings.getDatabasePassword(),
+                "Password is everything after the first colon — colons inside the password must be preserved");
+    }
+
+    @Test
+    void connectionUrlWithoutPasswordShouldParseUserOnly() {
+        String config = """
+                database:
+                  storage-type: POSTGRESQL
+                  connection-url: "postgresql://solo@db.example.com:5432/veloauth"
+                """;
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, config);
+
+        boolean loaded = settings.load();
+        assertTrue(loaded, "Should load connection-url that has only a user (no password)");
+        assertEquals("solo", settings.getDatabaseUser(), "User segment with no colon is the user");
+        assertEquals("", settings.getDatabasePassword(), "No password segment means empty password");
+    }
+
+    @Test
+    void connectionUrlWithIpv6BracketedHostShouldParseHostnameAndPort() {
+        String config = """
+                database:
+                  storage-type: POSTGRESQL
+                  connection-url: "postgresql://user:pass@[::1]:5432/veloauth"
+                """;
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, config);
+
+        boolean loaded = settings.load();
+        assertTrue(loaded, "Should load connection-url with an IPv6 bracketed host");
+        assertEquals("::1", settings.getDatabaseHostname(),
+                "IPv6 literal inside brackets should be the hostname (brackets stripped)");
+        assertEquals(5432, settings.getDatabasePort(), "Port should be parsed from after the bracketed host");
+    }
+
+    @Test
+    void hotReloadableSettingsFieldsShouldBeMarkedVolatile() throws ReflectiveOperationException {
+        // Reload mutates these fields in place from a different thread than the readers.
+        // Without volatile a reader thread may observe a stale value indefinitely.
+        // If you add a new hot-reloadable scalar, add it here — and if you remove one,
+        // drop it. The set is intentionally explicit so this test documents the contract.
+        Set<String> hotReloadable = Set.of(
+                "ipLimitRegistrations",
+                "minPasswordLength",
+                "maxPasswordLength",
+                "bcryptCost",
+                "debugEnabled",
+                "reportEnabled",
+                "language");
+
+        for (String fieldName : hotReloadable) {
+            Field field = Settings.class.getDeclaredField(fieldName);
+            int modifiers = field.getModifiers();
+            assertTrue(java.lang.reflect.Modifier.isVolatile(modifiers),
+                    "Settings." + fieldName + " must be volatile — it is hot-reloadable");
+        }
+    }
+
+    @Test
+    void conflictModeTtlShouldAcceptZeroAndPositiveValuesAndRejectNegative() {
+        // 0 is allowed — it disables the TTL (pre-1.3.3 permanent-conflict behaviour).
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                security:
+                  conflict-mode-ttl-hours: 0
+                """);
+        assertTrue(settings.load(), "conflict-mode-ttl-hours: 0 should be valid (disables TTL)");
+        assertEquals(0, settings.getConflictModeTtlHours());
+
+        writeConfigFile(configFile, """
+                security:
+                  conflict-mode-ttl-hours: 24
+                """);
+        assertTrue(settings.load(), "conflict-mode-ttl-hours: 24 should be valid");
+        assertEquals(24, settings.getConflictModeTtlHours());
+
+        writeConfigFile(configFile, """
+                security:
+                  conflict-mode-ttl-hours: -1
+                """);
+        // NOTE: Settings.load() applies the parsed state to the live fields BEFORE validating.
+        // A failed reload therefore returns false but leaves the rejected value on the field.
+        // This is a pre-existing characteristic of the loader, not specific to this setting.
+        assertFalse(settings.load(), "conflict-mode-ttl-hours: -1 should fail validation");
     }
 
     /**

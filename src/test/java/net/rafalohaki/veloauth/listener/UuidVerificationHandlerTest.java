@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.listener;
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
+import net.rafalohaki.veloauth.auth.ConflictModeService;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
@@ -69,6 +70,10 @@ class UuidVerificationHandlerTest {
 
     private UUID playerUuid;
 
+    /** Conflict TTL in hours used by the handler under test. Non-zero so the TTL-expiry
+     *  path is exercised; matches the production default of 168h (7 days). */
+    private static final int CONFLICT_TTL_HOURS = 168;
+
     @BeforeEach
     void setUp() {
         playerUuid = UUID.randomUUID();
@@ -77,7 +82,8 @@ class UuidVerificationHandlerTest {
         when(player.isOnlineMode()).thenReturn(false);
         when(player.getRemoteAddress()).thenReturn(new InetSocketAddress(PLAYER_IP, 25565));
 
-        handler = new UuidVerificationHandler(databaseManager, authCache, logger, () -> auditLogService);
+        handler = new UuidVerificationHandler(databaseManager, authCache, logger, () -> auditLogService,
+                new ConflictModeService(databaseManager, CONFLICT_TTL_HOURS));
     }
 
     // ==================== PREMIUM (ONLINE MODE) PATH ====================
@@ -221,7 +227,8 @@ class UuidVerificationHandlerTest {
 
     @Test
     void testVerifyPlayerUuid_ConflictModeWithUuidMismatch_AllowsAccess() {
-        // Arrange — CONFLICT_MODE permits a mismatch during conflict resolution
+        // Arrange — CONFLICT_MODE permits a mismatch during the conflict resolution window.
+        // Timestamp is "now" so it falls inside the default TTL configured in setUp().
         RegisteredPlayer dbPlayer =
                 registeredPlayer(UUID.randomUUID().toString(), UUID.randomUUID().toString(), true);
         dbPlayer.setConflictTimestamp(System.currentTimeMillis());
@@ -232,7 +239,7 @@ class UuidVerificationHandlerTest {
         boolean result = handler.verifyPlayerUuid(player).join();
 
         // Assert
-        assertTrue(result, "CONFLICT_MODE must allow access despite UUID mismatch");
+        assertTrue(result, "CONFLICT_MODE must allow access despite UUID mismatch within TTL");
         verify(authCache, never()).removeAuthorizedPlayer(any(UUID.class));
         verify(authCache, never()).endSession(any(UUID.class));
     }
@@ -241,6 +248,7 @@ class UuidVerificationHandlerTest {
     void testVerifyPlayerUuid_ConflictModeWithMatchingUuid_AllowsAccess() {
         // Arrange
         RegisteredPlayer dbPlayer = registeredPlayer(playerUuid.toString(), null, true);
+        dbPlayer.setConflictTimestamp(System.currentTimeMillis());
         when(databaseManager.findPlayerByNickname(USERNAME)).thenReturn(
                 CompletableFuture.completedFuture(DbResult.success(dbPlayer)));
 
@@ -249,6 +257,75 @@ class UuidVerificationHandlerTest {
 
         // Assert
         assertTrue(result, "CONFLICT_MODE with a matching UUID must allow access");
+    }
+
+    @Test
+    void testVerifyPlayerUuid_ConflictModeExpired_PerformsFullUuidVerificationAndDenies() {
+        // Arrange — conflict mark is older than the TTL: the relaxed-verification window
+        // has closed, so the handler must fall through to full UUID verification. A mismatch
+        // must now be denied and the cache invalidated (regression for the pre-1.3.3 hole
+        // where a single conflict mark disabled UUID verification forever).
+        RegisteredPlayer dbPlayer =
+                registeredPlayer(UUID.randomUUID().toString(), UUID.randomUUID().toString(), true);
+        long expiredMillis = System.currentTimeMillis()
+                - (CONFLICT_TTL_HOURS * 60L * 60L * 1000L) - 60_000L; // TTL + 1 minute ago
+        dbPlayer.setConflictTimestamp(expiredMillis);
+        when(databaseManager.findPlayerByNickname(USERNAME)).thenReturn(
+                CompletableFuture.completedFuture(DbResult.success(dbPlayer)));
+
+        // Act
+        boolean result = handler.verifyPlayerUuid(player).join();
+
+        // Assert
+        assertFalse(result,
+                "An expired CONFLICT_MODE entry must NOT relax UUID verification — full check applies");
+        verify(authCache).removeAuthorizedPlayer(playerUuid);
+        verify(authCache).endSession(playerUuid);
+        verify(auditLogService).save(
+                eq(AuditEventType.UUID_MISMATCH), eq(USERNAME), eq(PLAYER_IP), anyString());
+    }
+
+    @Test
+    void testVerifyPlayerUuid_ConflictModeExpiredButUuidMatches_AllowsAccess() {
+        // Arrange — expired conflict, but the connection UUID legitimately matches the
+        // stored one. Full verification must still pass (the conflict flag must not cause
+        // a spurious deny once the window has closed).
+        RegisteredPlayer dbPlayer = registeredPlayer(playerUuid.toString(), null, true);
+        long expiredMillis = System.currentTimeMillis()
+                - (CONFLICT_TTL_HOURS * 60L * 60L * 1000L) - 60_000L;
+        dbPlayer.setConflictTimestamp(expiredMillis);
+        when(databaseManager.findPlayerByNickname(USERNAME)).thenReturn(
+                CompletableFuture.completedFuture(DbResult.success(dbPlayer)));
+
+        // Act
+        boolean result = handler.verifyPlayerUuid(player).join();
+
+        // Assert
+        assertTrue(result,
+                "Expired CONFLICT_MODE with a matching UUID must pass full verification");
+        verify(authCache, never()).removeAuthorizedPlayer(any(UUID.class));
+    }
+
+    @Test
+    void testVerifyPlayerUuid_ConflictModePermanent_TtlDisabledAllowsDespiteMismatch() {
+        // Arrange — TTL disabled (0h): pre-1.3.3 permanent-conflict behaviour. Operators
+        // who rely on the legacy semantics set conflict-mode-ttl-hours: 0 in config.
+        handler = new UuidVerificationHandler(databaseManager, authCache, logger, () -> auditLogService,
+                new ConflictModeService(databaseManager, 0));
+        RegisteredPlayer dbPlayer =
+                registeredPlayer(UUID.randomUUID().toString(), UUID.randomUUID().toString(), true);
+        // No timestamp set (or very old) — irrelevant when TTL is disabled.
+        dbPlayer.setConflictTimestamp(0L);
+        when(databaseManager.findPlayerByNickname(USERNAME)).thenReturn(
+                CompletableFuture.completedFuture(DbResult.success(dbPlayer)));
+
+        // Act
+        boolean result = handler.verifyPlayerUuid(player).join();
+
+        // Assert
+        assertTrue(result,
+                "With conflict-mode-ttl-hours=0 (disabled), conflict mode must be permanent (legacy)");
+        verify(authCache, never()).removeAuthorizedPlayer(any(UUID.class));
     }
 
     // ==================== EXCEPTION PATHS — FAIL-SECURE ====================

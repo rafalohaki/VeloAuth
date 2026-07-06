@@ -14,6 +14,7 @@ import static com.velocitypowered.api.event.ResultedEvent.ComponentResult;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.VeloAuth;
+import net.rafalohaki.veloauth.auth.ConflictModeService;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
@@ -124,7 +125,8 @@ public class AuthListener {
         this.postLoginHandler = java.util.Objects.requireNonNull(postLoginHandler, 
             "PostLoginHandler cannot be null - initialization failed");
         this.uuidVerificationHandler = new UuidVerificationHandler(databaseManager, authCache, logger,
-                plugin::getAuditLogService);
+                plugin::getAuditLogService,
+                new ConflictModeService(databaseManager, settings.getConflictModeTtlHours()));
 
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("connection.listener.registered"));

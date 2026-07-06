@@ -192,6 +192,8 @@ final class SettingsLoader {
                 "bruteforce-timeout-minutes", state.bruteForceTimeoutMinutes);
         state.ipLimitRegistrations = YamlParserUtils.getInt(security,
                 "ip-limit-registrations", state.ipLimitRegistrations);
+        state.conflictModeTtlHours = YamlParserUtils.getInt(security,
+                "conflict-mode-ttl-hours", state.conflictModeTtlHours);
         state.minPasswordLength = YamlParserUtils.getInt(security,
             CONFIG_KEY_MIN_CREDENTIAL_LENGTH, state.minPasswordLength);
         state.maxPasswordLength = YamlParserUtils.getInt(security,
@@ -332,23 +334,30 @@ final class SettingsLoader {
     }
 
     private static void parseConnectionCredentials(LoadedState state, String remaining, Logger logger) {
-        String[] parts = remaining.split("@");
-        if (parts.length != 2) {
+        // Split on the LAST '@' — RFC 3986 puts userinfo before the final '@' that separates
+        // it from the host. The previous split("@") with a length==2 guard rejected any URL
+        // whose password also contained an '@', silently falling back to the default user.
+        // lastIndexOf is safe: the host component never contains '@'.
+        int atIdx = remaining.lastIndexOf('@');
+        if (atIdx < 0) {
             return;
         }
-
-        parseAuthPart(state, parts[0]);
-        parseHostPart(state, parts[1], logger);
+        parseAuthPart(state, remaining.substring(0, atIdx));
+        parseHostPart(state, remaining.substring(atIdx + 1), logger);
     }
 
     private static void parseAuthPart(LoadedState state, String authPart) {
-        String[] authSplit = authPart.split(":");
-        if (authSplit.length >= 1) {
-            state.databaseUser = URLDecoder.decode(authSplit[0], StandardCharsets.UTF_8);
+        // Split on the FIRST ':' only — passwords may legally contain colons (URL-encoded
+        // as %3A, but some operators paste raw values). The previous split(":") tokenized
+        // on every colon and kept only element [1], silently truncating passwords like
+        // "p@ss:word" to "p@ss".
+        int separatorIdx = authPart.indexOf(':');
+        if (separatorIdx < 0) {
+            state.databaseUser = URLDecoder.decode(authPart, StandardCharsets.UTF_8);
+            return;
         }
-        if (authSplit.length >= 2) {
-            state.databasePassword = URLDecoder.decode(authSplit[1], StandardCharsets.UTF_8);
-        }
+        state.databaseUser = URLDecoder.decode(authPart.substring(0, separatorIdx), StandardCharsets.UTF_8);
+        state.databasePassword = URLDecoder.decode(authPart.substring(separatorIdx + 1), StandardCharsets.UTF_8);
     }
 
     private static void parseHostPart(LoadedState state, String hostPart, Logger logger) {
@@ -368,12 +377,23 @@ final class SettingsLoader {
             }
         }
 
-        String[] hpSplit = hostAndPort.split(":");
-        if (hpSplit.length >= 1) {
-            state.databaseHostname = hpSplit[0];
+        // IPv6 literals in connection URLs are bracketed, e.g. [::1]:25565 or
+        // [fe80::1%25eth0]:5432. Strip the brackets and take the port after the ']'.
+        // Plain hostnames and IPv4 keep the legacy indexOf(':') path.
+        if (hostAndPort.startsWith("[") && hostAndPort.indexOf(']') > 0) {
+            int closeBracket = hostAndPort.indexOf(']');
+            state.databaseHostname = hostAndPort.substring(1, closeBracket);
+            if (closeBracket + 1 < hostAndPort.length() && hostAndPort.charAt(closeBracket + 1) == ':') {
+                state.databasePort = Integer.parseInt(hostAndPort.substring(closeBracket + 2));
+            }
+            return;
         }
-        if (hpSplit.length >= 2) {
-            state.databasePort = Integer.parseInt(hpSplit[1]);
+        int colonIdx = hostAndPort.indexOf(':');
+        if (colonIdx >= 0) {
+            state.databaseHostname = hostAndPort.substring(0, colonIdx);
+            state.databasePort = Integer.parseInt(hostAndPort.substring(colonIdx + 1));
+        } else {
+            state.databaseHostname = hostAndPort;
         }
     }
 
@@ -402,6 +422,7 @@ final class SettingsLoader {
         int bruteForceMaxAttempts;
         int bruteForceTimeoutMinutes;
         int ipLimitRegistrations;
+        int conflictModeTtlHours;
         int minPasswordLength;
         int maxPasswordLength;
         boolean debugEnabled;
@@ -441,6 +462,7 @@ final class SettingsLoader {
             state.bruteForceMaxAttempts = settings.getBruteForceMaxAttempts();
             state.bruteForceTimeoutMinutes = settings.getBruteForceTimeoutMinutes();
             state.ipLimitRegistrations = settings.getIpLimitRegistrations();
+            state.conflictModeTtlHours = settings.getConflictModeTtlHours();
             state.minPasswordLength = settings.getMinPasswordLength();
             state.maxPasswordLength = settings.getMaxPasswordLength();
             state.debugEnabled = settings.isDebugEnabled();

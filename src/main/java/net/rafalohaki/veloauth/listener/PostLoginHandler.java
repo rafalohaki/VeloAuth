@@ -68,23 +68,38 @@ public class PostLoginHandler {
     /**
      * Handles offline player post-login (authorization check or auth server transfer).
      *
+     * <p>If the player is still authorized in the cache but their session has expired
+     * (TTL timeout, or an IP/nickname mismatch evicted the {@code activeSessions} entry
+     * while the {@code authorizedPlayers} entry survived), the session is restarted here.
+     * Without this, the player would be deadlocked: {@code ServerPreConnectEvent} requires
+     * BOTH authorization and an active session, but {@code /login} would reply
+     * "already logged in" because it checks authorization alone.
+     *
+     * <p>Security note: restarting the session is safe because {@code isPlayerAuthorized}
+     * already validates the IP via {@code CachedAuthUser.matchesIp}. An attacker would need
+     * to already hold a matching authorized-IP cache entry — at which point they have
+     * effectively already authenticated.
+     *
      * @param player   The offline player
      * @param playerIp Player's IP address
      */
     public void handleOfflinePlayer(Player player, String playerIp) {
-        if (authCache.isPlayerAuthorized(player.getUniqueId(), playerIp)) {
+        java.util.UUID uuid = player.getUniqueId();
+        String nickname = player.getUsername();
+        if (!authCache.isPlayerAuthorized(uuid, playerIp)) {
             if (logger.isDebugEnabled()) {
-                logger.debug("Player {} is already authorized - ServerPreConnectEvent will route to backend",
+                logger.debug("Player {} is not authorized - ServerPreConnectEvent will route to auth server",
                         player.getUsername());
             }
+            // ServerPreConnectEvent will redirect to auth server automatically
             return;
         }
-
-        if (logger.isDebugEnabled()) {
-            logger.debug("Player {} is not authorized - ServerPreConnectEvent will route to auth server",
-                    player.getUsername());
+        if (!authCache.hasActiveSession(uuid, nickname, playerIp)) {
+            authCache.startSession(uuid, nickname, playerIp);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Re-started expired session for authorized player {}", nickname);
+            }
         }
-        // ServerPreConnectEvent will redirect to auth server automatically
     }
 
     /**

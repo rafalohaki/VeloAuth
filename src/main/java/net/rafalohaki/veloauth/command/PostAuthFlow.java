@@ -77,6 +77,12 @@ final class PostAuthFlow {
             }
             return false;
         }
+
+        // Successful offline auth: clear any lingering CONFLICT_MODE so the next connection
+        // runs full UUID verification. Without this, a single conflict mark would relax UUID
+        // verification forever (the pre-1.3.3 hole). Fire-and-forget — the in-memory player
+        // object is mutated synchronously; persistence happens asynchronously.
+        ctx.conflictModeService().clearIfPresent(player, operationName);
         return true;
     }
 

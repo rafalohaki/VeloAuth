@@ -13,8 +13,23 @@ import java.nio.file.Path;
 
 /**
  * VeloAuth configuration with YAML support and validation.
- * Thread-safe immutable configuration object.
- * 
+ *
+ * <p><b>Concurrency model:</b> the object is mutated in place by {@code reloadConfig()}
+ * via {@link #load()}. Fields are split into two groups:
+ * <ul>
+ *   <li><b>Hot-reloadable</b> — marked {@code volatile}; read by event/command handlers
+ *       that may run on a different thread than the reload. Visibility without
+ *       atomicity across multiple fields is acceptable for these scalars because each
+ *       is consumed independently (e.g. {@code bcryptCost} at one site,
+ *       {@code minPasswordLength} at another).</li>
+ *   <li><b>Requires restart</b> — plain (non-volatile) fields whose values are captured
+ *       once into {@code final} holders at init time (e.g. {@code IPRateLimiter.maxAttempts},
+ *       {@code AuthCache} TTLs, {@code ConnectionManager} pool sizes). Changing them in
+ *       {@code config.yml} and reloading <em>will not</em> affect live behaviour; a full
+ *       proxy restart is required. {@code VeloAuth.reloadConfig()} logs a warning to this
+ *       effect.</li>
+ * </ul>
+ *
  * <h2>Extracted Components</h2>
  * <ul>
  *   <li>{@link SettingsValidator} - configuration validation</li>
@@ -39,7 +54,7 @@ public class Settings {
     @SuppressWarnings("java:S2068")
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
     
-    // Database settings
+    // Database settings — requires restart (captured by DatabaseManager / HikariCP at init).
     private String databaseStorageType = DatabaseType.H2.getName();
     private String databaseHostname = "localhost";
     private int databasePort = 3306;
@@ -51,36 +66,46 @@ public class Settings {
     private String databaseConnectionParameters = "";
     private int databaseConnectionPoolSize = 20;
     private long databaseMaxLifetimeMillis = 1800000;
-    // Cache settings
+    // Cache settings — requires restart (captured as final fields by AuthCache / SessionManager
+    // and Caffeine's expireAfterAccess at construction; reload does not rebuild them).
     private int cacheTtlMinutes = 60;
     private int cacheMaxSize = 10000;
     private int cacheCleanupIntervalMinutes = 5;
     private int sessionTimeoutMinutes = 60;
     private int premiumTtlHours = 24;
     private double premiumRefreshThreshold = 0.8;
-    // Auth server settings
+    // Auth server settings — requires restart (read by ConnectionManager / forced-hosts setup).
     private String authServerName = "limbo";
     private int authServerTimeoutSeconds = 300;
-    // Connection settings
+    // Connection settings — requires restart (pingTimeoutMillis captured in transfer paths).
     private int connectionTimeoutSeconds = 30;
     // Ping timeout (milliseconds) used for pre-transfer availability checks of
     // auth-server, forced-host target and try-list/fallback backend servers.
     // Heavy JVM backend servers (large heap, long GC pauses) may not answer a
     // ping within the default 3000ms — raise this value to give them more room.
     private int pingTimeoutMillis = 3000;
-    // Security settings
-    private int bcryptCost = 10;
+    // Security settings — mixed:
+    //   brute-force-* captured as final by IPRateLimiter + AuthCache.BruteForceTracker at init
+    //   → requires restart.
+    //   bcryptCost / min-maxPasswordLength / ipLimitRegistrations read directly per command
+    //   → hot-reloadable (volatile).
     private int bruteForceMaxAttempts = 5;
     private int bruteForceTimeoutMinutes = 5;
-    private int ipLimitRegistrations = 3;
-    private int minPasswordLength = 8;
-    private int maxPasswordLength = 72;
-    // Debug settings
-    private boolean debugEnabled = false;
-    // Report settings (/vauth report — uploads redacted config + logs to mclo.gs)
-    private boolean reportEnabled = true;
-    // Language settings
-    private String language = "en";
+    private volatile int ipLimitRegistrations = 3;
+    private volatile int minPasswordLength = 8;
+    private volatile int maxPasswordLength = 72;
+    private volatile int bcryptCost = 10;
+    // CONFLICT_MODE TTL (hours). After this window, a stale conflict entry forces full UUID
+    // verification again. 0 = TTL disabled (permanent conflict, pre-1.3.3 behaviour).
+    // Requires restart — captured as a final field by ConflictModeService at init, so
+    // /vauth reload does NOT pick up changes (same lifecycle as brute-force-*).
+    private int conflictModeTtlHours = 168;
+    // Debug settings — hot-reloadable (volatile).
+    private volatile boolean debugEnabled = false;
+    // Report settings (/vauth report — uploads redacted config + logs to mclo.gs) — hot-reloadable.
+    private volatile boolean reportEnabled = true;
+    // Language settings — hot-reloadable (reloadLanguageFiles swaps the Messages instance).
+    private volatile String language = "en";
 
     /**
      * Creates a new Settings instance.
@@ -175,6 +200,7 @@ public class Settings {
         bruteForceMaxAttempts = state.bruteForceMaxAttempts;
         bruteForceTimeoutMinutes = state.bruteForceTimeoutMinutes;
         ipLimitRegistrations = state.ipLimitRegistrations;
+        conflictModeTtlHours = state.conflictModeTtlHours;
         minPasswordLength = state.minPasswordLength;
         maxPasswordLength = state.maxPasswordLength;
         debugEnabled = state.debugEnabled;
@@ -363,6 +389,17 @@ public class Settings {
 
     public int getMaxPasswordLength() {
         return maxPasswordLength;
+    }
+
+    /**
+     * Returns the CONFLICT_MODE time-to-live in hours. After this window, a stale conflict
+     * entry forces full UUID verification again. {@code 0} disables the TTL (permanent
+     * conflict — the pre-1.3.3 behaviour) for operators who want it.
+     *
+     * @return TTL in hours, or {@code 0} to disable TTL-based conflict expiry
+     */
+    public int getConflictModeTtlHours() {
+        return conflictModeTtlHours;
     }
 
     public PasswordPolicy getPasswordPolicy() {

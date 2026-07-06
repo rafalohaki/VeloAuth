@@ -176,6 +176,16 @@ public class IPRateLimiter {
     }
 
     /**
+     * No-op shutdown hook. Caffeine-backed storage is GC'd naturally and entries are
+     * periodically cleaned via {@code AuthCache.cleanupExpiredEntries()}. Kept for
+     * lifecycle symmetry with other components ({@code AuthCache}, {@code DatabaseManager},
+     * etc.) so callers can shut down every collaborator through the same call site.
+     */
+    public void shutdown() {
+        // Intentionally empty — see Javadoc.
+    }
+
+    /**
      * Gets the number of tracked IP addresses.
      *
      * @return number of tracked IPs (estimate — Caffeine eviction is asynchronous)

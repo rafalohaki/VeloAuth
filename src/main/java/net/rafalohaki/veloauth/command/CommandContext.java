@@ -41,6 +41,7 @@ class CommandContext {
     private final Logger logger;
     private final SimpleMessages sm;
     private final IPRateLimiter ipRateLimiter;
+    private final net.rafalohaki.veloauth.auth.ConflictModeService conflictModeService;
     private final ConcurrentHashMap<UUID, Boolean> activeCommands = new ConcurrentHashMap<>();
 
     /**
@@ -67,6 +68,8 @@ class CommandContext {
                 settings.getBruteForceMaxAttempts(),
                 settings.getBruteForceTimeoutMinutes());
         authCache.setIpRateLimiter(this.ipRateLimiter);
+        this.conflictModeService = new net.rafalohaki.veloauth.auth.ConflictModeService(
+                databaseManager, settings.getConflictModeTtlHours());
         this.sm = new SimpleMessages(messages);
     }
 
@@ -78,6 +81,15 @@ class CommandContext {
     Logger logger() { return logger; }
     SimpleMessages sm() { return sm; }
     IPRateLimiter ipRateLimiter() { return ipRateLimiter; }
+    net.rafalohaki.veloauth.auth.ConflictModeService conflictModeService() { return conflictModeService; }
+
+    /**
+     * Releases resources held by the command layer. Currently a passthrough to
+     * {@link IPRateLimiter#shutdown()} for lifecycle symmetry with other components.
+     */
+    void shutdown() {
+        ipRateLimiter.shutdown();
+    }
     net.rafalohaki.veloauth.auth.totp.TotpService totpService() { return plugin.getTotpService(); }
     net.rafalohaki.veloauth.auth.totp.PendingTotpStore pendingTotpStore() { return plugin.getPendingTotpStore(); }
     net.rafalohaki.veloauth.auth.totp.TotpReplayGuard totpReplayGuard() { return plugin.getTotpReplayGuard(); }

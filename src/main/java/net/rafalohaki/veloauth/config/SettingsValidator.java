@@ -97,6 +97,17 @@ public final class SettingsValidator {
         validatePasswordLengthSettings(settings);
         adjustMaxPasswordLengthIfNeeded(settings);
         validateIpLimitRegistrations(settings);
+        validateConflictModeTtl(settings);
+    }
+
+    /**
+     * {@code conflict-mode-ttl-hours = 0} is explicitly allowed — it disables the TTL,
+     * restoring the pre-1.3.3 permanent-conflict behaviour for operators who want it.
+     */
+    private static void validateConflictModeTtl(Settings settings) {
+        if (settings.getConflictModeTtlHours() < 0) {
+            throw new IllegalArgumentException("conflict-mode-ttl-hours must be >= 0 (0 = disabled)");
+        }
     }
 
     static void validateConnection(Settings settings) {

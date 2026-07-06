@@ -239,6 +239,73 @@ class CommandFlowFixesTest {
     }
 
     @Test
+    void testLoginCommand_AuthorizedButSessionExpired_ProceedsToPasswordCheckInsteadOfAlreadyLogged() throws Exception {
+        // Regression for the authorized-but-no-session deadlock: pre-1.3.3 /login checked
+        // isPlayerAuthorized alone and replied "already logged in" while ServerPreConnectEvent
+        // blocked the backend (no active session). The fix makes the "already logged in"
+        // short-circuit require BOTH authorization AND an active session.
+        RegisteredPlayer registeredPlayer = createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));
+        databaseManager.setFindResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(registeredPlayer)));
+        databaseManager.enqueueSavePlayerResult(DatabaseManager.DbResult.success(true));
+        databaseManager.setPremiumResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(false)));
+
+        // Authorized in cache, but NO active session (simulates TTL/eviction-driven expiry).
+        authCache.addAuthorizedPlayer(playerUuid, CachedAuthUser.fromRegisteredPlayer(registeredPlayer, false));
+        assertFalse(authCache.hasActiveSession(playerUuid, TEST_PLAYER_NAME, TEST_IP),
+                "Sanity: no session should exist before the command runs");
+
+        // PostAuthFlow needs both a real ConnectionManager (transferToBackend → true) and an
+        // AuthTimeoutScheduler (cancel on success). Inject a scheduler stub via reflection.
+        when(connectionManager.transferToBackend(player)).thenReturn(true);
+        net.rafalohaki.veloauth.connection.AuthTimeoutScheduler scheduler =
+                mock(net.rafalohaki.veloauth.connection.AuthTimeoutScheduler.class);
+        Field schedulerField = VeloAuth.class.getDeclaredField("authTimeoutScheduler");
+        schedulerField.setAccessible(true);
+        schedulerField.set(plugin, scheduler);
+
+        setExecutorShutdown(true); // run inline so assertions see the post-command state
+        try {
+            LoginCommand command = new LoginCommand(inlineContext);
+            command.execute(invocation(player, "secret123"));
+        } finally {
+            setExecutorShutdown(false);
+        }
+
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
+        List<String> sentMessages = capturedTexts(messagesCaptor);
+        assertFalse(sentMessages.contains(messages.get("auth.login.already_logged_in")),
+                "Authorized-but-no-session must NOT short-circuit to 'already logged in'");
+        assertTrue(sentMessages.contains(messages.get("auth.login.success")),
+                "Password verification should succeed and re-establish both caches");
+        // After successful re-login both authorization and session are present again.
+        assertTrue(authCache.hasActiveSession(playerUuid, TEST_PLAYER_NAME, TEST_IP),
+                "Successful re-login must re-establish the session");
+    }
+
+    @Test
+    void testLoginCommand_AuthorizedAndSessionActive_ShortCircuitsToAlreadyLogged() {
+        // Counter-regression: when BOTH authorization and session are valid, /login must
+        // still short-circuit. The fix must not weaken the normal "already logged in" path.
+        RegisteredPlayer registeredPlayer = createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));
+        databaseManager.setFindResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(registeredPlayer)));
+
+        authCache.addAuthorizedPlayer(playerUuid, CachedAuthUser.fromRegisteredPlayer(registeredPlayer, false));
+        authCache.startSession(playerUuid, TEST_PLAYER_NAME, TEST_IP);
+
+        LoginCommand command = new LoginCommand(inlineContext);
+        command.execute(invocation(player, "secret123"));
+
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
+        assertTrue(capturedTexts(messagesCaptor).contains(messages.get("auth.login.already_logged_in")),
+                "Fully authorized player (auth + session) must see 'already logged in'");
+    }
+
+    @Test
     void testPostAuthFlow_WhenAuthTablePremiumUuidPersistReturnsFalse_ReturnsFalseWithoutTransfer() {
         UUID premiumUuid = UUID.randomUUID();
         RegisteredPlayer registeredPlayer = createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));

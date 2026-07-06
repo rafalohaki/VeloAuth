@@ -89,6 +89,14 @@ public class CommandHandler {
         }
     }
 
+    /**
+     * Releases resources held by the command layer (currently the IP rate limiter).
+     * Safe to call after {@link #unregisterCommands()}; idempotent.
+     */
+    public void shutdown() {
+        ctx.shutdown();
+    }
+
     private void unregisterCommandAliases(com.velocitypowered.api.command.CommandManager commandManager,
                                           String primaryAlias, String... aliases) {
         commandManager.unregister(primaryAlias);

@@ -163,6 +163,13 @@ final class DefaultConfigGenerator {
                   bruteforce-timeout-minutes: 5
                   # Max account registrations per IP
                   ip-limit-registrations: 3
+                  # CONFLICT_MODE time-to-live in hours. When a premium player's nickname
+                  # collides with an existing offline account, the account is marked in
+                  # conflict mode and UUID verification is relaxed so the legitimate owner
+                  # can still connect. After this TTL, the stale conflict entry forces full
+                  # UUID verification again. 0 = TTL disabled (permanent conflict, pre-1.3.3).
+                  # Note: changes require a proxy restart (/vauth reload does not pick this up).
+                  conflict-mode-ttl-hours: 168
                   # Inclusive minimum password length
                   min-password-length: 8
                   # Inclusive maximum password length (BCrypt limit: 72)

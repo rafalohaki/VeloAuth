@@ -68,7 +68,14 @@ class LoginCommand implements SimpleCommand {
                 return;
             }
 
-            if (ctx.authCache().isPlayerAuthorized(player.getUniqueId(), PlayerAddressUtils.getPlayerIp(player))) {
+            // Short-circuit only when BOTH authorization and an active session are valid.
+            // If authorized but the session has expired (TTL timeout or IP/nickname eviction),
+            // fall through to the password check — the player has reached the auth server and
+            // must re-authenticate. This closes the pre-1.3.3 deadlock where /login replied
+            // "already logged in" while ServerPreConnectEvent blocked the backend transfer.
+            String playerIp = PlayerAddressUtils.getPlayerIp(player);
+            if (ctx.authCache().isPlayerAuthorized(player.getUniqueId(), playerIp)
+                    && ctx.authCache().hasActiveSession(player.getUniqueId(), authContext.username(), playerIp)) {
                 player.sendMessage(ctx.sm().alreadyLogged());
                 return;
             }

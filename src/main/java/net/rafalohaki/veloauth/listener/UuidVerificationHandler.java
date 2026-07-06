@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.listener;
 
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.audit.AuditLogService;
+import net.rafalohaki.veloauth.auth.ConflictModeService;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
@@ -37,29 +38,43 @@ class UuidVerificationHandler {
     private final AuthCache authCache;
     private final Logger logger;
     private final Supplier<AuditLogService> auditLogServiceSupplier;
+    private final ConflictModeService conflictModeService;
 
     /**
-     * Legacy ctor — kept for tests that do not exercise the audit log.
+     * Legacy ctor — kept for tests that do not exercise the audit log or conflict TTL.
      */
     UuidVerificationHandler(DatabaseManager databaseManager, AuthCache authCache, Logger logger) {
-        this(databaseManager, authCache, logger, () -> null);
+        this(databaseManager, authCache, logger, () -> null, new ConflictModeService(databaseManager, 0));
     }
 
     /**
-     * Creates a new UuidVerificationHandler with an audit log supplier.
+     * Legacy ctor — kept for tests that exercise the audit log but not conflict TTL.
+     */
+    UuidVerificationHandler(DatabaseManager databaseManager, AuthCache authCache, Logger logger,
+                            Supplier<AuditLogService> auditLogServiceSupplier) {
+        this(databaseManager, authCache, logger, auditLogServiceSupplier,
+                new ConflictModeService(databaseManager, 0));
+    }
+
+    /**
+     * Creates a new UuidVerificationHandler with an audit log supplier and conflict-mode service.
      *
      * @param databaseManager        Database manager for player lookup
      * @param authCache              Authorization cache
      * @param logger                 Logger instance
      * @param auditLogServiceSupplier supplies the (possibly null) audit log service. Resolved lazily so
      *                                tests can inject a stub before the plugin completes init.
+     * @param conflictModeService    conflict-mode TTL + auto-clear helper
      */
     UuidVerificationHandler(DatabaseManager databaseManager, AuthCache authCache, Logger logger,
-                            Supplier<AuditLogService> auditLogServiceSupplier) {
+                            Supplier<AuditLogService> auditLogServiceSupplier,
+                            ConflictModeService conflictModeService) {
         this.databaseManager = databaseManager;
         this.authCache = authCache;
         this.logger = logger;
         this.auditLogServiceSupplier = auditLogServiceSupplier != null ? auditLogServiceSupplier : () -> null;
+        this.conflictModeService = conflictModeService != null ? conflictModeService
+                : new ConflictModeService(databaseManager, 0);
     }
 
     /**
@@ -122,19 +137,22 @@ class UuidVerificationHandler {
             return false;
         }
 
-        if (dbPlayer.getConflictMode()) {
+        if (dbPlayer.getConflictMode() && conflictModeService.isActive(dbPlayer)) {
+            // Conflict window still open: allow despite UUID mismatch (legitimate
+            // nickname-collision resolution). uuidMatches is still computed and WARN-logged
+            // so a real hijack attempt leaves a trail.
             logConflictModeActive(player, dbPlayer);
-            UUID playerUuid = player.getUniqueId();
-            UUID storedUuid = UuidUtils.parseUuidSafely(dbPlayer.getUuid());
-            UUID storedPremiumUuid = UuidUtils.parseUuidSafely(dbPlayer.getPremiumUuid());
-            boolean uuidMatches = (storedUuid != null && playerUuid.equals(storedUuid))
-                    || (storedPremiumUuid != null && playerUuid.equals(storedPremiumUuid));
-            if (!uuidMatches) {
-                logger.warn(SECURITY_MARKER,
-                        "[CONFLICT_MODE] UUID mismatch for {} - player UUID: {}, stored: {}, premium: {}",
-                        player.getUsername(), playerUuid, storedUuid, storedPremiumUuid);
-            }
+            logConflictModeUuidMismatchIfAny(player, dbPlayer);
             return true;
+        }
+        if (dbPlayer.getConflictMode()) {
+            // TTL expired: the conflict entry is stale. Fall through to full UUID verification
+            // instead of unconditionally allowing. This bounds the relaxed-verification window
+            // to conflict-mode-ttl-hours (default 7 days), closing the pre-1.3.3 hole where a
+            // single conflict mark disabled UUID verification forever.
+            logger.info(SECURITY_MARKER,
+                    "[CONFLICT_MODE EXPIRED] Player {} conflict entry older than TTL ({}h) - performing full UUID verification",
+                    player.getUsername(), conflictModeService.getConflictTtlHours());
         }
 
         return verifyUuidMatch(player, dbPlayer);
@@ -154,6 +172,25 @@ class UuidVerificationHandler {
                 player.getUniqueId(),
                 dbPlayer.getConflictTimestamp() > 0 ?
                         Instant.ofEpochMilli(dbPlayer.getConflictTimestamp()) : "not set");
+    }
+
+    /**
+     * Emits a WARN trail when a connection passes through the open conflict window with a
+     * UUID that matches neither the stored primary nor the stored premium UUID. The decision
+     * is still "allow" (that is the point of conflict mode); the log is for forensic review.
+     */
+    private void logConflictModeUuidMismatchIfAny(Player player, RegisteredPlayer dbPlayer) {
+        UUID playerUuid = player.getUniqueId();
+        UUID storedUuid = UuidUtils.parseUuidSafely(dbPlayer.getUuid());
+        UUID storedPremiumUuid = UuidUtils.parseUuidSafely(dbPlayer.getPremiumUuid());
+        boolean uuidMatches = (storedUuid != null && playerUuid.equals(storedUuid))
+                || (storedPremiumUuid != null && playerUuid.equals(storedPremiumUuid));
+        if (uuidMatches) {
+            return;
+        }
+        logger.warn(SECURITY_MARKER,
+                "[CONFLICT_MODE] UUID mismatch for {} - player UUID: {}, stored: {}, premium: {}",
+                player.getUsername(), playerUuid, storedUuid, storedPremiumUuid);
     }
 
     private boolean verifyUuidMatch(Player player, RegisteredPlayer dbPlayer) {
