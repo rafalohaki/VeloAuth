@@ -37,12 +37,30 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
+        <!-- MCProtocolLib version — bump to support newer MC versions. -->
+        <mcpl.version>26.2-SNAPSHOT</mcpl.version>
             </properties>
 
     <repositories>
         <repository>
             <id>papermc-repo</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
+        </repository>
+        <!--
+          OpenCollab — hostuje MCProtocolLib releases + jej transitivne zależności
+          (com.nukkitx.fastutil:*, org.cloudburstmc.math:*, org.cloudburstmc:nbt:*) których
+          nie ma w Maven Central ani papermc. Tej samej org potrzebujemy dla snapshotów.
+        -->
+        <repository>
+            <id>opencollab-releases</id>
+            <url>https://repo.opencollab.dev/main/</url>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <repository>
+            <id>opencollab-snapshots</id>
+            <url>https://repo.opencollab.dev/maven-snapshots/</url>
+            <releases><enabled>false</enabled></releases>
+            <snapshots><enabled>true</enabled></snapshots>
         </repository>
     </repositories>
 
@@ -142,6 +160,19 @@
             <artifactId>bstats-velocity</artifactId>
             <version>3.1.0</version>
             <scope>compile</scope>
+        </dependency>
+
+        <!--
+          MCProtocolLib (GeyserMC, MIT) — provides the Minecraft protocol codec (handshake
+          → login → configuration → play) for the embedded limbo server. Relocated by the
+          shade plugin below; Netty / Adventure / slf4j are excluded because Velocity already
+          provides them on the proxy classpath. Version is pinned via the mcpl.version
+          property so bumping for a new MC release is a one-line change.
+        -->
+        <dependency>
+            <groupId>org.geysermc.mcprotocollib</groupId>
+            <artifactId>protocol</artifactId>
+            <version>${mcpl.version}</version>
         </dependency>
 
         <!-- Testing -->
@@ -321,6 +352,28 @@
                                     <exclude>org.slf4j:slf4j-api</exclude>
                                     <exclude>org.checkerframework:checker-qual</exclude>
                                     <exclude>com.google.errorprone:error_prone_annotations</exclude>
+                                    <!--
+                                      Velocity provides Netty on the proxy classpath; MCProtocolLib
+                                      pulls it transitively. Excluding avoids a second bundled copy
+                                      that would cause LinkageError on the event-loop types.
+                                    -->
+                                    <exclude>io.netty:*</exclude>
+                                    <!--
+                                      Velocity provides the Kyori Adventure stack (api, text-serializer
+                                      gson/legacy/plain, examination) on the proxy classpath. MCProtocolLib
+                                      uses Adventure for Component types; excluding avoids duplication.
+                                    -->
+                                    <exclude>net.kyori:adventure-api</exclude>
+                                    <exclude>net.kyori:adventure-key</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-gson</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-json</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-legacy</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-plain</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-commons</exclude>
+                                    <exclude>net.kyori:adventure-nbt</exclude>
+                                    <exclude>net.kyori:option</exclude>
+                                    <exclude>net.kyori:examination-api</exclude>
+                                    <exclude>net.kyori:examination-string</exclude>
                                 </excludes>
                             </artifactSet>
                             <relocations>
@@ -381,6 +434,53 @@
                                 <relocation>
                                     <pattern>com.github.benmanes.caffeine</pattern>
                                     <shadedPattern>net.rafalohaki.veloauth.libs.caffeine</shadedPattern>
+                                </relocation>
+                                <!--
+                                  MCProtocolLib relocations. The library + its non-Velocity-provided
+                                  transitives are bundled inside the VeloAuth jar so the per-plugin
+                                  classloader never sees conflicts with another plugin (e.g. Geyser)
+                                  that also ships MCProtocolLib. Netty / Adventure / slf4j are
+                                  excluded above because Velocity already provides them.
+                                  Transitive package names verified via mvn dependency:tree:
+                                    org.cloudburstmc.nbt        (NBT library)
+                                    org.cloudburstmc.math       (JOML-like math, NOT org.joml)
+                                    com.nukkitx.fastutil        (split into 3 JARs)
+                                    net.raphimc.MinecraftAuth   (auth lib)
+                                    net.lenni0451.commons       (httpclient + gson helpers)
+                                -->
+                                <relocation>
+                                    <pattern>org.geysermc.mcprotocollib</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.mcprotocollib</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.cloudburstmc.nbt</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.nbt</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.cloudburstmc.math</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.cbmath</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.nukkitx.fastutil</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.fastutil</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>net.raphimc.minecraftauth</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.minecraftauth</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>net.lenni0451.commons</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.lenni0451</shadedPattern>
+                                </relocation>
+                                <!--
+                                  Kyori adventure-text-serializer-json-legacy-impl: 2 klasy (NBTLegoryHoverEventSerializer
+                                  + impl) których MCProtocolLib potrzebuje w runtime. Velocity nie wystawia ich
+                                  w tej samej wersji (4.25.0 vs 4.26.1 api), więc relocate'ujemy zamiast exclude.
+                                  Tylko ten konkretny subpakiet — reszta kyori jest wykluczona (provided przez Velocity).
+                                -->
+                                <relocation>
+                                    <pattern>net.kyori.adventure.text.serializer.json.legacyimpl</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.kyori.json.legacyimpl</shadedPattern>
                                 </relocation>
                             </relocations>
                             <transformers>
