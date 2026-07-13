@@ -68,17 +68,10 @@ public class PostLoginHandler {
     /**
      * Handles offline player post-login (authorization check or auth server transfer).
      *
-     * <p>If the player is still authorized in the cache but their session has expired
-     * (TTL timeout, or an IP/nickname mismatch evicted the {@code activeSessions} entry
-     * while the {@code authorizedPlayers} entry survived), the session is restarted here.
-     * Without this, the player would be deadlocked: {@code ServerPreConnectEvent} requires
-     * BOTH authorization and an active session, but {@code /login} would reply
-     * "already logged in" because it checks authorization alone.
-     *
-     * <p>Security note: restarting the session is safe because {@code isPlayerAuthorized}
-     * already validates the IP via {@code CachedAuthUser.matchesIp}. An attacker would need
-     * to already hold a matching authorized-IP cache entry — at which point they have
-     * effectively already authenticated.
+     * <p>An authorization cache entry never renews an expired session. Session TTL is a
+     * security boundary: once it expires the player must authenticate again. LoginCommand
+     * checks both authorization and active-session state, so this no longer causes the old
+     * "already logged in" deadlock.
      *
      * @param player   The offline player
      * @param playerIp Player's IP address
@@ -94,11 +87,9 @@ public class PostLoginHandler {
             // ServerPreConnectEvent will redirect to auth server automatically
             return;
         }
-        if (!authCache.hasActiveSession(uuid, nickname, playerIp)) {
-            authCache.startSession(uuid, nickname, playerIp);
-            if (logger.isDebugEnabled()) {
-                logger.debug("Re-started expired session for authorized player {}", nickname);
-            }
+        if (!authCache.hasActiveSession(uuid, nickname, playerIp) && logger.isDebugEnabled()) {
+            logger.debug("Session expired for authorized player {} - password authentication required",
+                    nickname);
         }
     }
 

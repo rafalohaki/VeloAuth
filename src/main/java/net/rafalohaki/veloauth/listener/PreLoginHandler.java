@@ -9,6 +9,7 @@ import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.premium.PremiumResolution;
 import net.rafalohaki.veloauth.premium.PremiumResolverService;
+import net.rafalohaki.veloauth.util.FloodgateDetector;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
@@ -70,7 +71,7 @@ public class PreLoginHandler {
             return false;
         }
 
-        String validatedUsername = stripConfiguredFloodgatePrefix(username);
+        String validatedUsername = stripFloodgatePrefix(username);
 
         // Minecraft username limit: 3-16 characters
         if (validatedUsername.length() < 3 || validatedUsername.length() > 16) {
@@ -88,12 +89,16 @@ public class PreLoginHandler {
         return true;
     }
 
-    private String stripConfiguredFloodgatePrefix(String username) {
+    private String stripFloodgatePrefix(String username) {
         if (!settings.isFloodgateIntegrationEnabled()) {
             return username;
         }
 
-        String prefix = settings.getFloodgateUsernamePrefix();
+        // The running Floodgate instance is authoritative. The configured value remains a
+        // compatibility fallback for startup and for deployments where the optional API cannot
+        // be reached through the plugin classloader.
+        String prefix = FloodgateDetector.getPlayerPrefix()
+                .orElse(settings.getFloodgateUsernamePrefix());
         if (prefix.isEmpty() || !username.startsWith(prefix)) {
             return username;
         }
@@ -124,6 +129,62 @@ public class PreLoginHandler {
      * @return CompletableFuture with PremiumResolutionResult (may be null on UNKNOWN/API failure)
      */
     public CompletableFuture<PremiumResolutionResult> resolvePremiumStatusAsync(String username) {
+        CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> authLookup =
+                databaseManager.findPlayerByNickname(username);
+        if (authLookup == null) {
+            logger.error(SECURITY_MARKER,
+                    "AUTH lookup did not return a future for {} - denying login", username);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return authLookup
+                .thenCompose(dbResult -> resolveAfterAuthoritativeAuthLookup(username, dbResult))
+                .exceptionally(throwable -> {
+                    logger.warn(SECURITY_MARKER, "Premium resolution failed for {} - denying login: {}",
+                            username, describeThrowable(throwable));
+                    return null;
+                });
+    }
+
+    private CompletableFuture<PremiumResolutionResult> resolveAfterAuthoritativeAuthLookup(
+            String username, DatabaseManager.DbResult<RegisteredPlayer> dbResult) {
+        if (dbResult == null || dbResult.isDatabaseError()) {
+            logger.error(SECURITY_MARKER,
+                    "Cannot read authoritative AUTH premium state for {} - denying login", username);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        RegisteredPlayer authPlayer = dbResult.getValue();
+        if (databaseManager.isPlayerPremiumRuntime(authPlayer)) {
+            UUID premiumUuid = parsePremiumUuid(authPlayer);
+            if (premiumUuid != null) {
+                authCache.addPremiumPlayer(username, premiumUuid);
+            }
+            if (logger.isDebugEnabled()) {
+                logger.debug("Authoritative AUTH premium hit for {} (verified UUID stored: {})",
+                        username, premiumUuid != null);
+            }
+            return CompletableFuture.completedFuture(new PremiumResolutionResult(true, premiumUuid));
+        }
+
+        return resolveFromMemoryOrApi(username);
+    }
+
+    private UUID parsePremiumUuid(RegisteredPlayer player) {
+        String value = player.getPremiumUuid();
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException e) {
+            logger.error(SECURITY_MARKER,
+                    "Malformed PREMIUMUUID in authoritative AUTH row for {}", player.getNickname());
+            return null;
+        }
+    }
+
+    private CompletableFuture<PremiumResolutionResult> resolveFromMemoryOrApi(String username) {
         PremiumCacheEntry cachedStatus = authCache.getPremiumStatus(username);
         if (cachedStatus != null) {
             logger.debug("Premium cache hit for {} -> {} (age: {}ms, TTL: {}ms)",
@@ -140,12 +201,6 @@ public class PreLoginHandler {
         // Cache miss — async resolution (does NOT block Netty IO thread)
         return CompletableFuture.supplyAsync(() -> premiumResolverService.resolve(username),
                         VirtualThreadExecutorProvider.getVirtualExecutor())
-                .exceptionally(throwable -> {
-                    logger.warn(SECURITY_MARKER, "Premium resolution failed for {} - denying login: {}",
-                            username, describeThrowable(throwable));
-                    return PremiumResolution.unknown("VeloAuth-Error",
-                            "Exception during premium resolution: " + describeThrowable(throwable));
-                })
                 .thenApply(resolution -> cacheFromResolution(username, resolution));
     }
 

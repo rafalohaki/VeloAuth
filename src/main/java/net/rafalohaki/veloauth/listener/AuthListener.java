@@ -6,8 +6,10 @@ import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
+import com.velocitypowered.api.event.player.GameProfileRequestEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
+import com.velocitypowered.api.proxy.InboundConnection;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import static com.velocitypowered.api.event.ResultedEvent.ComponentResult;
@@ -69,11 +71,18 @@ public class AuthListener {
     // Markery SLF4J dla kategoryzowanego logowania
     private static final Marker AUTH_MARKER = MarkerFactory.getMarker("AUTH");
     private static final Marker SECURITY_MARKER = MarkerFactory.getMarker("SECURITY");
+    private static final Marker PREMIUM_MARKER = MarkerFactory.getMarker("PREMIUM");
 
     // Guard against duplicate concurrent PreLogin events from the same (username|ip) pair.
     // Caffeine-bounded so a flood of malformed PreLogins cannot grow this unbounded — TTL
     // covers Velocity's own PreLogin timeout (~30 s); size cap prevents memory pressure.
     private final Cache<String, Boolean> pendingLogins = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(Duration.ofSeconds(30))
+            .build();
+
+    /** Fail-secure hand-off from GameProfileRequestEvent to LoginEvent. */
+    private final Cache<String, Boolean> rejectedProfileBindings = Caffeine.newBuilder()
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofSeconds(30))
             .build();
@@ -150,10 +159,18 @@ public class AuthListener {
         return "UUID mismatch";
     }
 
-    private boolean isBedrockPlayer(Player player) {
+    private boolean isFloodgatePlayer(Player player) {
         return settings.isFloodgateIntegrationEnabled()
-                && settings.isFloodgateBypassAuthServerEnabled()
                 && FloodgateDetector.isBedrockPlayer(player.getUniqueId());
+    }
+
+    private boolean shouldBypassAuthServer(Player player) {
+        return settings.isFloodgateBypassAuthServerEnabled() && isFloodgatePlayer(player);
+    }
+
+    private boolean isFloodgatePreLogin(String username) {
+        return settings.isFloodgateIntegrationEnabled()
+                && FloodgateDetector.isBedrockUsername(username);
     }
 
     /**
@@ -200,6 +217,19 @@ public class AuthListener {
         }
 
         if (!validatePreLoginConditions(event, username)) {
+            pendingLogins.invalidate(pendingLoginKey);
+            return null;
+        }
+
+        // Floodgate has already authenticated the Bedrock connection and registered it in its
+        // live API during the encrypted handshake. Force offline mode before premium resolution,
+        // especially for linked accounts whose Java username may exist in Mojang. This check does
+        // not grant backend access; routing still requires UUID confirmation from Floodgate.
+        if (isFloodgatePreLogin(username)) {
+            logger.info(AUTH_MARKER,
+                    "Floodgate player {} detected during pre-login - skipping Mojang resolution",
+                    username);
+            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
             pendingLogins.invalidate(pendingLoginKey);
             return null;
         }
@@ -314,7 +344,7 @@ public class AuthListener {
             return CompletableFuture.completedFuture(null);
         }
 
-        return databaseManager.findPlayerByUuidOrNickname(username, result.premiumUuid())
+        return databaseManager.findPlayerByNicknameOrPremiumUuidReadOnly(username, result.premiumUuid())
                 .thenAccept(dbResult -> applyPremiumDetectionResult(event, username, result, dbResult));
     }
 
@@ -397,6 +427,55 @@ public class AuthListener {
         event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
     }
 
+    /**
+     * Applies the UUID compatibility contract after Mojang has verified the profile.
+     * Resolver results from PreLogin are deliberately not trusted for persistence or
+     * nickname migration; this event carries the session-server authenticated identity.
+     */
+    @Subscribe(priority = Short.MAX_VALUE)
+    public EventTask onGameProfileRequest(GameProfileRequestEvent event) {
+        if (!settings.isPremiumCheckEnabled() || !event.isOnlineMode()) {
+            return null;
+        }
+
+        UUID verifiedPremiumUuid = event.getOriginalProfile().getId();
+        if (verifiedPremiumUuid == null || isFloodgatePreLogin(event.getUsername())
+                || isBedrockProfile(verifiedPremiumUuid)) {
+            return null;
+        }
+
+        String bindingKey = profileBindingKey(event.getUsername(), event.getConnection());
+        CompletableFuture<Void> reconciliation = databaseManager
+                .reconcileVerifiedPremiumProfile(event.getUsername(), verifiedPremiumUuid)
+                .handle((dbResult, throwable) -> {
+                    if (throwable != null || dbResult == null || dbResult.isDatabaseError()
+                            || dbResult.getValue() == null) {
+                        rejectedProfileBindings.put(bindingKey, Boolean.TRUE);
+                        logger.error(PREMIUM_MARKER,
+                                "Unable to bind Mojang-verified profile for {} - login will be denied",
+                                event.getUsername(), throwable);
+                        return null;
+                    }
+
+                    DatabaseManager.PremiumProfileBinding binding = dbResult.getValue();
+                    authCache.addPremiumPlayer(event.getUsername(), binding.verifiedPremiumUuid());
+                    event.setGameProfile(event.getOriginalProfile().withId(binding.backendUuid()));
+                    rejectedProfileBindings.invalidate(bindingKey);
+                    return null;
+                });
+        return EventTask.resumeWhenComplete(reconciliation);
+    }
+
+    private boolean isBedrockProfile(UUID profileUuid) {
+        return settings.isFloodgateIntegrationEnabled()
+                && FloodgateDetector.isBedrockPlayer(profileUuid);
+    }
+
+    private String profileBindingKey(String username, InboundConnection connection) {
+        SocketAddress remoteAddress = connection != null ? connection.getRemoteAddress() : null;
+        return username.toLowerCase(Locale.ROOT) + '|' + remoteAddress;
+    }
+
 
 
     /**
@@ -423,6 +502,17 @@ public class AuthListener {
             event.setResult(ComponentResult.denied(
                 Component.text(msg,
                     NamedTextColor.RED)));
+            return;
+        }
+
+        String profileBindingKey = profileBindingKey(playerName, player);
+        if (rejectedProfileBindings.getIfPresent(profileBindingKey) != null) {
+            rejectedProfileBindings.invalidate(profileBindingKey);
+            logger.warn(SECURITY_MARKER,
+                    "Denying {} because the Mojang profile could not be safely bound to AUTH.UUID",
+                    playerName);
+            event.setResult(ComponentResult.denied(
+                    Component.text(messages.get("connection.error.database"), NamedTextColor.RED)));
             return;
         }
 
@@ -453,6 +543,8 @@ public class AuthListener {
     @Subscribe(priority = 0) // NORMAL priority
     public void onDisconnect(DisconnectEvent event) {
         Player player = event.getPlayer();
+
+        rejectedProfileBindings.invalidate(profileBindingKey(player.getUsername(), player));
 
         // ✅ SESJE TRWAŁE: Nie kończ sesji przy rozłączeniu
         // Sesje powinny być trwałe dla autoryzowanych graczy offline
@@ -584,7 +676,7 @@ public class AuthListener {
             // Floodgate already authenticated the player via Xbox Live during the handshake
             // phase, before this event fires. Redirecting to limbo causes
             // ClientboundLevelChunkWithLightPacket translation failures in Geyser.
-            if (isBedrockPlayer(player)) {
+            if (shouldBypassAuthServer(player)) {
                 logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
                         player.getUsername(), targetServerName);
                 return true;
@@ -639,7 +731,7 @@ public class AuthListener {
     }
 
     private CompletableFuture<Void> verifyBackendConnectionAsync(ServerPreConnectEvent event, Player player, String targetServerName) {
-        if (isBedrockPlayer(player)) {
+        if (shouldBypassAuthServer(player)) {
             logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
                     player.getUsername(), targetServerName);
             return CompletableFuture.completedFuture(null);

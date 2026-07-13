@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -29,8 +30,8 @@ import static org.mockito.Mockito.when;
  * <p>Invariants under test:
  * <ul>
  *   <li>isActive() respects the TTL window and the {@code 0 = disabled} escape hatch</li>
- *   <li>clearIfPresent() mutates the player, persists fire-and-forget, and is a no-op when
- *       the player is null or not in conflict mode</li>
+ *   <li>clearIfPresent() reports persistence, retries once, and restores the flag after
+ *       repeated failure</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -81,6 +82,13 @@ class ConflictModeServiceTest {
     }
 
     @Test
+    void isActive_ConflictTimestampInFuture_ReturnsFalse() {
+        RegisteredPlayer player = inConflict(true, System.currentTimeMillis() + 60_000L);
+        assertFalse(service.isActive(player),
+                "A future timestamp must not extend the conflict bypass window");
+    }
+
+    @Test
     void isActive_ConflictTimestampZeroTtlEnabled_ReturnsFalse() {
         // Legacy row written before CONFLICT_TIMESTAMP existed. Safer to treat as expired
         // (forces a full verification) than to allow forever.
@@ -106,7 +114,7 @@ class ConflictModeServiceTest {
     void clearIfPresent_ConflictSet_ClearsFieldsAndPersists() {
         RegisteredPlayer player = inConflict(true, System.currentTimeMillis());
 
-        service.clearIfPresent(player, "login");
+        assertTrue(service.clearIfPresent(player, "login").join());
 
         assertFalse(player.getConflictMode(), "Conflict flag must be cleared in memory");
         assertEquals(0L, player.getConflictTimestamp(), "Conflict timestamp must be reset");
@@ -117,32 +125,46 @@ class ConflictModeServiceTest {
     void clearIfPresent_NotInConflictMode_NoOpNoSave() {
         RegisteredPlayer player = inConflict(false, 0L);
 
-        service.clearIfPresent(player, "login");
+        assertTrue(service.clearIfPresent(player, "login").join());
 
         verify(databaseManager, never()).savePlayer(any(RegisteredPlayer.class));
     }
 
     @Test
     void clearIfPresent_NullPlayer_NoOpNoSave() {
-        service.clearIfPresent(null, "login");
+        assertTrue(service.clearIfPresent(null, "login").join());
 
         verify(databaseManager, never()).savePlayer(any(RegisteredPlayer.class));
     }
 
     @Test
-    void clearIfPresent_SaveFails_LoggedButInMemoryStateStaysCleared() {
-        // Fire-and-forget save failure must not roll back the in-memory clear: the player
-        // object is already mutated, and the next savePlayer call (e.g. login date update)
-        // will retry the persistence. The exception is swallowed by .exceptionally().
+    void clearIfPresent_SaveFailsTwice_RestoresConflictState() {
         RegisteredPlayer player = inConflict(true, System.currentTimeMillis());
+        long originalTimestamp = player.getConflictTimestamp();
         when(databaseManager.savePlayer(any(RegisteredPlayer.class)))
                 .thenReturn(CompletableFuture.failedFuture(new RuntimeException("connection lost")));
 
-        service.clearIfPresent(player, "login");
+        boolean cleared = service.clearIfPresent(player, "login").join();
 
-        assertFalse(player.getConflictMode(),
-                "In-memory clear must persist even if the save future fails");
-        verify(databaseManager).savePlayer(player);
+        assertFalse(cleared);
+        assertTrue(player.getConflictMode(), "Failed persistence must restore the security flag");
+        assertEquals(originalTimestamp, player.getConflictTimestamp());
+        verify(databaseManager, times(2)).savePlayer(player);
+    }
+
+    @Test
+    void clearIfPresent_DbResultErrorThenSuccess_RetriesAndReportsSuccess() {
+        RegisteredPlayer player = inConflict(true, System.currentTimeMillis());
+        when(databaseManager.savePlayer(any(RegisteredPlayer.class)))
+                .thenReturn(CompletableFuture.completedFuture(DbResult.databaseError("database.error")))
+                .thenReturn(CompletableFuture.completedFuture(DbResult.success(true)));
+
+        boolean cleared = service.clearIfPresent(player, "login").join();
+
+        assertTrue(cleared);
+        assertFalse(player.getConflictMode());
+        assertEquals(0L, player.getConflictTimestamp());
+        verify(databaseManager, times(2)).savePlayer(player);
     }
 
     // ==================== helpers ====================

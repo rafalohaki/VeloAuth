@@ -1,13 +1,16 @@
 package net.rafalohaki.veloauth.listener;
 
 import com.velocitypowered.api.event.EventTask;
+import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
+import com.velocitypowered.api.event.player.GameProfileRequestEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.proxy.InboundConnection;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
+import com.velocitypowered.api.util.GameProfile;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
@@ -17,6 +20,8 @@ import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import org.bstats.velocity.Metrics;
+import org.geysermc.floodgate.api.FloodgateApi;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,7 +35,9 @@ import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -85,6 +92,7 @@ class AuthListenerTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        FloodgateApi.clear();
         messages = new Messages();
         messages.setLanguage("en");
 
@@ -96,7 +104,7 @@ class AuthListenerTest {
         when(settings.getAuthServerName()).thenReturn("auth");
         when(preLoginHandler.isValidUsername(anyString())).thenReturn(true);
         when(preLoginHandler.isBruteForceBlocked(nullable(InetAddress.class), anyString())).thenReturn(false);
-        when(databaseManager.findPlayerByUuidOrNickname(anyString(), nullable(UUID.class)))
+        when(databaseManager.findPlayerByNicknameOrPremiumUuidReadOnly(anyString(), nullable(UUID.class)))
                 .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
 
         Metrics.Factory metricsFactory = org.mockito.Mockito.mock(Metrics.Factory.class);
@@ -113,6 +121,11 @@ class AuthListenerTest {
                 databaseManager,
                 messages
         );
+    }
+
+    @AfterEach
+    void tearDown() {
+        FloodgateApi.clear();
     }
 
     @Test
@@ -191,6 +204,26 @@ class AuthListenerTest {
     }
 
     @Test
+    void onPreLogin_linkedFloodgatePlayer_skipsPremiumResolverAndForcesOfflineMode() {
+        String linkedUsername = "LinkedJava";
+        UUID floodgateUuid = UUID.randomUUID();
+        FloodgateApi.install(".", Set.of(floodgateUuid), List.of(
+                new FloodgateApi.PlayerView(linkedUsername, ".BedrockUser")));
+        when(settings.isFloodgateIntegrationEnabled()).thenReturn(true);
+
+        PreLoginEvent event = new PreLoginEvent(createConnection("192.0.2.25"), linkedUsername);
+
+        EventTask task = authListener.onPreLogin(event);
+
+        assertNull(task, "A Floodgate registry hit should use the synchronous pre-login path");
+        assertTrue(event.getResult().isForceOfflineMode(),
+                "Linked Bedrock accounts must not be sent through Mojang's Java handshake");
+        verify(preLoginHandler, never()).resolvePremiumStatusAsync(anyString());
+        verify(databaseManager, never())
+                .findPlayerByNicknameOrPremiumUuidReadOnly(anyString(), nullable(UUID.class));
+    }
+
+    @Test
     void testOnServerPreConnect_firstConnectionShouldUsePreviousServerInsteadOfCurrentServer() {
         UUID playerUuid = UUID.randomUUID();
         Player player = org.mockito.Mockito.mock(Player.class);
@@ -232,6 +265,55 @@ class AuthListenerTest {
         assertTrue(event.getResult().isAllowed(), "Initial auth-server target should be allowed");
         assertSame(authServer, event.getResult().getServer().orElse(null));
         verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+    }
+
+    @Test
+    void onServerPreConnect_floodgateConfirmedUuid_bypassesAuthServer() {
+        UUID bedrockUuid = UUID.randomUUID();
+        FloodgateApi.install(".", Set.of(bedrockUuid), List.of());
+        when(settings.isFloodgateIntegrationEnabled()).thenReturn(true);
+        when(settings.isFloodgateBypassAuthServerEnabled()).thenReturn(true);
+
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUsername()).thenReturn(".BedrockUser");
+        when(player.getUniqueId()).thenReturn(bedrockUuid);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+
+        assertNull(task);
+        assertSame(backendServer, event.getResult().getServer().orElse(null));
+        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+    }
+
+    @Test
+    void onServerPreConnect_prefixOnlyWithoutFloodgateUuid_doesNotBypassAuthServer() {
+        UUID unverifiedUuid = UUID.randomUUID();
+        FloodgateApi.install(".", Set.of(), List.of());
+        when(settings.isFloodgateIntegrationEnabled()).thenReturn(true);
+        when(settings.isFloodgateBypassAuthServerEnabled()).thenReturn(true);
+
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUsername()).thenReturn(".Pretender");
+        when(player.getUniqueId()).thenReturn(unverifiedUuid);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+
+        assertNull(task);
+        assertSame(authServer, event.getResult().getServer().orElse(null),
+                "A username prefix alone must never grant Bedrock auth bypass");
+        verify(connectionManager).setForcedHostTarget(unverifiedUuid, "backend");
     }
 
     @Test
@@ -281,7 +363,7 @@ class AuthListenerTest {
         when(preLoginHandler.resolvePremiumStatusAsync(username))
                 .thenReturn(CompletableFuture.completedFuture(
                         new PreLoginHandler.PremiumResolutionResult(true, premiumUuid)));
-        when(databaseManager.findPlayerByUuidOrNickname(username, premiumUuid))
+        when(databaseManager.findPlayerByNicknameOrPremiumUuidReadOnly(username, premiumUuid))
                 .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
 
         PreLoginEvent event = new PreLoginEvent(createConnection("192.0.2.30"), username);
@@ -302,7 +384,7 @@ class AuthListenerTest {
         when(preLoginHandler.resolvePremiumStatusAsync(username))
                 .thenReturn(CompletableFuture.completedFuture(
                         new PreLoginHandler.PremiumResolutionResult(true, premiumUuid)));
-        when(databaseManager.findPlayerByUuidOrNickname(username, premiumUuid))
+        when(databaseManager.findPlayerByNicknameOrPremiumUuidReadOnly(username, premiumUuid))
                 .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
 
         PreLoginEvent event = new PreLoginEvent(createConnection("192.0.2.31"), username);
@@ -328,7 +410,7 @@ class AuthListenerTest {
         storedPlayer.setNickname(username);
         storedPlayer.setUuid(premiumUuid.toString());
         storedPlayer.setPremiumUuid(premiumUuid.toString());
-        when(databaseManager.findPlayerByUuidOrNickname(username, premiumUuid))
+        when(databaseManager.findPlayerByNicknameOrPremiumUuidReadOnly(username, premiumUuid))
                 .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(storedPlayer)));
         when(databaseManager.isPlayerPremiumRuntime(storedPlayer)).thenReturn(true);
         when(preLoginHandler.isNicknameConflict(storedPlayer, true, true, premiumUuid)).thenReturn(false);
@@ -341,6 +423,74 @@ class AuthListenerTest {
         awaitEventTask(task);
         assertTrue(event.getResult().isOnlineModeAllowed(),
                 "SECURITY: returning premium owner with matching DB record must NEVER skip Mojang handshake even when the bypass flag is on");
+    }
+
+    @Test
+    void onGameProfileRequest_legacyBindingShouldExposeHistoricalUuidAndCacheVerifiedUuid() {
+        String username = "LegacyPremium";
+        UUID verifiedPremiumUuid = UUID.randomUUID();
+        UUID historicalBackendUuid = UUID.randomUUID();
+        InboundConnection connection = createConnection("192.0.2.40");
+        GameProfile originalProfile = new GameProfile(verifiedPremiumUuid, username, java.util.List.of());
+        when(databaseManager.reconcileVerifiedPremiumProfile(username, verifiedPremiumUuid))
+                .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(
+                        new DatabaseManager.PremiumProfileBinding(
+                                historicalBackendUuid, verifiedPremiumUuid, true))));
+        GameProfileRequestEvent event = new GameProfileRequestEvent(connection, originalProfile, true);
+
+        EventTask task = authListener.onGameProfileRequest(event);
+
+        assertNotNull(task);
+        awaitEventTask(task);
+        assertEquals(historicalBackendUuid, event.getGameProfile().getId());
+        assertEquals(originalProfile.getProperties(), event.getGameProfile().getProperties(),
+                "UUID rewrite must retain Mojang-signed profile properties");
+        verify(authCache).addPremiumPlayer(username, verifiedPremiumUuid);
+    }
+
+    @Test
+    void onGameProfileRequest_databaseFailureShouldDenyAtLoginEvent() {
+        String username = "UnsafeBinding";
+        UUID verifiedPremiumUuid = UUID.randomUUID();
+        InetSocketAddress address = new InetSocketAddress("192.0.2.41", 25565);
+        InboundConnection connection = org.mockito.Mockito.mock(InboundConnection.class);
+        when(connection.getRemoteAddress()).thenReturn(address);
+        GameProfile originalProfile = new GameProfile(verifiedPremiumUuid, username, java.util.List.of());
+        when(databaseManager.reconcileVerifiedPremiumProfile(username, verifiedPremiumUuid))
+                .thenReturn(CompletableFuture.completedFuture(
+                        DatabaseManager.DbResult.databaseError("database.error")));
+        GameProfileRequestEvent profileEvent = new GameProfileRequestEvent(connection, originalProfile, true);
+        awaitEventTask(authListener.onGameProfileRequest(profileEvent));
+
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUsername()).thenReturn(username);
+        when(player.getUniqueId()).thenReturn(verifiedPremiumUuid);
+        when(player.getRemoteAddress()).thenReturn(address);
+        LoginEvent loginEvent = new LoginEvent(player, "test-server-id");
+
+        authListener.onLogin(loginEvent);
+
+        assertFalse(loginEvent.getResult().isAllowed(),
+                "A failed UUID binding must never reach PostLogin/backend routing");
+    }
+
+    @Test
+    void onGameProfileRequest_linkedFloodgateUsernameWithBypassDisabled_stillSkipsMojangBinding() {
+        String username = "LinkedJava";
+        UUID floodgateUuid = UUID.randomUUID();
+        UUID originalProfileUuid = UUID.randomUUID();
+        FloodgateApi.install(".", Set.of(floodgateUuid), List.of(
+                new FloodgateApi.PlayerView(username, ".BedrockUser")));
+        when(settings.isFloodgateIntegrationEnabled()).thenReturn(true);
+        when(settings.isFloodgateBypassAuthServerEnabled()).thenReturn(false);
+        GameProfile originalProfile = new GameProfile(originalProfileUuid, username, List.of());
+        GameProfileRequestEvent event = new GameProfileRequestEvent(
+                createConnection("192.0.2.43"), originalProfile, true);
+
+        EventTask task = authListener.onGameProfileRequest(event);
+
+        assertNull(task, "Floodgate identity must never be reconciled as a Mojang premium profile");
+        verify(databaseManager, never()).reconcileVerifiedPremiumProfile(anyString(), any(UUID.class));
     }
 
     private InboundConnection createConnection(String address) {

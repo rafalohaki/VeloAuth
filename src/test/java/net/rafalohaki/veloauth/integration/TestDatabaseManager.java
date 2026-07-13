@@ -21,7 +21,7 @@ class TestDatabaseManager extends DatabaseManager {
     private final Map<String, CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>>> findResults = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<DatabaseManager.DbResult<Boolean>>> premiumResults = new ConcurrentHashMap<>();
     private CompletableFuture<Boolean> initResult = CompletableFuture.completedFuture(true);
-    private CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> uuidOrNicknameResult;
+    private CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> nicknameOrPremiumUuidResult;
 
     TestDatabaseManager(DatabaseConfig config, Messages messages) {
         super(config, messages);
@@ -76,16 +76,16 @@ class TestDatabaseManager extends DatabaseManager {
         return CompletableFuture.completedFuture(DatabaseManager.DbResult.success(true));
     }
 
-    void setUuidOrNicknameResult(CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> result) {
-        this.uuidOrNicknameResult = result;
+    void setNicknameOrPremiumUuidResult(CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> result) {
+        this.nicknameOrPremiumUuidResult = result;
     }
 
     @Override
-    public CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> findPlayerByUuidOrNickname(
+    public CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> findPlayerByNicknameOrPremiumUuidReadOnly(
             String nickname, UUID premiumUuid) {
-        if (uuidOrNicknameResult != null) {
-            return uuidOrNicknameResult;
+        if (nicknameOrPremiumUuidResult != null) {
+            return nicknameOrPremiumUuidResult;
         }
-        return super.findPlayerByUuidOrNickname(nickname, premiumUuid);
+        return super.findPlayerByNicknameOrPremiumUuidReadOnly(nickname, premiumUuid);
     }
 }

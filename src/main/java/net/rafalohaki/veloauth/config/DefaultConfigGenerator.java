@@ -206,8 +206,9 @@ final class DefaultConfigGenerator {
                   #
                   # true (default): VeloAuth queries Mojang / Ashcon for every new nickname and
                   # forces online mode (Mojang session-server auth) for premium nicks. Premium
-                  # owners get their real premium UUID; cracked clients on premium nicks are
-                  # rejected with "You are not logged into your Minecraft account.".
+                  # owners get their Mojang UUID, except migrated LimboAuth /premium accounts,
+                  # which keep their established backend UUID; cracked clients on premium nicks
+                  # are rejected with "You are not logged into your Minecraft account.".
                   #
                   # false: zero HTTP traffic to Mojang/Ashcon, zero writes to PREMIUM_UUIDS,
                   # every connection is forced offline mode. All players — including existing
@@ -234,7 +235,7 @@ final class DefaultConfigGenerator {
                   # fallback offline" mode (see PaperMC/Velocity#1590, closed), so VeloAuth
                   # cannot give different UUIDs to a premium owner vs. a cracked imposter on
                   # the same nickname — it must pick one mode for the whole connection. Existing
-                  # premium owners with PREMIUMUUID already in AUTH keep their premium UUID.
+                  # premium owners already in AUTH keep their established backend UUID identity.
                   #
                   # Enable only if your server explicitly accepts cracked players on premium
                   # nicks and you accept that trade-off.
@@ -272,9 +273,10 @@ final class DefaultConfigGenerator {
                 floodgate:
                   # Enable Floodgate-specific Bedrock handling in VeloAuth
                   enabled: false
-                  # Match Floodgate's username-prefix; use "" if you removed the prefix
+                  # Fallback prefix used if Floodgate's live API is temporarily unavailable.
+                  # When the API is ready, VeloAuth reads the effective prefix directly from it.
                   username-prefix: "."
-                  # Bedrock players authenticated by Floodgate can skip auth server
+                  # Only UUIDs confirmed by Floodgate can skip the auth server.
                   bypass-auth-server: true""";
 
     private static final String ALERTS_SECTION = """

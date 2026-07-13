@@ -66,6 +66,17 @@ class DatabaseManagerTest {
     }
 
     @Test
+    void isPremium_legacyAuthRowShouldBeAuthoritativeWithoutPremiumCacheEntry() throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+        insertRawPlayer("LegacyAuthPremium", null, null);
+
+        DatabaseManager.DbResult<Boolean> result = manager.isPremium("LegacyAuthPremium").join();
+
+        assertFalse(result.isDatabaseError());
+        assertEquals(Boolean.TRUE, result.getValue());
+    }
+
+    @Test
     void findPlayersInConflictMode_shouldReturnPersistedConflictPlayers() {
         assertTrue(manager.initialize().join(), "Database should initialize");
 
@@ -175,20 +186,18 @@ class DatabaseManagerTest {
     }
 
     @Test
-    void findPlayerByUuidOrNickname_shouldAtomicallyMigrateNicknameToNewLowercaseId() throws Exception {
+    void reconcileVerifiedPremiumProfile_shouldAtomicallyMigrateNicknameToNewLowercaseId() throws Exception {
         assertTrue(manager.initialize().join(), "Database should initialize");
 
         UUID premiumUuid = UUID.randomUUID();
         insertRawPlayer("OldNick", null, premiumUuid.toString());
 
-        DatabaseManager.DbResult<RegisteredPlayer> migrated =
-                manager.findPlayerByUuidOrNickname("NewNick", premiumUuid).join();
+        DatabaseManager.DbResult<DatabaseManager.PremiumProfileBinding> migrated =
+                manager.reconcileVerifiedPremiumProfile("NewNick", premiumUuid).join();
 
         assertFalse(migrated.isDatabaseError(), "Migration must not surface a DB error");
-        assertNotNull(migrated.getValue(), "Player should be located via premium UUID");
-        RegisteredPlayer post = migrated.getValue();
-        assertEquals("NewNick", post.getNickname(), "Display nickname should be updated");
-        assertEquals("newnick", post.getLowercaseNickname(), "Lowercase id should be updated");
+        assertNotNull(migrated.getValue(), "Player should be located via verified premium UUID");
+        assertEquals(premiumUuid, migrated.getValue().backendUuid());
 
         // Post-commit state is consistent — both columns reflect the new nickname.
         DatabaseManager.DbResult<RegisteredPlayer> byNew = manager.findPlayerByNickname("NewNick").join();
@@ -200,6 +209,167 @@ class DatabaseManagerTest {
         DatabaseManager.DbResult<RegisteredPlayer> byOld = manager.findPlayerByNickname("OldNick").join();
         assertFalse(byOld.isDatabaseError());
         assertNull(byOld.getValue(), "Old nickname should no longer resolve");
+    }
+
+    @Test
+    void findPlayerByNicknameOrPremiumUuidReadOnly_shouldNotMigrateResolverResult() throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+
+        UUID premiumUuid = UUID.randomUUID();
+        insertRawPlayer("OldVerifiedNick", null, premiumUuid.toString());
+
+        DatabaseManager.DbResult<RegisteredPlayer> lookup = manager
+                .findPlayerByNicknameOrPremiumUuidReadOnly("UnverifiedNewNick", premiumUuid)
+                .join();
+
+        assertFalse(lookup.isDatabaseError());
+        assertNotNull(lookup.getValue());
+        assertEquals("OldVerifiedNick", lookup.getValue().getNickname());
+        assertNotNull(manager.findPlayerByNickname("OldVerifiedNick").join().getValue());
+        assertNull(manager.findPlayerByNickname("UnverifiedNewNick").join().getValue(),
+                "Resolver UUID must not mutate AUTH before Mojang verification");
+    }
+
+    @Test
+    void reconcileVerifiedPremiumProfile_legacyLimboAuthRowShouldPreserveHistoricalUuid() throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+
+        String username = "LegacyPremium";
+        UUID historicalBackendUuid = UUID.nameUUIDFromBytes(
+                ("OfflinePlayer:" + username).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        UUID verifiedPremiumUuid = UUID.randomUUID();
+        insertRawPlayer(username, null, null, historicalBackendUuid);
+
+        DatabaseManager.DbResult<DatabaseManager.PremiumProfileBinding> result = manager
+                .reconcileVerifiedPremiumProfile("LegacyPremium", verifiedPremiumUuid)
+                .join();
+
+        assertFalse(result.isDatabaseError());
+        assertNotNull(result.getValue());
+        assertEquals(historicalBackendUuid, result.getValue().backendUuid());
+        assertEquals(verifiedPremiumUuid, result.getValue().verifiedPremiumUuid());
+        assertTrue(result.getValue().legacyUuidPreserved());
+
+        DatabaseManager.DbResult<RegisteredPlayer> stored = manager
+                .findPlayerByNickname("LegacyPremium")
+                .join();
+        assertFalse(stored.isDatabaseError());
+        assertNotNull(stored.getValue());
+        assertEquals(historicalBackendUuid.toString(), stored.getValue().getUuid());
+        assertEquals(verifiedPremiumUuid.toString(), stored.getValue().getPremiumUuid());
+        assertTrue(stored.getValue().isPreserveUuid());
+
+        DatabaseManager.DbResult<DatabaseManager.PremiumProfileBinding> repeated = manager
+                .reconcileVerifiedPremiumProfile("LegacyPremium", verifiedPremiumUuid)
+                .join();
+        assertFalse(repeated.isDatabaseError());
+        assertNotNull(repeated.getValue());
+        assertEquals(historicalBackendUuid, repeated.getValue().backendUuid(),
+                "Persisted flag must keep UUID stable after PREMIUMUUID backfill");
+    }
+
+    @Test
+    void reconcileVerifiedPremiumProfile_legacyLimboAuthHistoricalPremiumUuidShouldBeReboundOnce()
+            throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+
+        String username = "LegacySavedUuid";
+        UUID historicalBackendUuid = UUID.nameUUIDFromBytes(
+                ("OfflinePlayer:" + username).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        UUID verifiedPremiumUuid = UUID.randomUUID();
+        insertRawPlayer(username, null, historicalBackendUuid.toString(), historicalBackendUuid);
+
+        var result = manager.reconcileVerifiedPremiumProfile(username, verifiedPremiumUuid).join();
+
+        assertFalse(result.isDatabaseError());
+        assertNotNull(result.getValue());
+        assertEquals(historicalBackendUuid, result.getValue().backendUuid());
+        assertEquals(verifiedPremiumUuid, result.getValue().verifiedPremiumUuid());
+        assertTrue(result.getValue().legacyUuidPreserved());
+
+        var stored = manager.findPlayerByNickname(username).join();
+        assertNotNull(stored.getValue());
+        assertEquals(verifiedPremiumUuid.toString(), stored.getValue().getPremiumUuid());
+        assertTrue(stored.getValue().isPreserveUuid());
+
+        UUID differentVerifiedIdentity = UUID.randomUUID();
+        var secondIdentity = manager
+                .reconcileVerifiedPremiumProfile(username, differentVerifiedIdentity)
+                .join();
+        assertTrue(secondIdentity.isDatabaseError(),
+                "After one verified binding, a different Mojang identity must be rejected");
+        var unchanged = manager.findPlayerByNickname(username).join();
+        assertNotNull(unchanged.getValue());
+        assertEquals(verifiedPremiumUuid.toString(), unchanged.getValue().getPremiumUuid());
+    }
+
+    @Test
+    void reconcileVerifiedPremiumProfile_importMarkerWithMatchingUuidShouldClearPreservationFlag()
+            throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+
+        String username = "ImportedStandardPremium";
+        UUID verifiedPremiumUuid = UUID.randomUUID();
+        insertRawPlayer(username, null, verifiedPremiumUuid.toString(), verifiedPremiumUuid);
+        setPreserveUuid(username, true);
+
+        var result = manager.reconcileVerifiedPremiumProfile(username, verifiedPremiumUuid).join();
+
+        assertFalse(result.isDatabaseError());
+        assertNotNull(result.getValue());
+        assertEquals(verifiedPremiumUuid, result.getValue().backendUuid());
+        assertFalse(result.getValue().legacyUuidPreserved());
+        var stored = manager.findPlayerByNickname(username).join();
+        assertNotNull(stored.getValue());
+        assertFalse(stored.getValue().isPreserveUuid(),
+                "A matching imported Mojang UUID needs no long-term compatibility exception");
+    }
+
+    @Test
+    void reconcileVerifiedPremiumProfile_existingVeloAuthRowShouldKeepMojangUuidBehavior() throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+
+        UUID oldStoredUuid = UUID.randomUUID();
+        UUID verifiedPremiumUuid = UUID.randomUUID();
+        insertRawPlayer("ExistingVeloAuth", null, verifiedPremiumUuid.toString(), oldStoredUuid);
+
+        DatabaseManager.DbResult<DatabaseManager.PremiumProfileBinding> result = manager
+                .reconcileVerifiedPremiumProfile("ExistingVeloAuth", verifiedPremiumUuid)
+                .join();
+
+        assertFalse(result.isDatabaseError());
+        assertNotNull(result.getValue());
+        assertEquals(verifiedPremiumUuid, result.getValue().backendUuid());
+        assertFalse(result.getValue().legacyUuidPreserved());
+
+        DatabaseManager.DbResult<RegisteredPlayer> stored = manager
+                .findPlayerByNickname("ExistingVeloAuth")
+                .join();
+        assertNotNull(stored.getValue());
+        assertFalse(stored.getValue().isPreserveUuid(),
+                "Additive migration must not flip existing VeloAuth accounts");
+    }
+
+    @Test
+    void reconcileVerifiedPremiumProfile_storedPremiumIdentityMismatchShouldFailClosed() throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+
+        UUID storedPremiumUuid = UUID.randomUUID();
+        UUID verifiedPremiumUuid = UUID.randomUUID();
+        insertRawPlayer("IdentityMismatch", null, storedPremiumUuid.toString(), UUID.randomUUID());
+
+        DatabaseManager.DbResult<DatabaseManager.PremiumProfileBinding> result = manager
+                .reconcileVerifiedPremiumProfile("IdentityMismatch", verifiedPremiumUuid)
+                .join();
+
+        assertTrue(result.isDatabaseError(), "A verified identity mismatch must deny the login");
+        DatabaseManager.DbResult<RegisteredPlayer> stored = manager
+                .findPlayerByNickname("IdentityMismatch")
+                .join();
+        assertNotNull(stored.getValue());
+        assertEquals(storedPremiumUuid.toString(), stored.getValue().getPremiumUuid(),
+                "Mismatch handling must not overwrite the existing owner identity");
+        assertFalse(stored.getValue().isPreserveUuid());
     }
 
     @Test
@@ -243,6 +413,11 @@ class DatabaseManagerTest {
     }
 
     private void insertRawPlayer(String nickname, String hash, String premiumUuid) throws Exception {
+        insertRawPlayer(nickname, hash, premiumUuid, UUID.randomUUID());
+    }
+
+    private void insertRawPlayer(String nickname, String hash, String premiumUuid, UUID backendUuid)
+            throws Exception {
         try (Connection connection = DriverManager.getConnection(manager.getConfig().getJdbcUrl());
              PreparedStatement statement = connection.prepareStatement(
                       "INSERT INTO AUTH (LOWERCASENICKNAME, NICKNAME, HASH, IP, LOGINIP, UUID, REGDATE, LOGINDATE, PREMIUMUUID, TOTPTOKEN, ISSUEDTIME) "
@@ -252,12 +427,22 @@ class DatabaseManagerTest {
             statement.setString(3, hash);
             statement.setString(4, "127.0.0.1");
             statement.setString(5, "127.0.0.1");
-            statement.setString(6, UUID.randomUUID().toString());
+            statement.setString(6, backendUuid.toString());
             statement.setLong(7, System.currentTimeMillis());
             statement.setLong(8, System.currentTimeMillis());
             statement.setString(9, premiumUuid);
             statement.setString(10, null);
             statement.setLong(11, 0L);
+            statement.executeUpdate();
+        }
+    }
+
+    private void setPreserveUuid(String nickname, boolean preserveUuid) throws Exception {
+        try (Connection connection = DriverManager.getConnection(manager.getConfig().getJdbcUrl());
+             PreparedStatement statement = connection.prepareStatement(
+                     "UPDATE AUTH SET PRESERVE_UUID = ? WHERE LOWERCASENICKNAME = ?")) {
+            statement.setBoolean(1, preserveUuid);
+            statement.setString(2, nickname.toLowerCase(java.util.Locale.ROOT));
             statement.executeUpdate();
         }
     }

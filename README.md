@@ -22,10 +22,10 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - ⚡ **Premium Auto-Login** - Mojang account owners skip authentication automatically
 - 🔄 **Automatic Nickname Change Detection** - Detects when a premium player renames their Mojang account and updates the database record automatically
 - 🛡️ **Secure Offline Auth** - BCrypt password hashing with brute-force protection
-- 📱 **Optional Floodgate Support** - Bedrock players can bypass the auth server when Floodgate integration is enabled
+- 📱 **Optional Floodgate Support** - Bedrock and linked Floodgate accounts are detected before Mojang resolution; only UUIDs confirmed by Floodgate can bypass the auth server
 - 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
 - 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are completely hidden from tab-completion once the player is logged in
-- 🚀 **High Performance** - Three-layer premium resolution cache: in-memory → database → external API, with 24-hour premium status retention
+- 🚀 **High Performance** - Three-layer premium resolution cache: in-memory → database → external API, with configurable positive and negative TTLs
 - 🔐 **Optional 2FA (TOTP)** - Opt-in RFC 6238 second factor compatible with Google Authenticator, Authy, Aegis. See [2FA.md](2FA.md) for the operator + player handbook.
 - 🔄 **Conflict Resolution** - Smart handling of premium/cracked nickname conflicts
 - 📊 **Admin Tools** - Complete conflict management with `/vauth conflicts`
@@ -57,7 +57,7 @@ premium:
   allow-cracked-on-premium-nicks: false
 ```
 
-- **What you get:** premium players auto-login with their real Mojang UUID (no `/login` prompt); cracked players go through `/register` + BCrypt; **premium nicknames are reserved** for their Mojang owners.
+- **What you get:** premium players are verified by Mojang and auto-login (no `/login` prompt); new accounts use their Mojang UUID, while LimboAuth-migrated `/premium` accounts keep their historical backend UUID so existing progress remains attached; cracked players go through `/register` + BCrypt; **premium nicknames are reserved** for their Mojang owners.
 - **What you lose:** cracked clients trying to connect with a premium-looking nickname (e.g. someone else's name) are rejected with *"You are not logged into your Minecraft account."*
 - **Use when:** public server accepting both premium and cracked players, where nickname ownership matters.
 
@@ -80,7 +80,7 @@ premium:
   allow-cracked-on-premium-nicks: true
 ```
 
-- **What you get:** existing premium owners (those already in AUTH with `PREMIUMUUID`) keep their premium UUID and skip `/login`. Cracked clients **can** register a premium-looking nickname if it's not yet in the database.
+- **What you get:** existing premium owners (those already in `AUTH` with `PREMIUMUUID`) keep their established backend UUID identity and skip `/login`. Cracked clients **can** register a premium-looking nickname if it's not yet in the database.
 - **What you lose:** **new premium players connecting for the first time get offline UUIDs permanently** — Velocity's PreLoginEvent has no "try online, fallback offline" mode ([PaperMC/Velocity#1590](https://github.com/PaperMC/Velocity/pull/1590), closed), so VeloAuth must pick one mode per connection. Once a nickname is registered as offline in VeloAuth, the real Mojang owner can no longer take it back automatically — they will hit the nickname-conflict path (`/vauth conflicts`).
 - **Use when:** cracked-first server that wants to accept premium-looking nicknames without kicking anyone, and you accept that new premium owners may lose their premium UUID.
 
@@ -101,7 +101,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release-by-release notes, upgrade instructi
 ## Requirements
 
 - **Java 21 or newer**
-- **Velocity proxy** (API 3.4.0+)
+- **Velocity proxy** (3.5.x; VeloAuth currently targets the 3.5 API line)
 - **Limbo server**: NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or any other
 - **Database**: MySQL, PostgreSQL, H2, or SQLite
 
@@ -247,7 +247,14 @@ floodgate:
   bypass-auth-server: true
 ```
 
-Keep the Floodgate prefix aligned with your proxy-side Floodgate configuration.
+Install Floodgate on the Velocity proxy and set Geyser's `auth-type` to `floodgate` as described in the [official proxy setup guide](https://geysermc.org/wiki/floodgate/setup/proxy-servers/). VeloAuth reads the effective prefix and active player registry from Floodgate's live API. `username-prefix` is retained as a fallback for startup/API-unavailable scenarios; a mismatch is logged and the live Floodgate value wins.
+
+Bedrock handling is deliberately split into two checks:
+
+1. During `PreLoginEvent`, a live Floodgate player (including a linked Java account) is forced into offline mode and never queried against Mojang. This prevents linked Bedrock users from accidentally entering the Java-premium handshake.
+2. Auth-server bypass is granted only after Floodgate confirms the final player UUID. A Java/cracked client cannot obtain bypass merely by copying the configured prefix.
+
+With `bypass-auth-server: false`, Floodgate identities are still kept out of Mojang reconciliation, but they follow the normal VeloAuth auth-server flow. With it enabled, Bedrock players go directly to the forced-host/`try` target selected by Velocity.
 
 ### Discord Webhooks
 
@@ -273,8 +280,8 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 
 | Command | Description | Restrictions |
 |---------|-------------|--------------|
-| `/register <password> <confirm>` | Create new account | Hidden after login. No premium nicknames |
-| `/login <password>` | Login to your account | Hidden after login. Works for all players |
+| `/register <password> <confirm>` | Create new account | Hidden after login. Premium nicknames are blocked in strict mode; permissive mixed mode explicitly allows first registration |
+| `/login <password>` | Login to your account | Available to registered password accounts while they are on the auth server |
 | `/changepassword <old> <new>` | Change your password | Must be logged in |
 | `/2fa setup` | Enroll a TOTP authenticator (see [2FA.md](2FA.md)) | Must be logged in. Disabled when `two-factor.enabled: false` |
 | `/2fa verify <code>` | Confirm enrollment OR pass 2FA at login | — |
@@ -297,10 +304,10 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 
 ### Authentication Flow
 1. **Player connects** to Velocity
-2. **VeloAuth checks** in-memory authorization cache (instant, no I/O)
-3. If **not in memory**, checks **database premium cache** (persistent across restarts)
+2. **VeloAuth checks** authoritative premium state in `AUTH`, then the in-memory premium cache
+3. If **not in memory**, checks the `PREMIUM_UUIDS` database cache (persistent across restarts, but never authoritative over `AUTH`)
 4. If **not in DB cache**, resolves via **Mojang/Ashcon API** in parallel using virtual threads
-5. If **not premium**, player is sent to the **auth server** (unless Floodgate Bedrock bypass applies)
+5. If **not premium**, player is sent to the **auth server** (unless a live Floodgate UUID qualifies for Bedrock bypass)
 6. Player types **/login** or **/register**
 7. **VeloAuth verifies** credentials with BCrypt
 8. Player is **redirected to backend server** via `try` configuration
@@ -352,6 +359,8 @@ VeloAuth is **100% compatible** with LimboAuth databases:
 3. Configure VeloAuth to use the same database as LimboAuth
 4. Start Velocity - all existing accounts will work automatically
 
+VeloAuth performs additive schema upgrades automatically. In particular, players who previously used LimboAuth's `/premium` keep the historical `AUTH.UUID` exposed to backend servers, while the Mojang-verified UUID is stored separately in `AUTH.PREMIUMUUID`. This makes the plugin update seamless for existing player data; no manual UUID rewrite is required. As with every authentication/database update, take a database and backend-player-data backup before deployment.
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or PR.
@@ -363,5 +372,3 @@ Need help? Found a bug? Open an issue on GitHub or join our Discord server.
 ## License
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
-

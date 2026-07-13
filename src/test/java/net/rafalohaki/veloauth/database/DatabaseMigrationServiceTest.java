@@ -8,11 +8,14 @@ import org.junit.jupiter.api.Test;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Locale;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatabaseMigrationServiceTest {
@@ -54,6 +57,8 @@ class DatabaseMigrationServiceTest {
 
         assertTrue(tableExists("VELOAUTH_SCHEMA_VERSION"));
         assertTrue(tableExists("VELOAUTH_AUDIT_LOG"));
+        assertTrue(columnExists("AUTH", "PRESERVE_UUID"),
+                "UUID compatibility marker must exist for seamless LimboAuth upgrades");
 
         SchemaVersionDao schemaVersionDao = manager.getSchemaVersionDao();
         assertTrue(schemaVersionDao.getCurrentVersion().isPresent(),
@@ -77,6 +82,61 @@ class DatabaseMigrationServiceTest {
         }
         manager = new DatabaseManager(config, new Messages());
         assertTrue(manager.initialize().join(), "Third init should also succeed");
+    }
+
+    @Test
+    void initialize_existingLimboAuthTableShouldAddPreserveUuidWithoutChangingPlayerUuid() throws Exception {
+        UUID historicalUuid = UUID.randomUUID();
+        try (Connection connection = DriverManager.getConnection(config.getJdbcUrl());
+             PreparedStatement create = connection.prepareStatement(
+                     "CREATE TABLE AUTH (LOWERCASENICKNAME VARCHAR(16) PRIMARY KEY, "
+                             + "NICKNAME VARCHAR(16) NOT NULL, HASH VARCHAR(255), IP VARCHAR(45), "
+                             + "LOGINIP VARCHAR(45), UUID VARCHAR(36), REGDATE BIGINT, LOGINDATE BIGINT, "
+                             + "PREMIUMUUID VARCHAR(36), TOTPTOKEN VARCHAR(32), ISSUEDTIME BIGINT DEFAULT 0)")) {
+            create.executeUpdate();
+        }
+        try (Connection connection = DriverManager.getConnection(config.getJdbcUrl());
+             PreparedStatement insert = connection.prepareStatement(
+                     "INSERT INTO AUTH (LOWERCASENICKNAME, NICKNAME, HASH, IP, LOGINIP, UUID, "
+                             + "REGDATE, LOGINDATE, PREMIUMUUID, TOTPTOKEN, ISSUEDTIME) "
+                             + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            insert.setString(1, "legacyplayer");
+            insert.setString(2, "LegacyPlayer");
+            insert.setString(3, null);
+            insert.setString(4, "127.0.0.1");
+            insert.setString(5, "127.0.0.1");
+            insert.setString(6, historicalUuid.toString());
+            insert.setLong(7, 1L);
+            insert.setLong(8, 1L);
+            insert.setString(9, historicalUuid.toString());
+            insert.setString(10, null);
+            insert.setLong(11, 0L);
+            insert.executeUpdate();
+        }
+
+        assertTrue(manager.initialize().join(), "Existing LimboAuth schema should migrate in place");
+
+        assertTrue(columnExists("AUTH", "PRESERVE_UUID"));
+        var stored = manager.findPlayerByNickname("LegacyPlayer").join();
+        assertTrue(stored.isSuccess());
+        assertNotNull(stored.getValue());
+        assertEquals(historicalUuid.toString(), stored.getValue().getUuid(),
+                "Schema migration must never rewrite historical AUTH.UUID");
+        assertTrue(stored.getValue().isPreserveUuid(),
+                "Imported passwordless rows must be marked before the first VeloAuth login");
+
+        UUID verifiedPremiumUuid = UUID.randomUUID();
+        var binding = manager.reconcileVerifiedPremiumProfile("LegacyPlayer", verifiedPremiumUuid).join();
+        assertTrue(binding.isSuccess());
+        assertNotNull(binding.getValue());
+        assertEquals(historicalUuid, binding.getValue().backendUuid());
+        assertEquals(verifiedPremiumUuid, binding.getValue().verifiedPremiumUuid());
+
+        var reconciled = manager.findPlayerByNickname("LegacyPlayer").join();
+        assertNotNull(reconciled.getValue());
+        assertEquals(historicalUuid.toString(), reconciled.getValue().getUuid());
+        assertEquals(verifiedPremiumUuid.toString(), reconciled.getValue().getPremiumUuid());
+        assertTrue(reconciled.getValue().isPreserveUuid());
     }
 
     @Test
@@ -117,6 +177,21 @@ class DatabaseMigrationServiceTest {
                     || indexExists(metaData, tableName.toUpperCase(Locale.ROOT), indexName)
                     || indexExists(metaData, tableName.toLowerCase(Locale.ROOT), indexName);
         }
+    }
+
+    private boolean columnExists(String tableName, String columnName) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(config.getJdbcUrl());
+             ResultSet columns = connection.getMetaData().getColumns(null, null, null, null)) {
+            while (columns.next()) {
+                String existingTable = columns.getString("TABLE_NAME");
+                String existing = columns.getString("COLUMN_NAME");
+                if (existingTable != null && existingTable.equalsIgnoreCase(tableName)
+                        && existing != null && existing.equalsIgnoreCase(columnName)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private boolean indexExists(DatabaseMetaData metaData, String tableName, String indexName) throws SQLException {

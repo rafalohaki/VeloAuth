@@ -51,6 +51,10 @@ class RegisteredPlayerTest {
         assertEquals(12_345L, player.getConflictTimestamp());
         assertEquals("OriginalAlice", player.getOriginalNickname());
         assertNull(player.getHash());
+        assertFalse(player.isPreserveUuid());
+
+        player.setPreserveUuid(true);
+        assertTrue(player.isPreserveUuid());
     }
 
     @Test

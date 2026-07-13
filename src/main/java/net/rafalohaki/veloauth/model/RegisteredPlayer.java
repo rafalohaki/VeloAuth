@@ -79,6 +79,18 @@ public class RegisteredPlayer {
     private String premiumUuid;
 
     /**
+     * Whether Velocity should expose the historical AUTH.UUID to backend servers
+     * after a successful Mojang authentication.
+     *
+     * <p>This is enabled during first-time LimboAuth schema import, with a lazy recovery
+     * fallback for databases already opened by an older VeloAuth build. LimboAuth retained
+     * the pre-existing UUID when premium mode was enabled, so changing to the Mojang UUID
+     * would detach the player from UUID-keyed backend data.
+     */
+    @DatabaseField(columnName = "PRESERVE_UUID", defaultValue = "false")
+    private boolean preserveUuid;
+
+    /**
      * TOTP token dla dwuetapowej autoryzacji (limboauth compatibility).
      */
     @DatabaseField(columnName = "TOTPTOKEN")
@@ -295,6 +307,24 @@ public class RegisteredPlayer {
     }
 
     /**
+     * Returns whether the historical AUTH.UUID must be retained for backend identity.
+     *
+     * @return true when backend UUID compatibility is enabled
+     */
+    public boolean isPreserveUuid() {
+        return preserveUuid;
+    }
+
+    /**
+     * Controls whether the historical AUTH.UUID is exposed after online authentication.
+     *
+     * @param preserveUuid true to retain the historical backend UUID
+     */
+    public void setPreserveUuid(boolean preserveUuid) {
+        this.preserveUuid = preserveUuid;
+    }
+
+    /**
      * Zwraca TOTP token gracza.
      *
      * @return TOTP token
@@ -423,10 +453,10 @@ public class RegisteredPlayer {
         return ("RegisteredPlayer{nickname='%s', lowercaseNickname='%s'," +
                 " ip='[REDACTED]', loginIp='[REDACTED]', uuid='%s'," +
                 " regDate=%d, loginDate=%d, hasPasswordHash=%b," +
-                " hasPremiumUuid=%b, conflictMode=%b}").formatted(
+                " hasPremiumUuid=%b, preserveUuid=%b, conflictMode=%b}").formatted(
                 nickname, lowercaseNickname, redactValue(uuid),
                 regDate, loginDate, hash != null && !hash.isBlank(),
-                premiumUuid != null, conflictMode);
+                premiumUuid != null, preserveUuid, conflictMode);
     }
 
     private static String requireNickname(String nickname) {

@@ -149,7 +149,7 @@ public final class SettingsValidator {
             return;
         }
         logger.warn("Config 'premium.allow-cracked-on-premium-nicks=true' — VeloAuth will NOT force Mojang auth for premium nicks without a DB record. Cracked clients can register premium nicknames first; nickname-theft protection is reduced.");
-        logger.warn("Config 'premium.allow-cracked-on-premium-nicks=true' — New premium players connecting for the first time will get OFFLINE UUIDs permanently (Velocity PreLogin has no 'try online, fallback offline' mode). Existing premium owners with PREMIUMUUID already in AUTH keep their premium UUID.");
+        logger.warn("Config 'premium.allow-cracked-on-premium-nicks=true' — New premium players connecting for the first time will get OFFLINE UUIDs permanently (Velocity PreLogin has no 'try online, fallback offline' mode). Existing premium owners in AUTH keep their established backend UUID identity.");
     }
 
     private static final int MIN_BCRYPT_COST = 10;
@@ -248,8 +248,13 @@ public final class SettingsValidator {
         if (isCollisionPronePrefix(prefix)) {
             logger.warn("Floodgate username prefix '{}' is alphanumeric; this increases the risk of username collisions", prefix);
         }
-        if (!FloodgateDetector.isFloodgateAvailable()) {
+
+        var detectedPrefix = FloodgateDetector.getPlayerPrefix();
+        if (detectedPrefix.isEmpty()) {
             logger.warn("Floodgate integration is enabled in config but Floodgate plugin is not loaded; Bedrock player detection will not work");
+        } else if (!detectedPrefix.get().equals(prefix)) {
+            logger.warn("Configured Floodgate prefix '{}' differs from the running Floodgate prefix '{}'; the live Floodgate value will be used",
+                    prefix, detectedPrefix.get());
         }
     }
 

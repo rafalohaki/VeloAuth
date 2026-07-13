@@ -21,13 +21,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link PostLoginHandler#handleOfflinePlayer} — specifically the
- * session-restart fix for the authorized-but-no-session deadlock.
- *
- * <p>Pre-1.3.3, a player whose {@code authorizedPlayers} entry survived but whose
- * {@code activeSessions} entry had been evicted (TTL timeout, IP/nickname mismatch)
- * was deadlocked: {@code ServerPreConnectEvent} blocked the backend transfer
- * ("must login"), but {@code /login} replied "already logged in". The fix restarts
- * the session in {@code handleOfflinePlayer} when authorization is still valid.
+ * session-expiry boundary. Authorization and active sessions are separate state;
+ * an authorization cache hit must never renew an expired session.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -75,13 +70,12 @@ class PostLoginHandlerTest {
     }
 
     @Test
-    void handleOfflinePlayer_AuthorizedButSessionExpired_RestartsSession() {
-        // Regression: pre-1.3.3 this path did nothing and the player was deadlocked.
+    void handleOfflinePlayer_AuthorizedButSessionExpired_DoesNotBypassPasswordLogin() {
         when(authCache.isPlayerAuthorized(playerUuid, PLAYER_IP)).thenReturn(true);
         when(authCache.hasActiveSession(playerUuid, USERNAME, PLAYER_IP)).thenReturn(false);
 
         handler.handleOfflinePlayer(player, PLAYER_IP);
 
-        verify(authCache).startSession(playerUuid, USERNAME, PLAYER_IP);
+        verify(authCache, never()).startSession(playerUuid, USERNAME, PLAYER_IP);
     }
 }

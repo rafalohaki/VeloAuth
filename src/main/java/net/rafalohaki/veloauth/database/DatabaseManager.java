@@ -16,10 +16,12 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -65,6 +67,7 @@ public class DatabaseManager {
 
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
     private static final Marker CACHE_MARKER = MarkerFactory.getMarker("CACHE");
+    private static final Marker PREMIUM_MARKER = MarkerFactory.getMarker("PREMIUM");
 
     private static final String DATABASE_NOT_CONNECTED = "Database not connected";
     private static final String EXECUTOR_SHUTTING_DOWN = ": Executor is shutting down";
@@ -343,9 +346,13 @@ public class DatabaseManager {
     }
 
     /**
-     * Finds a player by nickname first, then falls back to UUID-based lookup.
+     * Finds an AUTH row by nickname and then by premium UUID without changing the row.
+     *
+     * <p>This is the safe lookup for pre-login resolver results. A resolver response is
+     * not identity proof, so nickname migration is deferred until Velocity completes the
+     * Mojang session-server handshake.
      */
-    public CompletableFuture<DbResult<RegisteredPlayer>> findPlayerByUuidOrNickname(
+    public CompletableFuture<DbResult<RegisteredPlayer>> findPlayerByNicknameOrPremiumUuidReadOnly(
             String nickname, UUID premiumUuid) {
         String normalizedNickname = normalizeNickname(nickname);
         if (normalizedNickname == null) {
@@ -359,7 +366,16 @@ public class DatabaseManager {
             if (connectionResult.isDatabaseError()) {
                 return DbResult.databaseError(connectionResult.getErrorMessage());
             }
-            return findAndMigrateByPremiumUuid(normalizedNickname, nickname, premiumUuid);
+            try {
+                RegisteredPlayer byUuid = playerDao.queryForFirst(
+                        playerDao.queryBuilder().where()
+                                .eq("PREMIUMUUID", premiumUuid.toString())
+                                .prepare());
+                return DbResult.success(byUuid);
+            } catch (SQLException e) {
+                logDatabaseOperationFailure("read-only premium UUID lookup", premiumUuid.toString(), e);
+                return genericDatabaseErrorResult();
+            }
         }, dbExecutor);
     }
 
@@ -402,6 +418,143 @@ public class DatabaseManager {
                         premiumUuid, e);
             }
             return genericDatabaseErrorResult();
+        }
+    }
+
+    /**
+     * Reconciles a profile only after Velocity has cryptographically verified it with Mojang.
+     * Legacy LimboAuth {@code /premium} accounts keep their historical AUTH.UUID while the
+     * verified Mojang UUID is stored in AUTH.PREMIUMUUID and the disposable premium cache.
+     *
+     * @param username verified profile name
+     * @param verifiedPremiumUuid UUID returned by the Mojang session-server handshake
+     * @return backend UUID binding, or a fail-secure database error
+     */
+    public CompletableFuture<DbResult<PremiumProfileBinding>> reconcileVerifiedPremiumProfile(
+            String username, UUID verifiedPremiumUuid) {
+        String normalizedNickname = normalizeNickname(username);
+        if (normalizedNickname == null || verifiedPremiumUuid == null) {
+            return CompletableFuture.completedFuture(DbResult.databaseError(genericDatabaseErrorMessage()));
+        }
+        return submitConnectedTask(() -> executeVerifiedProfileReconciliation(
+                normalizedNickname, username, verifiedPremiumUuid));
+    }
+
+    private DbResult<PremiumProfileBinding> executeVerifiedProfileReconciliation(
+            String normalizedNickname, String username, UUID verifiedPremiumUuid) {
+        try {
+            RegisteredPlayer player = jdbcAuthDao.findPlayerByLowercaseNickname(normalizedNickname);
+            if (player == null) {
+                DbResult<RegisteredPlayer> migrated = findAndMigrateByPremiumUuid(
+                        normalizedNickname, username, verifiedPremiumUuid);
+                if (migrated.isDatabaseError()) {
+                    return DbResult.databaseError(migrated.getErrorMessage());
+                }
+                player = migrated.getValue();
+            }
+
+            if (player == null) {
+                synchronizePremiumUuidCacheBestEffort(username, verifiedPremiumUuid);
+                return DbResult.success(PremiumProfileBinding.standard(verifiedPremiumUuid));
+            }
+
+            UUID backendUuid = player.getUuidAsUUID();
+            if (backendUuid == null) {
+                logger.error(PREMIUM_MARKER, "Invalid backend UUID in AUTH row for verified player {}", username);
+                return genericDatabaseErrorResult();
+            }
+
+            UUID storedPremiumUuid = parseUuid(player.getPremiumUuid());
+            boolean pendingLegacyBinding = isPendingLegacyPremiumBinding(
+                    player, backendUuid, storedPremiumUuid);
+            if (storedPremiumUuid != null && !storedPremiumUuid.equals(verifiedPremiumUuid)
+                    && !pendingLegacyBinding) {
+                logger.error(PREMIUM_MARKER,
+                        "Verified Mojang UUID mismatch for AUTH row {}: stored premium identity differs from handshake",
+                        username);
+                return genericDatabaseErrorResult();
+            }
+
+            boolean requiresSave = false;
+            if (storedPremiumUuid == null || (pendingLegacyBinding
+                    && !storedPremiumUuid.equals(verifiedPremiumUuid))) {
+                player.setPremiumUuid(verifiedPremiumUuid.toString());
+                requiresSave = true;
+            }
+            boolean preserveBackendUuid = (player.isPreserveUuid() || pendingLegacyBinding)
+                    && !backendUuid.equals(verifiedPremiumUuid);
+            if (player.isPreserveUuid() != preserveBackendUuid) {
+                player.setPreserveUuid(preserveBackendUuid);
+                requiresSave = true;
+            }
+
+            if (requiresSave) {
+                DbResult<Boolean> saveResult = executePlayerSave(player);
+                if (saveResult.isDatabaseError() || !Boolean.TRUE.equals(saveResult.getValue())) {
+                    return genericDatabaseErrorResult();
+                }
+            }
+
+            synchronizePremiumUuidCacheBestEffort(username, verifiedPremiumUuid);
+            UUID exposedUuid = preserveBackendUuid ? backendUuid : verifiedPremiumUuid;
+
+            if (preserveBackendUuid) {
+                logger.warn(PREMIUM_MARKER,
+                        "Preserving legacy LimboAuth backend UUID for {} after Mojang verification; "
+                                + "AUTH.UUID remains authoritative for backend data",
+                        username);
+            }
+            return DbResult.success(new PremiumProfileBinding(
+                    exposedUuid, verifiedPremiumUuid, preserveBackendUuid));
+        } catch (SQLException | RuntimeException e) {
+            logDatabaseOperationFailure("verified premium profile reconciliation", username, e);
+            return genericDatabaseErrorResult();
+        }
+    }
+
+    private boolean isPendingLegacyPremiumBinding(RegisteredPlayer player, UUID backendUuid,
+                                                  UUID storedPremiumUuid) {
+        if (player.getHash() != null && !player.getHash().isBlank()) {
+            return false;
+        }
+        if (player.isPreserveUuid()) {
+            return storedPremiumUuid == null || storedPremiumUuid.equals(backendUuid);
+        }
+
+        // Recovery path for an operator who already started an older VeloAuth build against
+        // LimboAuth before this marker existed. LimboAuth's default save-uuid flow stores the
+        // deterministic offline UUID in both UUID columns after /premium.
+        UUID expectedOfflineUuid = UUID.nameUUIDFromBytes(
+                ("OfflinePlayer:" + player.getNickname()).getBytes(StandardCharsets.UTF_8));
+        return backendUuid.equals(expectedOfflineUuid)
+                && (storedPremiumUuid == null || storedPremiumUuid.equals(backendUuid));
+    }
+
+    private void synchronizePremiumUuidCacheBestEffort(String username, UUID premiumUuid) {
+        try {
+            if (!premiumUuidDao.saveOrUpdateStrict(premiumUuid, username)) {
+                logger.warn(PREMIUM_MARKER,
+                        "PREMIUM_UUIDS cache did not accept verified profile for {}; AUTH remains authoritative",
+                        username);
+            }
+        } catch (SQLException | RuntimeException e) {
+            logger.warn(PREMIUM_MARKER,
+                    "Could not refresh PREMIUM_UUIDS cache for {}; AUTH/verified handshake remain authoritative",
+                    username);
+            if (logger.isDebugEnabled()) {
+                logger.debug(PREMIUM_MARKER, "PREMIUM_UUIDS refresh failure details for {}", username, e);
+            }
+        }
+    }
+
+    private UUID parseUuid(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 
@@ -706,7 +859,8 @@ public class DatabaseManager {
     }
 
     /**
-     * Sprawdza premium status gracza z wykorzystaniem PREMIUM_UUIDS table.
+     * Checks premium status with AUTH as the source of truth and PREMIUM_UUIDS as
+     * a secondary cache for verified profiles without an AUTH row.
      */
     public CompletableFuture<DbResult<Boolean>> isPremium(String username) {
         if (username == null || username.isBlank()) {
@@ -715,9 +869,23 @@ public class DatabaseManager {
 
         return submitConnectedTask(() -> {
             try {
+                String normalizedNickname = normalizeNickname(username);
+                RegisteredPlayer authPlayer = jdbcAuthDao.findPlayerByLowercaseNickname(normalizedNickname);
+                if (authPlayer != null && isPlayerPremiumRuntime(authPlayer)) {
+                    UUID authPremiumUuid = parseUuid(authPlayer.getPremiumUuid());
+                    if (authPremiumUuid != null) {
+                        synchronizePremiumUuidCacheBestEffort(username, authPremiumUuid);
+                    }
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(DB_MARKER, "Premium status from authoritative AUTH for {}: true", username);
+                    }
+                    return DbResult.success(true);
+                }
+
                 boolean premium = premiumUuidDao.findByNicknameStrict(username).isPresent();
                 if (logger.isDebugEnabled()) {
-                    logger.debug(DB_MARKER, "Premium status from PREMIUM_UUIDS for {}: {}", username, premium);
+                    logger.debug(DB_MARKER, "Premium status from PREMIUM_UUIDS fallback for {}: {}",
+                            username, premium);
                 }
                 return DbResult.success(premium);
             } catch (SQLException | RuntimeException e) {
@@ -914,6 +1082,29 @@ public class DatabaseManager {
                 return List.of();
             }
         }, dbExecutor);
+    }
+
+    /**
+     * Result of binding a Mojang-verified identity to the UUID exposed downstream.
+     *
+     * @param backendUuid UUID Velocity should expose to backend servers
+     * @param verifiedPremiumUuid UUID verified by Mojang for this connection
+     * @param legacyUuidPreserved whether backendUuid intentionally comes from legacy AUTH.UUID
+     */
+    public record PremiumProfileBinding(UUID backendUuid, UUID verifiedPremiumUuid,
+                                        boolean legacyUuidPreserved) {
+        public PremiumProfileBinding {
+            Objects.requireNonNull(backendUuid, "backendUuid must not be null");
+            Objects.requireNonNull(verifiedPremiumUuid, "verifiedPremiumUuid must not be null");
+            if (!legacyUuidPreserved && !backendUuid.equals(verifiedPremiumUuid)) {
+                throw new IllegalArgumentException(
+                        "Non-legacy backend UUID must equal the verified premium UUID");
+            }
+        }
+
+        public static PremiumProfileBinding standard(UUID verifiedPremiumUuid) {
+            return new PremiumProfileBinding(verifiedPremiumUuid, verifiedPremiumUuid, false);
+        }
     }
 
     /**

@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -103,7 +104,7 @@ class PremiumResolverServiceTest {
         assertTrue(result.isPremium(), "Premium resolver result should win");
         
         verify(dao, times(1)).findByNickname(username);
-        verify(dao, times(1)).saveOrUpdate(premiumUuid, username);
+        verify(dao, never()).saveOrUpdate(any(UUID.class), anyString());
         verify(premiumResolver, times(1)).resolve(username);
         verify(offlineResolver, times(1)).resolve(username);
     }
@@ -135,10 +136,7 @@ class PremiumResolverServiceTest {
     }
 
     @Test
-    void shouldTrustDbCacheRowWithZeroLastSeenForLimboAuthCompatibility() {
-        // Given: a DB row migrated from LimboAuth — LAST_SEEN defaults to 0 because the column was
-        // ALTER TABLE-added with DEFAULT 0. Forcing those rows through the API on every login would
-        // be an upgrade-time API storm, so we treat lastSeen <= 0 as "trusted, unknown freshness".
+    void shouldTreatDbCacheRowWithZeroLastSeenAsUnverifiedAndStale() {
         String username = "LegacyNickTest";
         UUID legacyUuid = UUID.randomUUID();
         PremiumUuid legacyEntry = mock(PremiumUuid.class);
@@ -147,12 +145,16 @@ class PremiumResolverServiceTest {
         when(legacyEntry.getLastSeen()).thenReturn(0L);
 
         when(dao.findByNickname(username)).thenReturn(Optional.of(legacyEntry));
+        when(resolverSettings.isMojangEnabled()).thenReturn(false);
+        when(resolverSettings.isAshconEnabled()).thenReturn(false);
+        when(resolverSettings.isWpmeEnabled()).thenReturn(false);
+        service = new PremiumResolverService(logger, settings, dao);
 
         PremiumResolution result = service.resolve(username);
 
         assertNotNull(result);
-        assertTrue(result.isPremium(), "Legacy row with lastSeen=0 must be trusted (LimboAuth migration compatibility)");
-        assertEquals(legacyUuid, result.uuid());
+        assertTrue(result.isOffline(),
+                "PREMIUM_UUIDS without a verification timestamp is only stale cache data");
     }
 
     @Test
@@ -164,6 +166,7 @@ class PremiumResolverServiceTest {
         PremiumUuid premiumUuidModel = mock(PremiumUuid.class);
         when(premiumUuidModel.getUuid()).thenReturn(premiumUuid);
         when(premiumUuidModel.getNickname()).thenReturn(username);
+        when(premiumUuidModel.getLastSeen()).thenReturn(System.currentTimeMillis());
         
         when(dao.findByNickname(username)).thenReturn(Optional.of(premiumUuidModel));
 
@@ -216,6 +219,7 @@ class PremiumResolverServiceTest {
         PremiumUuid premiumUuidModel = mock(PremiumUuid.class);
         when(premiumUuidModel.getUuid()).thenReturn(premiumUuid);
         when(premiumUuidModel.getNickname()).thenReturn(username);
+        when(premiumUuidModel.getLastSeen()).thenReturn(System.currentTimeMillis());
         
         // When: Looking up with different case
         when(dao.findByNickname(username)).thenReturn(Optional.of(premiumUuidModel));
@@ -260,6 +264,7 @@ class PremiumResolverServiceTest {
         PremiumUuid offlinePlayer = mock(PremiumUuid.class);
         when(offlinePlayer.getUuid()).thenReturn(offlineUuid);
         when(offlinePlayer.getNickname()).thenReturn(username);
+        when(offlinePlayer.getLastSeen()).thenReturn(System.currentTimeMillis());
         
         when(dao.findByNickname(username)).thenReturn(Optional.of(offlinePlayer));
 
@@ -466,6 +471,36 @@ class PremiumResolverServiceTest {
         assertTrue(result.isPremium(),
                 "PREMIUM from a single (mirror) resolver wins even when Mojang is UNKNOWN");
         assertEquals(uuid, result.uuid());
+    }
+
+    @Test
+    void selectBestResult_mojangAndMirrorPremiumUuidMismatch_returnsUnknown() {
+        String username = "ResolverMismatch";
+        PremiumResolver mojang = mockResolver("mojang",
+                PremiumResolution.premium(UUID.randomUUID(), username, "mojang"));
+        PremiumResolver ashcon = mockResolver("ashcon",
+                PremiumResolution.premium(UUID.randomUUID(), username, "ashcon"));
+
+        PremiumResolution result = serviceWith(List.of(ashcon, mojang)).resolve(username);
+
+        assertTrue(result.isUnknown(), "Conflicting positive identities must fail closed");
+        verify(dao, never()).saveOrUpdate(any(UUID.class), anyString());
+    }
+
+    @Test
+    void selectBestResult_agreeingPremiumResolvers_prefersMojangDeterministically() {
+        String username = "ResolverAgree";
+        UUID uuid = UUID.randomUUID();
+        PremiumResolver ashcon = mockResolver("ashcon",
+                PremiumResolution.premium(uuid, username, "ashcon"));
+        PremiumResolver mojang = mockResolver("mojang",
+                PremiumResolution.premium(uuid, username, "mojang"));
+
+        PremiumResolution result = serviceWith(List.of(ashcon, mojang)).resolve(username);
+
+        assertTrue(result.isPremium());
+        assertEquals(uuid, result.uuid());
+        assertEquals("mojang", result.source());
     }
 
     @Test

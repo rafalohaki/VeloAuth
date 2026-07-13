@@ -513,7 +513,7 @@ class AuthenticationFlowIntegrationTest {
         authCache.addPremiumPlayer(username, premiumUuid);
 
         // DB lookup returns error (simulating timeout/connection failure)
-        databaseManager.setUuidOrNicknameResult(
+        databaseManager.setNicknameOrPremiumUuidResult(
                 CompletableFuture.completedFuture(
                         DatabaseManager.DbResult.databaseError("Connection timeout")));
 
@@ -554,7 +554,7 @@ class AuthenticationFlowIntegrationTest {
         authCache.addPremiumPlayer(username, null); // null UUID = offline
 
         // DB lookup returns error
-        databaseManager.setUuidOrNicknameResult(
+        databaseManager.setNicknameOrPremiumUuidResult(
                 CompletableFuture.completedFuture(
                         DatabaseManager.DbResult.databaseError("Connection timeout")));
 

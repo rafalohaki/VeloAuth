@@ -14,6 +14,7 @@ import org.slf4j.MarkerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -275,9 +276,8 @@ public class PremiumResolverService {
      *
      * <h2>Decision rule (in order)</h2>
      * <ol>
-     *   <li><b>Any PREMIUM</b> → trust immediately. PREMIUM is a positive assertion with a UUID;
-     *       a resolver cannot hallucinate the same UUID Mojang would return, so one confirmation
-     *       is enough. (Cached at full TTL.)</li>
+     *   <li><b>PREMIUM answers</b> → all positive answers must agree on UUID. Mojang wins
+     *       deterministically when present; conflicting UUIDs return UNKNOWN (fail-closed).</li>
      *   <li><b>Mojang OFFLINE</b> → trust immediately. Mojang is the authoritative source for
      *       "this name does not have a premium account"; other resolvers are mirrors.</li>
      *   <li><b>Mojang silent (UNKNOWN or disabled) + all non-Mojang enabled resolvers OFFLINE</b>
@@ -292,9 +292,11 @@ public class PremiumResolverService {
      * </ol>
      */
     private PremiumResolution selectBestResult(ResolverResults results, String trimmed) {
-        PremiumResolution premium = results.firstPremium();
+        PremiumResolution premium = selectConsistentPremium(results, trimmed);
         if (premium != null) {
-            savePremiumToCache(premium, trimmed);
+            if (premium.isUnknown()) {
+                return premium;
+            }
             if (logger.isInfoEnabled()) {
                 logger.info(PREMIUM_MARKER, "[PARALLEL] Premium confirmed for {} from {}",
                         trimmed, premium.source());
@@ -332,6 +334,26 @@ public class PremiumResolverService {
         return PremiumResolution.unknown(RESOLVER_SERVICE,
                 "no quorum: mojang=" + statusLabel(mojang)
                         + ", non-mojang=" + nonMojangSummary(nonMojang));
+    }
+
+    private PremiumResolution selectConsistentPremium(ResolverResults results, String trimmed) {
+        List<PremiumResolution> premiumResults = results.premiumResultsByPriority();
+        if (premiumResults.isEmpty()) {
+            return null;
+        }
+
+        PremiumResolution selected = premiumResults.get(0);
+        for (int i = 1; i < premiumResults.size(); i++) {
+            PremiumResolution candidate = premiumResults.get(i);
+            if (!selected.uuid().equals(candidate.uuid())) {
+                logger.error(PREMIUM_MARKER,
+                        "[PARALLEL] Conflicting premium UUIDs for {} from {} and {} - denying login",
+                        trimmed, selected.source(), candidate.source());
+                return PremiumResolution.unknown(RESOLVER_SERVICE,
+                        "premium resolver UUID disagreement");
+            }
+        }
+        return selected;
     }
 
     private void logQuorumFailure(ResolverResults results, String trimmed) {
@@ -380,13 +402,15 @@ public class PremiumResolverService {
      */
     private record ResolverResults(Map<String, PremiumResolution> byResolver) {
 
-        PremiumResolution firstPremium() {
-            for (PremiumResolution r : byResolver.values()) {
-                if (r != null && r.isPremium()) {
-                    return r;
-                }
-            }
-            return null;
+        List<PremiumResolution> premiumResultsByPriority() {
+            List<Map.Entry<String, PremiumResolution>> entries = byResolver.entrySet().stream()
+                    .filter(entry -> entry.getValue() != null && entry.getValue().isPremium())
+                    .sorted(Comparator
+                            .comparing((Map.Entry<String, PremiumResolution> entry) ->
+                                    !AUTHORITATIVE_RESOLVER_ID.equals(entry.getKey()))
+                            .thenComparing(Map.Entry::getKey))
+                    .toList();
+            return entries.stream().map(Map.Entry::getValue).toList();
         }
 
         PremiumResolution byId(String id) {
@@ -395,7 +419,10 @@ public class PremiumResolverService {
 
         List<PremiumResolution> nonAuthoritativeResults() {
             List<PremiumResolution> out = new ArrayList<>(byResolver.size());
-            for (Map.Entry<String, PremiumResolution> entry : byResolver.entrySet()) {
+            List<Map.Entry<String, PremiumResolution>> entries = byResolver.entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .toList();
+            for (Map.Entry<String, PremiumResolution> entry : entries) {
                 if (!AUTHORITATIVE_RESOLVER_ID.equals(entry.getKey()) && entry.getValue() != null) {
                     out.add(entry.getValue());
                 }
@@ -403,22 +430,6 @@ public class PremiumResolverService {
             return out;
         }
     }
-
-    /**
-     * Saves premium resolution to database cache.
-     *
-     * @param resolution Premium resolution
-     * @param trimmed    Username
-     */
-    private void savePremiumToCache(PremiumResolution resolution, String trimmed) {
-        if (resolution.uuid() != null) {
-            boolean saved = dao.saveOrUpdate(resolution.uuid(), trimmed);
-            if (saved && logger.isDebugEnabled()) {
-                logger.debug(PREMIUM_MARKER, "[PremiumResolver] zapisano do DB cache: {} -> {}", trimmed, resolution.uuid());
-            }
-        }
-    }
-
 
     public PremiumResolution resolve(String username) {
         if (username == null || username.isBlank()) {
@@ -476,18 +487,14 @@ public class PremiumResolverService {
      * trigger an erroneous account migration in {@code findAndMigrateByPremiumUuid}
      * when the player's actual Mojang UUID has since changed.
      * <p>
-     * Compatibility note: legacy rows imported from LimboAuth via
-     * {@code DatabaseMigrationService} have {@code LAST_SEEN=0} (the {@code DEFAULT 0}
-     * we set on ALTER TABLE). Treating those as stale would force an API refetch on
-     * every login until the next successful resolution rewrites the timestamp — a
-     * potential API storm right after upgrade. So {@code lastSeen <= 0} is treated
-     * as "unknown but trusted"; only entries with a real positive timestamp are
-     * subject to the TTL check.
+     * Entries without a positive verification timestamp are stale. LimboAuth premium
+     * accounts are recovered from the authoritative AUTH table by PreLoginHandler;
+     * PREMIUM_UUIDS is only a cache and must never manufacture migration authority.
      */
     private boolean isDbCacheEntryFresh(PremiumUuid entry) {
         long lastSeen = entry.getLastSeen();
         if (lastSeen <= 0L) {
-            return true;
+            return false;
         }
         if (premiumTtlMillis <= 0L) {
             return true;

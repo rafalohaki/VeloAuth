@@ -41,6 +41,7 @@ final class JdbcAuthDao {
     private static final String COL_REG_DATE = "REGDATE";
     private static final String COL_LOGIN_DATE = "LOGINDATE";
     private static final String COL_PREMIUM_UUID = "PREMIUMUUID";
+    private static final String COL_PRESERVE_UUID = "PRESERVE_UUID";
     private static final String COL_TOTP_TOKEN = "TOTPTOKEN";
     private static final String COL_ISSUED_TIME = "ISSUEDTIME";
     private static final String COL_CONFLICT_MODE = "CONFLICT_MODE";
@@ -91,6 +92,7 @@ final class JdbcAuthDao {
                 regDateColumn,
                 loginDateColumn,
                 premiumUuidColumn,
+                column(COL_PRESERVE_UUID),
                 totpTokenColumn,
                 issuedTimeColumn,
                 column(COL_CONFLICT_MODE),
@@ -107,11 +109,12 @@ final class JdbcAuthDao {
                 regDateColumn,
                 loginDateColumn,
                 premiumUuidColumn,
+                column(COL_PRESERVE_UUID),
                 totpTokenColumn,
                 issuedTimeColumn,
                 column(COL_CONFLICT_MODE),
                 column(COL_CONFLICT_TIMESTAMP),
-                column(COL_ORIGINAL_NICKNAME)) + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                column(COL_ORIGINAL_NICKNAME)) + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         this.updatePlayerSql = "UPDATE " + authTable + " SET " +
                 nicknameColumn + COMMA_SPACE_EQUALS_QUESTION +
@@ -122,6 +125,7 @@ final class JdbcAuthDao {
                 regDateColumn + COMMA_SPACE_EQUALS_QUESTION +
                 loginDateColumn + COMMA_SPACE_EQUALS_QUESTION +
                 premiumUuidColumn + COMMA_SPACE_EQUALS_QUESTION +
+                column(COL_PRESERVE_UUID) + COMMA_SPACE_EQUALS_QUESTION +
                 totpTokenColumn + COMMA_SPACE_EQUALS_QUESTION +
                 issuedTimeColumn + COMMA_SPACE_EQUALS_QUESTION +
                 column(COL_CONFLICT_MODE) + COMMA_SPACE_EQUALS_QUESTION +
@@ -276,6 +280,7 @@ final class JdbcAuthDao {
         statement.setLong(idx++, player.getRegDate());
         statement.setLong(idx++, player.getLoginDate());
         statement.setString(idx++, player.getPremiumUuid());
+        statement.setBoolean(idx++, player.isPreserveUuid());
         statement.setString(idx++, player.getTotpToken());
         statement.setLong(idx++, player.getIssuedTime());
         statement.setBoolean(idx++, player.getConflictMode());
@@ -305,6 +310,7 @@ final class JdbcAuthDao {
             player.setRegDate(resultSet.getLong(COL_REG_DATE));
             player.setLoginDate(resultSet.getLong(COL_LOGIN_DATE));
             player.setPremiumUuid(resultSet.getString(COL_PREMIUM_UUID));
+            player.setPreserveUuid(resultSet.getBoolean(COL_PRESERVE_UUID));
             player.setTotpToken(resultSet.getString(COL_TOTP_TOKEN));
             player.setIssuedTime(resultSet.getLong(COL_ISSUED_TIME));
             return player;
@@ -333,7 +339,8 @@ final class JdbcAuthDao {
                 column(COL_IP) + ", " + column(COL_LOGIN_IP) + ", " + column(COL_UUID) + ", " + 
                 column(COL_REG_DATE) + ", " + column(COL_LOGIN_DATE) + ", " +
                 column(COL_PREMIUM_UUID) + ", " + column(COL_TOTP_TOKEN) + ", " + 
-                column(COL_ISSUED_TIME) + ", " + column(COL_LOWERCASE_NICKNAME) + ", " +
+                column(COL_ISSUED_TIME) + ", " + column(COL_PRESERVE_UUID) + ", "
+                + column(COL_LOWERCASE_NICKNAME) + ", " +
                 column(COL_CONFLICT_MODE) + ", " + column(COL_CONFLICT_TIMESTAMP) + ", " + 
                 column(COL_ORIGINAL_NICKNAME) + " " +
                 "FROM " + table(TABLE_AUTH) + WHERE_CLAUSE + column(COL_CONFLICT_MODE) + " = ?"; // NOSONAR - SQL from

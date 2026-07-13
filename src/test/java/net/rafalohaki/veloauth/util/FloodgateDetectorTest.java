@@ -1,23 +1,35 @@
 package net.rafalohaki.veloauth.util;
 
+import org.geysermc.floodgate.api.FloodgateApi;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for {@link FloodgateDetector}.
  * <p>
- * Floodgate is not present on the test classpath, so the static initializer
- * leaves {@code FLOODGATE_AVAILABLE = false}. These tests verify the
- * fail-secure path: every public method returns {@code false} when Floodgate
- * is absent, never throwing.
- * <p>
- * The "Floodgate present" path is exercised in real-proxy integration testing
- * (cannot be cleanly mocked because the static initializer runs once per JVM).
+ * Uses a minimal test API with a replaceable instance to verify both fail-secure behavior and
+ * late Floodgate initialization.
  */
 class FloodgateDetectorTest {
+
+    @BeforeEach
+    void setUp() {
+        FloodgateApi.clear();
+    }
+
+    @AfterEach
+    void tearDown() {
+        FloodgateApi.clear();
+    }
 
     @Test
     void isFloodgateAvailable_floodgateAbsent_returnsFalse() {
@@ -43,5 +55,42 @@ class FloodgateDetectorTest {
         for (int i = 0; i < 100; i++) {
             assertFalse(FloodgateDetector.isBedrockPlayer(uuid));
         }
+    }
+
+    @Test
+    void isFloodgateAvailable_apiInitializesLate_recoversWithoutRestart() {
+        assertFalse(FloodgateDetector.isFloodgateAvailable());
+
+        FloodgateApi.install(".", Set.of(), List.of());
+
+        assertTrue(FloodgateDetector.isFloodgateAvailable());
+    }
+
+    @Test
+    void isBedrockPlayer_uuidRegisteredByFloodgate_returnsTrue() {
+        UUID bedrockUuid = UUID.randomUUID();
+        FloodgateApi.install(".", Set.of(bedrockUuid), List.of());
+
+        assertTrue(FloodgateDetector.isBedrockPlayer(bedrockUuid));
+        assertFalse(FloodgateDetector.isBedrockPlayer(UUID.randomUUID()));
+    }
+
+    @Test
+    void isBedrockPlayer_linkedUsernameRegisteredBeforePreLogin_returnsTrue() {
+        FloodgateApi.PlayerView linkedPlayer = new FloodgateApi.PlayerView(
+                "LinkedJava", ".BedrockUser", "Bedrock User");
+        FloodgateApi.install(".", Set.of(), List.of(linkedPlayer));
+
+        assertTrue(FloodgateDetector.isBedrockUsername("linkedjava"));
+        assertTrue(FloodgateDetector.isBedrockUsername(".bedrockuser"));
+        assertTrue(FloodgateDetector.isBedrockUsername("bedrock user"));
+        assertFalse(FloodgateDetector.isBedrockUsername("DifferentPlayer"));
+    }
+
+    @Test
+    void getPlayerPrefix_liveApiAvailable_returnsEffectivePrefix() {
+        FloodgateApi.install("+", Set.of(), List.of());
+
+        assertEquals("+", FloodgateDetector.getPlayerPrefix().orElseThrow());
     }
 }

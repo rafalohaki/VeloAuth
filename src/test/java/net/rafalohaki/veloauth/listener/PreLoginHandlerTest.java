@@ -7,6 +7,8 @@ import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.premium.PremiumResolverService;
+import org.geysermc.floodgate.api.FloodgateApi;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,11 +23,15 @@ import org.slf4j.Logger;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -72,8 +78,11 @@ class PreLoginHandlerTest {
 
     @BeforeEach
     void setUp() {
+        FloodgateApi.clear();
         when(settings.isFloodgateIntegrationEnabled()).thenReturn(true);
         when(settings.getFloodgateUsernamePrefix()).thenReturn(".");
+        when(databaseManager.findPlayerByNickname(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
 
         handler = new PreLoginHandler(
                 authCache,
@@ -83,6 +92,11 @@ class PreLoginHandlerTest {
                 messages,
                 logger
         );
+    }
+
+    @AfterEach
+    void tearDown() {
+        FloodgateApi.clear();
     }
 
     // ==================== USERNAME VALIDATION TESTS ====================
@@ -149,6 +163,16 @@ class PreLoginHandlerTest {
     }
 
     @Test
+    void shouldUseLiveFloodgatePrefixWhenConfigIsStale() {
+        FloodgateApi.install("+", Set.of(), List.of());
+
+        assertTrue(handler.isValidUsername("+Alex"),
+                "Live Floodgate prefix should be accepted even when config still contains the old prefix");
+        assertFalse(handler.isValidUsername(".Alex"),
+                "Stale configured prefix must not override the running Floodgate instance");
+    }
+
+    @Test
     void shouldRejectFloodgatePrefixWhenIntegrationDisabled() {
         when(settings.isFloodgateIntegrationEnabled()).thenReturn(false);
 
@@ -212,6 +236,35 @@ class PreLoginHandlerTest {
         assertNotNull(result, "Result should not be null");
         assertTrue(result.premium(), "Should be premium");
         assertEquals(premiumUuid, result.premiumUuid(), "Should return cached UUID");
+    }
+
+    @Test
+    void resolvePremiumStatusAsync_legacyLimboAuthPremiumRowShouldForceOnlineWithoutCacheUuid() {
+        String username = "LegacyPremium";
+        RegisteredPlayer player = new RegisteredPlayer(
+                username, null, "127.0.0.1", UUID.randomUUID().toString());
+        when(databaseManager.findPlayerByNickname(username)).thenReturn(
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(player)));
+        when(databaseManager.isPlayerPremiumRuntime(player)).thenReturn(true);
+
+        PreLoginHandler.PremiumResolutionResult result = handler.resolvePremiumStatusAsync(username).join();
+
+        assertNotNull(result);
+        assertTrue(result.premium());
+        assertNull(result.premiumUuid(), "Mojang UUID is unknown until the authenticated profile event");
+        verify(premiumResolverService, never()).resolve(username);
+    }
+
+    @Test
+    void resolvePremiumStatusAsync_authDatabaseErrorShouldFailClosed() {
+        String username = "DatabaseFailure";
+        when(databaseManager.findPlayerByNickname(username)).thenReturn(
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.databaseError("database.error")));
+
+        PreLoginHandler.PremiumResolutionResult result = handler.resolvePremiumStatusAsync(username).join();
+
+        assertNull(result);
+        verify(premiumResolverService, never()).resolve(username);
     }
 
     // ==================== NICKNAME CONFLICT DETECTION TESTS ====================

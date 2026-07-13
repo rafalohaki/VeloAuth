@@ -11,10 +11,6 @@
 
     <!-- Best Practices -->
     <rule ref="category/java/bestpractices.xml">
-        <!-- Exclude rules that conflict with Mockito/JUnit patterns -->
-        <exclude name="JUnitTestContainsTooManyAsserts"/>
-        <exclude name="JUnitAssertionsShouldIncludeMessage"/>
-        <exclude name="JUnitTestsShouldIncludeAssert"/>
         <!-- SLF4J parameterized logging does not need log-level guards -->
         <exclude name="GuardLogStatement"/>
         <!-- LooseCoupling: ConcurrentHashMap used intentionally for atomic operations -->

@@ -27,6 +27,7 @@ import net.rafalohaki.veloauth.auth.totp.PendingTotpStore;
 import net.rafalohaki.veloauth.auth.totp.TotpReplayGuard;
 import net.rafalohaki.veloauth.auth.totp.TotpService;
 import net.rafalohaki.veloauth.premium.PremiumResolverService;
+import net.rafalohaki.veloauth.util.FloodgateDetector;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.bstats.velocity.Metrics;
 import org.slf4j.Logger;
@@ -77,8 +78,6 @@ public class VeloAuth {
     private AuditLogService auditLogService;
     private TotpService totpService;
     private PendingTotpStore pendingTotpStore;
-    /** TEMP (Etap 1 spike): embedded limbo server. Proper lifecycle wiring lands in Etap 4. */
-    private net.rafalohaki.veloauth.limbo.EmbeddedLimboServer embeddedLimbo;
     private TotpReplayGuard totpReplayGuard;
     private net.rafalohaki.veloauth.report.ReportService reportService;
     private ScheduledExecutorService premiumCacheCleanupScheduler;
@@ -513,25 +512,6 @@ public class VeloAuth {
         connectionManager = new ConnectionManager(this, authCache, settings, messages);
         authTimeoutScheduler = new AuthTimeoutScheduler(this, settings, messages, authCache, connectionManager);
 
-        // TEMP (Etap 1 spike): start the embedded limbo server on loopback and register it
-        // with Velocity so ConnectionManager.getServer(name) resolves. Etap 4 will replace
-        // this with a proper mode: embedded|external config-driven switch.
-        try {
-            // Spike-only constant; Etap 5 moves bind host/port into config (LimboConfig).
-            @SuppressWarnings("PMD.AvoidUsingHardCodedIP")
-            String limboHost = "127.0.0.1";
-            embeddedLimbo = new net.rafalohaki.veloauth.limbo.EmbeddedLimboServer(limboHost, 25566);
-            embeddedLimbo.start();
-            com.velocitypowered.api.proxy.server.ServerInfo limboInfo = new com.velocitypowered.api.proxy.server.ServerInfo(
-                    "veloauth-limbo",
-                    new java.net.InetSocketAddress(limboHost, embeddedLimbo.getBoundPort()));
-            server.registerServer(limboInfo);
-            logger.info("[Limbo] Registered embedded limbo as Velocity server 'veloauth-limbo'");
-        } catch (Exception e) {
-            logger.warn("[Limbo] Failed to start embedded limbo server (Etap 1 spike — non-fatal)", e);
-            embeddedLimbo = null;
-        }
-
         logger.debug("✅ Connection manager initialized in {} ms (auth timeout: {}s)",
                 System.currentTimeMillis() - startTime,
                 settings.getAuthServerTimeoutSeconds());
@@ -680,17 +660,6 @@ public class VeloAuth {
                 logger.debug("ConnectionManager shut down");
             }
 
-            // TEMP (Etap 1 spike): stop the embedded limbo server after ConnectionManager.
-            // Etap 4 will wire this into the proper 7.5 step with unregisterServer.
-            if (embeddedLimbo != null) {
-                try {
-                    embeddedLimbo.stop();
-                    logger.debug("EmbeddedLimboServer stopped");
-                } catch (Exception e) {
-                    logger.warn("Failed to stop embedded limbo server cleanly", e);
-                }
-            }
-
             shutdownCleanupScheduler(premiumCacheCleanupScheduler, "Premium cache cleanup scheduler");
             shutdownCleanupScheduler(premiumDbCleanupScheduler, "Premium DB cleanup scheduler");
             shutdownCleanupScheduler(auditLogCleanupScheduler, "Audit log cleanup scheduler");
@@ -763,9 +732,11 @@ public class VeloAuth {
     private void logStartupInfo(long initializationDuration) {
         if (logger.isInfoEnabled()) {
             logger.info("Auth server '{}' configured", settings.getAuthServerName());
-            logger.info("Floodgate support: {} (prefix='{}', auth bypass={})",
+            String effectiveFloodgatePrefix = FloodgateDetector.getPlayerPrefix()
+                    .orElse(settings.getFloodgateUsernamePrefix());
+            logger.info("Floodgate support: {} (effective prefix='{}', auth bypass={})",
                     settings.isFloodgateIntegrationEnabled() ? "enabled" : "disabled",
-                    settings.getFloodgateUsernamePrefix(),
+                    effectiveFloodgatePrefix,
                     settings.isFloodgateBypassAuthServerEnabled());
             
             String dbType = settings.getDatabaseStorageType();

@@ -7,6 +7,8 @@ import org.slf4j.Marker;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MarkerFactory;
 
+import java.util.concurrent.CompletableFuture;
+
 /**
  * Manages CONFLICT_MODE lifecycle: TTL-based expiry and auto-clear after successful auth.
  *
@@ -36,7 +38,7 @@ public final class ConflictModeService {
     private final int conflictTtlHours;
 
     /**
-     * @param databaseManager   used only for fire-and-forget saves in {@link #clearIfPresent}
+     * @param databaseManager   persists state changes made by {@link #clearIfPresent}
      * @param conflictTtlHours  TTL in hours; {@code 0} disables the TTL (permanent conflict —
      *                          the pre-1.3.3 behaviour). Captured once at construction into a
      *                          {@code final} field; {@code /vauth reload} does NOT pick up
@@ -80,36 +82,72 @@ public final class ConflictModeService {
             // Treat as expired so the TTL still bounds the window — safer than allowing forever.
             return false;
         }
-        return (System.currentTimeMillis() - conflictTimestamp) < conflictTtlMillis;
+        long age = System.currentTimeMillis() - conflictTimestamp;
+        return age >= 0L && age < conflictTtlMillis;
     }
 
     /**
-     * Resets conflict state on the given player and persists it (fire-and-forget).
+     * Resets conflict state on the given player and persists it asynchronously.
      * No-op when the player is not in conflict mode. Called from the auth-success paths
      * (post-login command flow and premium-cache refresh) so a successful login clears
      * the conflict flag for the next connection.
      *
      * @param dbPlayer      the player record to clear; mutated in place
      * @param operationName human-readable name for logging (e.g. "login", "premium refresh")
+     * @return future resolving to true only after the clear was persisted
      */
-    public void clearIfPresent(RegisteredPlayer dbPlayer, String operationName) {
+    public CompletableFuture<Boolean> clearIfPresent(RegisteredPlayer dbPlayer, String operationName) {
         if (dbPlayer == null || !dbPlayer.getConflictMode()) {
-            return;
+            return CompletableFuture.completedFuture(true);
         }
+        long previousTimestamp = dbPlayer.getConflictTimestamp();
         dbPlayer.setConflictMode(false);
         dbPlayer.setConflictTimestamp(0L);
-        // Fire-and-forget: this runs on the auth-success path where we have already
-        // proven the player is legitimate. A save failure is logged but does not undo
-        // the in-memory state — the next savePlayer call will retry the persistence.
-        databaseManager.savePlayer(dbPlayer)
-                .exceptionally(throwable -> {
+        return persistClear(dbPlayer, operationName, previousTimestamp, false);
+    }
+
+    private CompletableFuture<Boolean> persistClear(RegisteredPlayer dbPlayer, String operationName,
+                                                     long previousTimestamp, boolean retry) {
+        CompletableFuture<DatabaseManager.DbResult<Boolean>> saveFuture = databaseManager.savePlayer(dbPlayer);
+        if (saveFuture == null) {
+            restoreConflictState(dbPlayer, previousTimestamp);
+            logger.error(SECURITY_MARKER,
+                    "[CONFLICT_MODE] Save did not start for {} after {}", dbPlayer.getNickname(), operationName);
+            return CompletableFuture.completedFuture(false);
+        }
+
+        return saveFuture.handle(this::isSuccessful)
+                .thenCompose(success -> {
+                    if (success) {
+                        logger.info(SECURITY_MARKER,
+                                "[CONFLICT_MODE CLEARED] Player {} conflict state persisted after successful {}",
+                                dbPlayer.getNickname(), operationName);
+                        return CompletableFuture.completedFuture(true);
+                    }
+                    if (!retry) {
+                        logger.warn(SECURITY_MARKER,
+                                "[CONFLICT_MODE] Failed to persist clear for {} after {} - retrying once",
+                                dbPlayer.getNickname(), operationName);
+                        return persistClear(dbPlayer, operationName, previousTimestamp, true);
+                    }
+
+                    restoreConflictState(dbPlayer, previousTimestamp);
                     logger.error(SECURITY_MARKER,
-                            "[CONFLICT_MODE] Failed to clear conflict state for {} after {}: {}",
-                            dbPlayer.getNickname(), operationName, throwable.getMessage());
-                    return null;
+                            "[CONFLICT_MODE] Could not persist clear for {} after {}; conflict state restored",
+                            dbPlayer.getNickname(), operationName);
+                    return CompletableFuture.completedFuture(false);
                 });
-        logger.info(SECURITY_MARKER,
-                "[CONFLICT_MODE CLEARED] Player {} conflict state cleared after successful {}",
-                dbPlayer.getNickname(), operationName);
+    }
+
+    private boolean isSuccessful(DatabaseManager.DbResult<Boolean> result, Throwable throwable) {
+        return throwable == null
+                && result != null
+                && !result.isDatabaseError()
+                && Boolean.TRUE.equals(result.getValue());
+    }
+
+    private void restoreConflictState(RegisteredPlayer dbPlayer, long previousTimestamp) {
+        dbPlayer.setConflictMode(true);
+        dbPlayer.setConflictTimestamp(previousTimestamp);
     }
 }
