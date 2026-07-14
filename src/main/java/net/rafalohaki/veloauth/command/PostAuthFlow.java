@@ -5,8 +5,11 @@ import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
+import net.rafalohaki.veloauth.util.UuidUtils;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
+
+import java.util.UUID;
 
 /**
  * Shared post-authentication flow used by both LoginCommand and RegisterCommand.
@@ -41,9 +44,10 @@ final class PostAuthFlow {
 
         // Offline auth paths (/login and /register) prove only password ownership for the
         // offline backend UUID. They must never persist or cache a resolver-sourced Mojang UUID
-        // as authoritative premium identity; only the online-mode GameProfileRequestEvent
-        // reconciliation path has a Mojang-verified session.
-        CachedAuthUser cachedUser = CachedAuthUser.fromRegisteredPlayer(player, isPremium);
+        // as authoritative premium identity. Reuse only an already-stored AUTH.PREMIUMUUID,
+        // which can be authoritative because it was written by Mojang-verified reconciliation.
+        CachedAuthUser cachedUser = CachedAuthUser.fromRegisteredPlayer(
+                player, isPremium, storedPremiumUuid(player, isPremium));
 
         Player p = authContext.player();
         ctx.authCache().authorize(p.getUniqueId(), cachedUser, authContext.username(),
@@ -84,5 +88,12 @@ final class PostAuthFlow {
                     return false;
         });
         return true;
+    }
+
+    private static UUID storedPremiumUuid(RegisteredPlayer player, boolean isPremium) {
+        if (!isPremium) {
+            return null;
+        }
+        return UuidUtils.parseUuidSafely(player.getPremiumUuid());
     }
 }

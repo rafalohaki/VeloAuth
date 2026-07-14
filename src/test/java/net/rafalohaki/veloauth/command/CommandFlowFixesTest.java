@@ -41,6 +41,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -327,9 +328,43 @@ class CommandFlowFixesTest {
         assertNull(registeredPlayer.getPremiumUuid(),
                 "Offline auth must not promote resolver-sourced UUIDs into AUTH.PREMIUMUUID");
         assertTrue(authCache.findAuthorizedPlayer(playerUuid).isPresent());
+        assertNull(authCache.findAuthorizedPlayer(playerUuid).orElseThrow().getPremiumUuid(),
+                "Offline auth cache must not store resolver-sourced UUIDs");
         verify(connectionManager).transferToBackend(player);
         assertFalse(databaseManager.wasSavePremiumUuidCalled(),
                 "PREMIUM_UUIDS sync must be reserved for Mojang-verified profile reconciliation");
+    }
+
+    @Test
+    void testPostAuthFlow_PreservesStoredVerifiedPremiumUuidInCache() throws Exception {
+        UUID storedPremiumUuid = UUID.randomUUID();
+        UUID resolverPremiumUuid = UUID.randomUUID();
+        RegisteredPlayer registeredPlayer = createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));
+        registeredPlayer.setPremiumUuid(storedPremiumUuid.toString());
+        AuthenticationContext authContext = new AuthenticationContext(
+                player,
+                TEST_PLAYER_NAME,
+                player.getRemoteAddress().getAddress(),
+                registeredPlayer
+        );
+
+        authCache.addPremiumPlayer(TEST_PLAYER_NAME, resolverPremiumUuid);
+        databaseManager.setPremiumResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(true)));
+        databaseManager.setSavePremiumUuidResult(
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.databaseError("must not be called")));
+        when(connectionManager.transferToBackend(player)).thenReturn(true);
+        injectAuthTimeoutScheduler();
+
+        boolean result = PostAuthFlow.execute(inlineContext, authContext, registeredPlayer, "logged in");
+
+        CachedAuthUser cachedUser = authCache.findAuthorizedPlayer(playerUuid).orElseThrow();
+        assertTrue(result);
+        assertEquals(storedPremiumUuid, cachedUser.getPremiumUuid(),
+                "Offline auth may cache the verified premium UUID already stored in AUTH");
+        verify(connectionManager).transferToBackend(player);
+        assertFalse(databaseManager.wasSavePremiumUuidCalled(),
+                "Preserving stored AUTH.PREMIUMUUID must not trigger a new premium UUID sync");
     }
 
     private void injectAuthTimeoutScheduler() throws Exception {
