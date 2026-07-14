@@ -7,6 +7,8 @@ import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.junit.jupiter.api.Test;
 
+import java.text.MessageFormat;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
@@ -69,6 +71,32 @@ class SimpleMessagesTest {
         assertEquals(TextDecoration.State.TRUE, component.decoration(TextDecoration.BOLD));
     }
 
+    @Test
+    void key_withFormattedOtpUri_preservesLiteralAmpersandsInArgument() {
+        String otpUri = "otpauth://totp/VeloAuth:Steve?secret=ABC123&issuer=VeloAuth"
+                + "&algorithm=SHA1&digits=6&period=30";
+        SimpleMessages simpleMessages = new SimpleMessages(
+                new FormattingStubMessages("§eOTP URI: §f{0}"));
+
+        Component component = simpleMessages.key("test.key", NamedTextColor.YELLOW, otpUri);
+
+        assertEquals("OTP URI: " + otpUri,
+                PlainTextComponentSerializer.plainText().serialize(component));
+    }
+
+    @Test
+    void key_withColorLikeFormattedArgument_preservesLiteralValueAndTemplateColor() {
+        String literalValue = "R&D &a <#FF0000> §c";
+        SimpleMessages simpleMessages = new SimpleMessages(
+                new FormattingStubMessages("§fValue: {0}"));
+
+        Component component = simpleMessages.key("test.key", NamedTextColor.YELLOW, literalValue);
+
+        assertEquals("Value: " + literalValue,
+                PlainTextComponentSerializer.plainText().serialize(component));
+        assertEquals(NamedTextColor.WHITE, component.color());
+    }
+
     private static void assertHexColor(String message) {
         SimpleMessages simpleMessages = new SimpleMessages(new StubMessages(message));
 
@@ -88,6 +116,19 @@ class SimpleMessagesTest {
         @Override
         public String get(String key, Object... args) {
             return value;
+        }
+    }
+
+    private static final class FormattingStubMessages extends Messages {
+        private final String value;
+
+        private FormattingStubMessages(String value) {
+            this.value = value;
+        }
+
+        @Override
+        public String get(String key, Object... args) {
+            return MessageFormat.format(value, args);
         }
     }
 }

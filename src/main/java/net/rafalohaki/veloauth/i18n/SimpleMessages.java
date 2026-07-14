@@ -18,6 +18,9 @@ public final class SimpleMessages {
     private static final Pattern SECTION_LEGACY_CODE = Pattern.compile("(?i)§([0-9a-fk-orx#])");
     private static final Pattern AMPERSAND_LEGACY_CODE = Pattern.compile(
             "(?i)&(?:#[0-9a-f]{6}|x(?:&[0-9a-f]){6}|[0-9a-fk-or])");
+    private static final String LITERAL_AMPERSAND_MARKER = "\uFDD0";
+    private static final String LITERAL_SECTION_MARKER = "\uFDD1";
+    private static final String LITERAL_MINIMESSAGE_HEX_MARKER = "\uFDD2";
 
     private static final LegacyComponentSerializer SERIALIZER = LegacyComponentSerializer.builder()
             .character('&')
@@ -41,8 +44,8 @@ public final class SimpleMessages {
      * @return Formatted Component
      */
     public Component key(String key, NamedTextColor fallbackColor, Object... args) {
-        String text = messages.get(key, args);
-        return parseWithColors(text, fallbackColor);
+        String text = messages.get(key, protectFormattingArguments(args));
+        return restoreFormattingArguments(parseWithColors(text, fallbackColor));
     }
 
     /**
@@ -70,6 +73,42 @@ public final class SimpleMessages {
     private static String normalizeColorCodes(String text) {
         String normalizedText = MINIMESSAGE_HEX_COLOR.matcher(text).replaceAll("&#$1");
         return SECTION_LEGACY_CODE.matcher(normalizedText).replaceAll("&$1");
+    }
+
+    /**
+     * Prevents formatted values such as URLs from being interpreted as message color codes.
+     * Color syntax belongs to the translation template; values inserted through placeholders
+     * are always literal data.
+     */
+    private static Object[] protectFormattingArguments(Object[] args) {
+        if (args.length == 0) {
+            return args;
+        }
+
+        Object[] protectedArgs = args.clone();
+        for (int i = 0; i < protectedArgs.length; i++) {
+            Object argument = protectedArgs[i];
+            if (argument instanceof String stringArgument) {
+                protectedArgs[i] = protectFormattingArgument(stringArgument);
+            } else if (argument instanceof Character characterArgument) {
+                protectedArgs[i] = protectFormattingArgument(characterArgument.toString());
+            }
+        }
+        return protectedArgs;
+    }
+
+    private static String protectFormattingArgument(String argument) {
+        return argument
+                .replace("&", LITERAL_AMPERSAND_MARKER)
+                .replace("§", LITERAL_SECTION_MARKER)
+                .replace("<#", LITERAL_MINIMESSAGE_HEX_MARKER);
+    }
+
+    private static Component restoreFormattingArguments(Component component) {
+        return component
+                .replaceText(builder -> builder.matchLiteral(LITERAL_AMPERSAND_MARKER).replacement("&"))
+                .replaceText(builder -> builder.matchLiteral(LITERAL_SECTION_MARKER).replacement("§"))
+                .replaceText(builder -> builder.matchLiteral(LITERAL_MINIMESSAGE_HEX_MARKER).replacement("<#"));
     }
 
     public Component loginSuccess() {
