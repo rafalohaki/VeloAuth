@@ -4,25 +4,27 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
+import java.util.regex.Pattern;
+
 /**
  * Wrapper for Messages that provides formatted Adventure Components.
  * Supports color codes in messages:
  * - Legacy codes: §c (red), §a (green), §6 (gold), etc.
  * - Ampersand codes: &c (red), &a (green), &6 (gold), etc.
+ * - Hex colors: <#FF6700>, &#FF6700, §#FF6700, and legacy hex sequences.
  */
 public final class SimpleMessages {
-    private final Messages messages;
-    
-    // Serializer that supports both § and & color codes
+    private static final Pattern MINIMESSAGE_HEX_COLOR = Pattern.compile("(?i)<#([0-9a-f]{6})>");
+    private static final Pattern SECTION_LEGACY_CODE = Pattern.compile("(?i)§([0-9a-fk-orx#])");
+    private static final Pattern AMPERSAND_LEGACY_CODE = Pattern.compile(
+            "(?i)&(?:#[0-9a-f]{6}|x(?:&[0-9a-f]){6}|[0-9a-fk-or])");
+
     private static final LegacyComponentSerializer SERIALIZER = LegacyComponentSerializer.builder()
-            .character('§')
-            .hexColors()
-            .build();
-    
-    private static final LegacyComponentSerializer AMPERSAND_SERIALIZER = LegacyComponentSerializer.builder()
             .character('&')
             .hexColors()
             .build();
+
+    private final Messages messages;
 
     public SimpleMessages(Messages messages) {
         this.messages = messages;
@@ -32,7 +34,7 @@ public final class SimpleMessages {
      * Gets a message as Component with color support.
      * If the message contains color codes (§ or &), they will be parsed.
      * Otherwise, the fallback color is applied.
-     * 
+     *
      * @param key The message key
      * @param fallbackColor Color to use if message has no color codes
      * @param args Format arguments
@@ -42,7 +44,7 @@ public final class SimpleMessages {
         String text = messages.get(key, args);
         return parseWithColors(text, fallbackColor);
     }
-    
+
     /**
      * Parses text with color codes. If no color codes found, uses fallback color.
      */
@@ -50,19 +52,24 @@ public final class SimpleMessages {
         if (text == null || text.isEmpty()) {
             return Component.empty();
         }
-        
-        // Check if text contains color codes
-        boolean hasLegacyCodes = text.contains("§");
-        boolean hasAmpersandCodes = text.contains("&");
-        
-        if (hasLegacyCodes) {
-            return SERIALIZER.deserialize(text);
-        } else if (hasAmpersandCodes) {
-            return AMPERSAND_SERIALIZER.deserialize(text);
-        } else {
-            // No color codes, use fallback color
-            return Component.text(text, fallbackColor);
+
+        String normalizedText = normalizeColorCodes(text);
+
+        if (AMPERSAND_LEGACY_CODE.matcher(normalizedText).find()) {
+            return SERIALIZER.deserialize(normalizedText);
         }
+
+        return Component.text(normalizedText, fallbackColor);
+    }
+
+    /**
+     * Normalizes MiniMessage-style hex colors to Adventure legacy hex colors so
+     * server owners can use compact gradients like {@code <#FF6700>&lS} in
+     * existing properties files without switching the entire message parser.
+     */
+    private static String normalizeColorCodes(String text) {
+        String normalizedText = MINIMESSAGE_HEX_COLOR.matcher(text).replaceAll("&#$1");
+        return SECTION_LEGACY_CODE.matcher(normalizedText).replaceAll("&$1");
     }
 
     public Component loginSuccess() {
