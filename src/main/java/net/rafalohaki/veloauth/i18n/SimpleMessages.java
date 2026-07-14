@@ -15,15 +15,16 @@ import java.util.regex.Pattern;
  */
 public final class SimpleMessages {
     private final Messages messages;
-    
+
     private static final Pattern MINIMESSAGE_HEX_COLOR = Pattern.compile("(?i)<#([0-9a-f]{6})>");
+    private static final Pattern SECTION_LEGACY_CODE = Pattern.compile("(?i)§([0-9a-fk-orx#])");
 
     // Serializer that supports both § and & color codes
     private static final LegacyComponentSerializer SERIALIZER = LegacyComponentSerializer.builder()
             .character('§')
             .hexColors()
             .build();
-    
+
     private static final LegacyComponentSerializer AMPERSAND_SERIALIZER = LegacyComponentSerializer.builder()
             .character('&')
             .hexColors()
@@ -37,7 +38,7 @@ public final class SimpleMessages {
      * Gets a message as Component with color support.
      * If the message contains color codes (§ or &), they will be parsed.
      * Otherwise, the fallback color is applied.
-     * 
+     *
      * @param key The message key
      * @param fallbackColor Color to use if message has no color codes
      * @param args Format arguments
@@ -47,7 +48,7 @@ public final class SimpleMessages {
         String text = messages.get(key, args);
         return parseWithColors(text, fallbackColor);
     }
-    
+
     /**
      * Parses text with color codes. If no color codes found, uses fallback color.
      */
@@ -55,12 +56,13 @@ public final class SimpleMessages {
         if (text == null || text.isEmpty()) {
             return Component.empty();
         }
-        
+
+        String normalizedText = normalizeColorCodes(text);
+
         // Check if text contains color codes
-        boolean hasLegacyCodes = text.contains("§");
-        boolean hasAmpersandCodes = text.contains("&") || containsMiniMessageHexColor(text);
-        String normalizedText = normalizeMiniMessageHexColors(text, hasLegacyCodes ? "§" : "&");
-        
+        boolean hasLegacyCodes = normalizedText.contains("§");
+        boolean hasAmpersandCodes = normalizedText.contains("&");
+
         if (hasLegacyCodes) {
             return SERIALIZER.deserialize(normalizedText);
         } else if (hasAmpersandCodes) {
@@ -76,12 +78,12 @@ public final class SimpleMessages {
      * server owners can use compact gradients like {@code <#FF6700>&lS} in
      * existing properties files without switching the entire message parser.
      */
-    private boolean containsMiniMessageHexColor(String text) {
-        return MINIMESSAGE_HEX_COLOR.matcher(text).find();
-    }
-
-    private String normalizeMiniMessageHexColors(String text, String legacyPrefix) {
-        return MINIMESSAGE_HEX_COLOR.matcher(text).replaceAll(legacyPrefix + "#$1");
+    private String normalizeColorCodes(String text) {
+        String normalizedText = MINIMESSAGE_HEX_COLOR.matcher(text).replaceAll("&#$1");
+        if (normalizedText.contains("§") && normalizedText.contains("&")) {
+            normalizedText = SECTION_LEGACY_CODE.matcher(normalizedText).replaceAll("&$1");
+        }
+        return normalizedText;
     }
 
     public Component loginSuccess() {

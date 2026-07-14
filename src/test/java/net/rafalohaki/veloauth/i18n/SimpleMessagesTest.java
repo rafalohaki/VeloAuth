@@ -38,6 +38,18 @@ class SimpleMessagesTest {
         assertEquals(TextColor.color(0xFF8024), component.children().get(2).color());
     }
 
+    @Test
+    void key_withMixedSectionAmpersandAndMiniMessageCodes_preservesFormatting() {
+        SimpleMessages simpleMessages = new SimpleMessages(new StubMessages(
+                "§a<#FF6700>&lText"));
+
+        Component component = simpleMessages.key("test.key", NamedTextColor.GREEN);
+
+        assertEquals("Text", PlainTextComponentSerializer.plainText().serialize(component));
+        assertEquals(TextColor.color(0xFF6700), component.children().get(0).color());
+        assertEquals(TextDecoration.State.TRUE, component.children().get(0).decoration(TextDecoration.BOLD));
+    }
+
     private static final class StubMessages extends Messages {
         private final String value;
 
