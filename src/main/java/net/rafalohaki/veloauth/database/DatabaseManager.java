@@ -1050,7 +1050,8 @@ public class DatabaseManager {
             return false;
         }
 
-        // Primary: premiumUuid is the authoritative premium marker (set by PostAuthFlow)
+        // Primary: premiumUuid is the authoritative premium marker (set only by
+        // reconcileVerifiedPremiumProfile after Mojang verification, never by offline auth).
         String premiumUuid = player.getPremiumUuid();
         if (premiumUuid != null && !premiumUuid.isEmpty()) {
             return true;

@@ -1,15 +1,14 @@
 package net.rafalohaki.veloauth.command;
 
 import com.velocitypowered.api.proxy.Player;
-import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
+import net.rafalohaki.veloauth.util.UuidUtils;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -43,13 +42,12 @@ final class PostAuthFlow {
 
         boolean isPremium = Boolean.TRUE.equals(premiumResult.getValue());
 
-        // Defense-in-depth: persist PREMIUMUUID for premium players who ended up in offline path
-        UUID premiumUuid = resolvePremiumUuid(ctx, authContext.player());
-        if (!persistPremiumUuid(ctx, authContext, player, isPremium, premiumUuid)) {
-            return false;
-        }
-
-        CachedAuthUser cachedUser = CachedAuthUser.fromRegisteredPlayer(player, isPremium, premiumUuid);
+        // Offline auth paths (/login and /register) prove only password ownership for the
+        // offline backend UUID. They must never persist or cache a resolver-sourced Mojang UUID
+        // as authoritative premium identity. Reuse only an already-stored AUTH.PREMIUMUUID,
+        // which can be authoritative because it was written by Mojang-verified reconciliation.
+        CachedAuthUser cachedUser = CachedAuthUser.fromRegisteredPlayer(
+                player, isPremium, storedPremiumUuid(player, isPremium));
 
         Player p = authContext.player();
         ctx.authCache().authorize(p.getUniqueId(), cachedUser, authContext.username(),
@@ -88,80 +86,14 @@ final class PostAuthFlow {
                             "Unexpected conflict-state cleanup failure for {} after {}",
                             authContext.username(), operationName, throwable);
                     return false;
-                });
+        });
         return true;
     }
 
-    private static boolean persistPremiumUuid(CommandContext ctx, AuthenticationContext authContext,
-                                              RegisteredPlayer player, boolean isPremium,
-                                              UUID premiumUuid) {
-        if (!isPremium || player.getPremiumUuid() != null || premiumUuid == null) {
-            return true;
+    private static UUID storedPremiumUuid(RegisteredPlayer player, boolean isPremium) {
+        if (!isPremium) {
+            return null;
         }
-
-        player.setPremiumUuid(premiumUuid.toString());
-
-        try {
-            var savePlayerResult = ctx.databaseManager().savePlayer(player).join();
-            if (ctx.handleDatabaseError(savePlayerResult, authContext.player(),
-                    "Persist premium UUID in AUTH table")) {
-                return false;
-            }
-            if (!Boolean.TRUE.equals(savePlayerResult.getValue())) {
-                logPremiumUuidFailure(ctx, authContext.username(),
-                        "AUTH table update returned false while persisting PREMIUMUUID");
-                ctx.sendDatabaseErrorMessage(authContext.player());
-                return false;
-            }
-
-            var savePremiumUuidResult = ctx.databaseManager()
-                    .savePremiumUuid(authContext.username(), premiumUuid)
-                    .join();
-            if (ctx.handleDatabaseError(savePremiumUuidResult, authContext.player(),
-                    "Sync PREMIUM_UUIDS table")) {
-                return false;
-            }
-            if (!Boolean.TRUE.equals(savePremiumUuidResult.getValue())) {
-                logPremiumUuidFailure(ctx, authContext.username(),
-                        "PREMIUM_UUIDS sync returned false");
-                ctx.sendDatabaseErrorMessage(authContext.player());
-                return false;
-            }
-        } catch (java.util.concurrent.CompletionException e) {
-            logPremiumUuidFailure(ctx, authContext.username(), "Unexpected async premium UUID failure", e);
-            ctx.sendDatabaseErrorMessage(authContext.player());
-            return false;
-        }
-
-        if (ctx.logger().isInfoEnabled()) {
-            ctx.logger().info(AUTH_MARKER,
-                    "Persisted PREMIUMUUID for {} in AUTH and PREMIUM_UUIDS tables",
-                    authContext.username());
-        }
-        return true;
-    }
-
-    private static void logPremiumUuidFailure(CommandContext ctx, String username, String message) {
-        if (ctx.logger().isWarnEnabled()) {
-            ctx.logger().warn(AUTH_MARKER, "{} for {}", message, username);
-        }
-    }
-
-    private static void logPremiumUuidFailure(CommandContext ctx, String username,
-                                              String message, Throwable throwable) {
-        if (ctx.logger().isErrorEnabled()) {
-            ctx.logger().error(AUTH_MARKER, "{} for {}", message, username, throwable);
-        }
-    }
-
-    /**
-     * Resolves premium UUID from AuthCache for the given player.
-     *
-     * @return premium UUID if available, null otherwise
-     */
-    private static UUID resolvePremiumUuid(CommandContext ctx, Player player) {
-        return Optional.ofNullable(ctx.authCache().getPremiumStatus(player.getUsername()))
-                .map(AuthCache.PremiumCacheEntry::getPremiumUuid)
-                .orElse(null);
+        return UuidUtils.parseUuidSafely(player.getPremiumUuid());
     }
 }

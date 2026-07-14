@@ -41,7 +41,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -259,11 +261,7 @@ class CommandFlowFixesTest {
         // PostAuthFlow needs both a real ConnectionManager (transferToBackend → true) and an
         // AuthTimeoutScheduler (cancel on success). Inject a scheduler stub via reflection.
         when(connectionManager.transferToBackend(player)).thenReturn(true);
-        net.rafalohaki.veloauth.connection.AuthTimeoutScheduler scheduler =
-                mock(net.rafalohaki.veloauth.connection.AuthTimeoutScheduler.class);
-        Field schedulerField = VeloAuth.class.getDeclaredField("authTimeoutScheduler");
-        schedulerField.setAccessible(true);
-        schedulerField.set(plugin, scheduler);
+        injectAuthTimeoutScheduler();
 
         setExecutorShutdown(true); // run inline so assertions see the post-command state
         try {
@@ -306,7 +304,7 @@ class CommandFlowFixesTest {
     }
 
     @Test
-    void testPostAuthFlow_WhenAuthTablePremiumUuidPersistReturnsFalse_ReturnsFalseWithoutTransfer() {
+    void testPostAuthFlow_DoesNotPersistResolverSourcedPremiumUuidFromOfflinePath() throws Exception {
         UUID premiumUuid = UUID.randomUUID();
         RegisteredPlayer registeredPlayer = createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));
         AuthenticationContext authContext = new AuthenticationContext(
@@ -319,23 +317,30 @@ class CommandFlowFixesTest {
         authCache.addPremiumPlayer(TEST_PLAYER_NAME, premiumUuid);
         databaseManager.setPremiumResult(TEST_PLAYER_NAME,
                 CompletableFuture.completedFuture(DatabaseManager.DbResult.success(true)));
-        databaseManager.enqueueSavePlayerResult(DatabaseManager.DbResult.success(false));
+        databaseManager.setSavePremiumUuidResult(
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.databaseError("must not be called")));
+        when(connectionManager.transferToBackend(player)).thenReturn(true);
+        injectAuthTimeoutScheduler();
 
         boolean result = PostAuthFlow.execute(inlineContext, authContext, registeredPlayer, "logged in");
 
-        assertFalse(result);
-        assertTrue(authCache.findAuthorizedPlayer(playerUuid).isEmpty());
-        verify(connectionManager, never()).transferToBackend(player);
-
-        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
-        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
-        assertTrue(capturedTexts(messagesCaptor).contains(messages.get("error.database.query")));
+        assertTrue(result);
+        assertNull(registeredPlayer.getPremiumUuid(),
+                "Offline auth must not promote resolver-sourced UUIDs into AUTH.PREMIUMUUID");
+        assertTrue(authCache.findAuthorizedPlayer(playerUuid).isPresent());
+        assertNull(authCache.findAuthorizedPlayer(playerUuid).orElseThrow().getPremiumUuid(),
+                "Offline auth cache must not store resolver-sourced UUIDs");
+        verify(connectionManager).transferToBackend(player);
+        assertFalse(databaseManager.wasSavePremiumUuidCalled(),
+                "PREMIUM_UUIDS sync must be reserved for Mojang-verified profile reconciliation");
     }
 
     @Test
-    void testPostAuthFlow_WhenPremiumUuidSyncFails_ReturnsFalseWithoutTransfer() {
-        UUID premiumUuid = UUID.randomUUID();
+    void testPostAuthFlow_PreservesStoredVerifiedPremiumUuidInCache() throws Exception {
+        UUID storedPremiumUuid = UUID.randomUUID();
+        UUID resolverPremiumUuid = UUID.randomUUID();
         RegisteredPlayer registeredPlayer = createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));
+        registeredPlayer.setPremiumUuid(storedPremiumUuid.toString());
         AuthenticationContext authContext = new AuthenticationContext(
                 player,
                 TEST_PLAYER_NAME,
@@ -343,22 +348,31 @@ class CommandFlowFixesTest {
                 registeredPlayer
         );
 
-        authCache.addPremiumPlayer(TEST_PLAYER_NAME, premiumUuid);
+        authCache.addPremiumPlayer(TEST_PLAYER_NAME, resolverPremiumUuid);
         databaseManager.setPremiumResult(TEST_PLAYER_NAME,
                 CompletableFuture.completedFuture(DatabaseManager.DbResult.success(true)));
-        databaseManager.enqueueSavePlayerResult(DatabaseManager.DbResult.success(true));
         databaseManager.setSavePremiumUuidResult(
-                CompletableFuture.completedFuture(DatabaseManager.DbResult.databaseError("premium sync failed")));
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.databaseError("must not be called")));
+        when(connectionManager.transferToBackend(player)).thenReturn(true);
+        injectAuthTimeoutScheduler();
 
         boolean result = PostAuthFlow.execute(inlineContext, authContext, registeredPlayer, "logged in");
 
-        assertFalse(result);
-        assertTrue(authCache.findAuthorizedPlayer(playerUuid).isEmpty());
-        verify(connectionManager, never()).transferToBackend(player);
+        CachedAuthUser cachedUser = authCache.findAuthorizedPlayer(playerUuid).orElseThrow();
+        assertTrue(result);
+        assertEquals(storedPremiumUuid, cachedUser.getPremiumUuid(),
+                "Offline auth may cache the verified premium UUID already stored in AUTH");
+        verify(connectionManager).transferToBackend(player);
+        assertFalse(databaseManager.wasSavePremiumUuidCalled(),
+                "Preserving stored AUTH.PREMIUMUUID must not trigger a new premium UUID sync");
+    }
 
-        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
-        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
-        assertTrue(capturedTexts(messagesCaptor).contains(messages.get("error.database.query")));
+    private void injectAuthTimeoutScheduler() throws Exception {
+        net.rafalohaki.veloauth.connection.AuthTimeoutScheduler scheduler =
+                mock(net.rafalohaki.veloauth.connection.AuthTimeoutScheduler.class);
+        Field schedulerField = VeloAuth.class.getDeclaredField("authTimeoutScheduler");
+        schedulerField.setAccessible(true);
+        schedulerField.set(plugin, scheduler);
     }
 
     @Test
@@ -524,6 +538,7 @@ class CommandFlowFixesTest {
                 CompletableFuture.completedFuture(DbResult.success(true));
         private CompletableFuture<DbResult<Boolean>> savePremiumUuidResult =
                 CompletableFuture.completedFuture(DbResult.success(true));
+        private boolean savePremiumUuidCalled;
         private CompletableFuture<Integer> totalRegisteredAccounts =
                 CompletableFuture.completedFuture(0);
         private CompletableFuture<Integer> totalPremiumAccounts =
@@ -558,6 +573,10 @@ class CommandFlowFixesTest {
 
         void setSavePremiumUuidResult(CompletableFuture<DbResult<Boolean>> result) {
             savePremiumUuidResult = result;
+        }
+
+        boolean wasSavePremiumUuidCalled() {
+            return savePremiumUuidCalled;
         }
 
         void setTotalRegisteredAccounts(CompletableFuture<Integer> result) {
@@ -606,6 +625,7 @@ class CommandFlowFixesTest {
 
         @Override
         public CompletableFuture<DbResult<Boolean>> savePremiumUuid(String username, UUID premiumUuid) {
+            savePremiumUuidCalled = true;
             return savePremiumUuidResult;
         }
 
