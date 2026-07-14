@@ -42,6 +42,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -306,7 +307,7 @@ class CommandFlowFixesTest {
     }
 
     @Test
-    void testPostAuthFlow_WhenAuthTablePremiumUuidPersistReturnsFalse_ReturnsFalseWithoutTransfer() {
+    void testPostAuthFlow_DoesNotPersistResolverSourcedPremiumUuidFromOfflinePath() {
         UUID premiumUuid = UUID.randomUUID();
         RegisteredPlayer registeredPlayer = createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));
         AuthenticationContext authContext = new AuthenticationContext(
@@ -319,46 +320,19 @@ class CommandFlowFixesTest {
         authCache.addPremiumPlayer(TEST_PLAYER_NAME, premiumUuid);
         databaseManager.setPremiumResult(TEST_PLAYER_NAME,
                 CompletableFuture.completedFuture(DatabaseManager.DbResult.success(true)));
-        databaseManager.enqueueSavePlayerResult(DatabaseManager.DbResult.success(false));
-
-        boolean result = PostAuthFlow.execute(inlineContext, authContext, registeredPlayer, "logged in");
-
-        assertFalse(result);
-        assertTrue(authCache.findAuthorizedPlayer(playerUuid).isEmpty());
-        verify(connectionManager, never()).transferToBackend(player);
-
-        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
-        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
-        assertTrue(capturedTexts(messagesCaptor).contains(messages.get("error.database.query")));
-    }
-
-    @Test
-    void testPostAuthFlow_WhenPremiumUuidSyncFails_ReturnsFalseWithoutTransfer() {
-        UUID premiumUuid = UUID.randomUUID();
-        RegisteredPlayer registeredPlayer = createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));
-        AuthenticationContext authContext = new AuthenticationContext(
-                player,
-                TEST_PLAYER_NAME,
-                player.getRemoteAddress().getAddress(),
-                registeredPlayer
-        );
-
-        authCache.addPremiumPlayer(TEST_PLAYER_NAME, premiumUuid);
-        databaseManager.setPremiumResult(TEST_PLAYER_NAME,
-                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(true)));
-        databaseManager.enqueueSavePlayerResult(DatabaseManager.DbResult.success(true));
         databaseManager.setSavePremiumUuidResult(
-                CompletableFuture.completedFuture(DatabaseManager.DbResult.databaseError("premium sync failed")));
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.databaseError("must not be called")));
+        when(connectionManager.transferToBackend(player)).thenReturn(true);
 
         boolean result = PostAuthFlow.execute(inlineContext, authContext, registeredPlayer, "logged in");
 
-        assertFalse(result);
-        assertTrue(authCache.findAuthorizedPlayer(playerUuid).isEmpty());
-        verify(connectionManager, never()).transferToBackend(player);
-
-        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
-        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
-        assertTrue(capturedTexts(messagesCaptor).contains(messages.get("error.database.query")));
+        assertTrue(result);
+        assertNull(registeredPlayer.getPremiumUuid(),
+                "Offline auth must not promote resolver-sourced UUIDs into AUTH.PREMIUMUUID");
+        assertTrue(authCache.findAuthorizedPlayer(playerUuid).isPresent());
+        verify(connectionManager).transferToBackend(player);
+        assertFalse(databaseManager.wasSavePremiumUuidCalled(),
+                "PREMIUM_UUIDS sync must be reserved for Mojang-verified profile reconciliation");
     }
 
     @Test
@@ -524,6 +498,7 @@ class CommandFlowFixesTest {
                 CompletableFuture.completedFuture(DbResult.success(true));
         private CompletableFuture<DbResult<Boolean>> savePremiumUuidResult =
                 CompletableFuture.completedFuture(DbResult.success(true));
+        private boolean savePremiumUuidCalled;
         private CompletableFuture<Integer> totalRegisteredAccounts =
                 CompletableFuture.completedFuture(0);
         private CompletableFuture<Integer> totalPremiumAccounts =
@@ -558,6 +533,10 @@ class CommandFlowFixesTest {
 
         void setSavePremiumUuidResult(CompletableFuture<DbResult<Boolean>> result) {
             savePremiumUuidResult = result;
+        }
+
+        boolean wasSavePremiumUuidCalled() {
+            return savePremiumUuidCalled;
         }
 
         void setTotalRegisteredAccounts(CompletableFuture<Integer> result) {
@@ -606,6 +585,7 @@ class CommandFlowFixesTest {
 
         @Override
         public CompletableFuture<DbResult<Boolean>> savePremiumUuid(String username, UUID premiumUuid) {
+            savePremiumUuidCalled = true;
             return savePremiumUuidResult;
         }
 
