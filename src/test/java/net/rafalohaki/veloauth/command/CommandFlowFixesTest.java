@@ -260,11 +260,7 @@ class CommandFlowFixesTest {
         // PostAuthFlow needs both a real ConnectionManager (transferToBackend → true) and an
         // AuthTimeoutScheduler (cancel on success). Inject a scheduler stub via reflection.
         when(connectionManager.transferToBackend(player)).thenReturn(true);
-        net.rafalohaki.veloauth.connection.AuthTimeoutScheduler scheduler =
-                mock(net.rafalohaki.veloauth.connection.AuthTimeoutScheduler.class);
-        Field schedulerField = VeloAuth.class.getDeclaredField("authTimeoutScheduler");
-        schedulerField.setAccessible(true);
-        schedulerField.set(plugin, scheduler);
+        injectAuthTimeoutScheduler();
 
         setExecutorShutdown(true); // run inline so assertions see the post-command state
         try {
@@ -307,7 +303,7 @@ class CommandFlowFixesTest {
     }
 
     @Test
-    void testPostAuthFlow_DoesNotPersistResolverSourcedPremiumUuidFromOfflinePath() {
+    void testPostAuthFlow_DoesNotPersistResolverSourcedPremiumUuidFromOfflinePath() throws Exception {
         UUID premiumUuid = UUID.randomUUID();
         RegisteredPlayer registeredPlayer = createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));
         AuthenticationContext authContext = new AuthenticationContext(
@@ -323,6 +319,7 @@ class CommandFlowFixesTest {
         databaseManager.setSavePremiumUuidResult(
                 CompletableFuture.completedFuture(DatabaseManager.DbResult.databaseError("must not be called")));
         when(connectionManager.transferToBackend(player)).thenReturn(true);
+        injectAuthTimeoutScheduler();
 
         boolean result = PostAuthFlow.execute(inlineContext, authContext, registeredPlayer, "logged in");
 
@@ -333,6 +330,14 @@ class CommandFlowFixesTest {
         verify(connectionManager).transferToBackend(player);
         assertFalse(databaseManager.wasSavePremiumUuidCalled(),
                 "PREMIUM_UUIDS sync must be reserved for Mojang-verified profile reconciliation");
+    }
+
+    private void injectAuthTimeoutScheduler() throws Exception {
+        net.rafalohaki.veloauth.connection.AuthTimeoutScheduler scheduler =
+                mock(net.rafalohaki.veloauth.connection.AuthTimeoutScheduler.class);
+        Field schedulerField = VeloAuth.class.getDeclaredField("authTimeoutScheduler");
+        schedulerField.setAccessible(true);
+        schedulerField.set(plugin, scheduler);
     }
 
     @Test
