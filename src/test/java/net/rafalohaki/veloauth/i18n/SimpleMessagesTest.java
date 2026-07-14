@@ -46,8 +46,8 @@ class SimpleMessagesTest {
         Component component = simpleMessages.key("test.key", NamedTextColor.GREEN);
 
         assertEquals("Text", PlainTextComponentSerializer.plainText().serialize(component));
-        assertEquals(TextColor.color(0xFF6700), component.children().get(0).color());
-        assertEquals(TextDecoration.State.TRUE, component.children().get(0).decoration(TextDecoration.BOLD));
+        assertEquals(TextColor.color(0xFF6700), component.color());
+        assertEquals(TextDecoration.State.TRUE, component.decoration(TextDecoration.BOLD));
     }
 
     private static final class StubMessages extends Messages {
