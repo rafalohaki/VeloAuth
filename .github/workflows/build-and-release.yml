@@ -53,8 +53,8 @@ jobs:
     - name: Prepare Maven
       run: mvn -v
         
-    - name: Build with Maven
-      run: mvn -B -V clean package -DskipTests=false
+    - name: Build and verify with Maven
+      run: mvn -B -V clean verify -DskipTests=false
       
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4

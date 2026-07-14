@@ -41,6 +41,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Listener eventów autoryzacji VeloAuth.
@@ -74,9 +75,9 @@ public class AuthListener {
     private static final Marker PREMIUM_MARKER = MarkerFactory.getMarker("PREMIUM");
 
     // Guard against duplicate concurrent PreLogin events from the same (username|ip) pair.
-    // Caffeine-bounded so a flood of malformed PreLogins cannot grow this unbounded — TTL
-    // covers Velocity's own PreLogin timeout (~30 s); size cap prevents memory pressure.
-    private final Cache<String, Boolean> pendingLogins = Caffeine.newBuilder()
+    // Each entry retains the owning connection so a reconnect can replace an abandoned attempt.
+    // The TTL remains a bounded fallback for connections that never finish cleanly.
+    private final Cache<String, PendingLoginAttempt> pendingLogins = Caffeine.newBuilder()
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofSeconds(30))
             .build();
@@ -204,11 +205,12 @@ public class AuthListener {
     public EventTask onPreLogin(PreLoginEvent event) {
         String username = event.getUsername();
         String pendingLoginKey = createPendingLoginKey(event, username);
+        PendingLoginAttempt pendingLoginAttempt = acquirePendingLogin(pendingLoginKey, event.getConnection());
         if (logger.isDebugEnabled()) {
             logger.debug("PreLogin: {}", username);
         }
 
-        if (pendingLogins.asMap().putIfAbsent(pendingLoginKey, Boolean.TRUE) != null) {
+        if (pendingLoginAttempt == null) {
             logger.warn(SECURITY_MARKER, "[DUPLICATE PRELOGIN] {} from {} - already connecting, denying",
                     username, pendingLoginKey);
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
@@ -217,7 +219,7 @@ public class AuthListener {
         }
 
         if (!validatePreLoginConditions(event, username)) {
-            pendingLogins.invalidate(pendingLoginKey);
+            releasePendingLogin(pendingLoginKey, pendingLoginAttempt);
             return null;
         }
 
@@ -230,19 +232,36 @@ public class AuthListener {
                     "Floodgate player {} detected during pre-login - skipping Mojang resolution",
                     username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-            pendingLogins.invalidate(pendingLoginKey);
+            releasePendingLogin(pendingLoginKey, pendingLoginAttempt);
             return null;
         }
 
         if (!settings.isPremiumCheckEnabled()) {
             logger.debug("Premium check disabled in config - forcing offline mode for {}", username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-            pendingLogins.invalidate(pendingLoginKey);
+            releasePendingLogin(pendingLoginKey, pendingLoginAttempt);
             return null;
         }
 
         return EventTask.resumeWhenComplete(handlePremiumDetectionAsync(event, username)
-                .whenComplete((result, throwable) -> pendingLogins.invalidate(pendingLoginKey)));
+                .whenComplete((result, throwable) -> releasePendingLogin(pendingLoginKey, pendingLoginAttempt)));
+    }
+
+    private PendingLoginAttempt acquirePendingLogin(String key, InboundConnection connection) {
+        PendingLoginAttempt candidate = new PendingLoginAttempt(connection);
+        AtomicBoolean acquired = new AtomicBoolean();
+        pendingLogins.asMap().compute(key, (ignored, existing) -> {
+            if (existing == null || !existing.connection().isActive()) {
+                acquired.set(true);
+                return candidate;
+            }
+            return existing;
+        });
+        return acquired.get() ? candidate : null;
+    }
+
+    private void releasePendingLogin(String key, PendingLoginAttempt attempt) {
+        pendingLogins.asMap().remove(key, attempt);
     }
 
     private String createPendingLoginKey(PreLoginEvent event, String username) {
@@ -881,6 +900,9 @@ public class AuthListener {
         } else {
             player.sendMessage(Component.text(messages.get("auth.first_time"), NamedTextColor.AQUA));
         }
+    }
+
+    private record PendingLoginAttempt(InboundConnection connection) {
     }
 
 

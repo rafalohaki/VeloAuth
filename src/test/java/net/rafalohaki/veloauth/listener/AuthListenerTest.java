@@ -204,6 +204,46 @@ class AuthListenerTest {
     }
 
     @Test
+    void testOnPreLogin_inactiveAttemptShouldYieldLockWithoutOldCompletionClearingReplacement() {
+        String username = "ReconnectingPlayer";
+        CompletableFuture<PreLoginHandler.PremiumResolutionResult> firstResolution = new CompletableFuture<>();
+        CompletableFuture<PreLoginHandler.PremiumResolutionResult> replacementResolution = new CompletableFuture<>();
+        when(preLoginHandler.resolvePremiumStatusAsync(username)).thenReturn(
+                firstResolution,
+                replacementResolution,
+                CompletableFuture.completedFuture(new PreLoginHandler.PremiumResolutionResult(false, null))
+        );
+
+        InboundConnection abandonedConnection = createConnection("192.0.2.21");
+        when(abandonedConnection.isActive()).thenReturn(false);
+        PreLoginEvent abandonedEvent = new PreLoginEvent(abandonedConnection, username);
+        PreLoginEvent replacementEvent = new PreLoginEvent(createConnection("192.0.2.21"), username);
+
+        EventTask abandonedTask = authListener.onPreLogin(abandonedEvent);
+        EventTask replacementTask = authListener.onPreLogin(replacementEvent);
+
+        assertNotNull(abandonedTask, "First attempt should enter async premium resolution");
+        assertNotNull(replacementTask, "A dead connection must not block an immediate reconnect");
+
+        firstResolution.complete(new PreLoginHandler.PremiumResolutionResult(false, null));
+        awaitEventTask(abandonedTask);
+
+        PreLoginEvent concurrentEvent = new PreLoginEvent(createConnection("192.0.2.21"), username);
+        EventTask concurrentTask = authListener.onPreLogin(concurrentEvent);
+        assertNull(concurrentTask, "Completion of the abandoned attempt must not release the replacement lock");
+        assertFalse(concurrentEvent.getResult().isAllowed(), "A genuinely concurrent attempt must remain denied");
+
+        replacementResolution.complete(new PreLoginHandler.PremiumResolutionResult(false, null));
+        awaitEventTask(replacementTask);
+
+        PreLoginEvent nextEvent = new PreLoginEvent(createConnection("192.0.2.21"), username);
+        EventTask nextTask = authListener.onPreLogin(nextEvent);
+        assertNotNull(nextTask, "Replacement completion should release its own lock");
+        awaitEventTask(nextTask);
+        assertTrue(nextEvent.getResult().isForceOfflineMode(), "A later reconnect should proceed normally");
+    }
+
+    @Test
     void onPreLogin_linkedFloodgatePlayer_skipsPremiumResolverAndForcesOfflineMode() {
         String linkedUsername = "LinkedJava";
         UUID floodgateUuid = UUID.randomUUID();
@@ -497,6 +537,7 @@ class AuthListenerTest {
         InboundConnection connection = org.mockito.Mockito.mock(InboundConnection.class);
         when(connection.getRemoteAddress()).thenReturn(
                 new InetSocketAddress(address, 25565));
+        when(connection.isActive()).thenReturn(true);
         return connection;
     }
 
