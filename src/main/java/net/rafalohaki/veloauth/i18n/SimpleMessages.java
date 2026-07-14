@@ -4,15 +4,20 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
+import java.util.regex.Pattern;
+
 /**
  * Wrapper for Messages that provides formatted Adventure Components.
  * Supports color codes in messages:
  * - Legacy codes: §c (red), §a (green), §6 (gold), etc.
  * - Ampersand codes: &c (red), &a (green), &6 (gold), etc.
+ * - Hex colors: <#FF6700>, &#FF6700, §#FF6700, and legacy hex sequences.
  */
 public final class SimpleMessages {
     private final Messages messages;
     
+    private static final Pattern MINIMESSAGE_HEX_COLOR = Pattern.compile("(?i)<#([0-9a-f]{6})>");
+
     // Serializer that supports both § and & color codes
     private static final LegacyComponentSerializer SERIALIZER = LegacyComponentSerializer.builder()
             .character('§')
@@ -53,16 +58,30 @@ public final class SimpleMessages {
         
         // Check if text contains color codes
         boolean hasLegacyCodes = text.contains("§");
-        boolean hasAmpersandCodes = text.contains("&");
+        boolean hasAmpersandCodes = text.contains("&") || containsMiniMessageHexColor(text);
+        String normalizedText = normalizeMiniMessageHexColors(text, hasLegacyCodes ? "§" : "&");
         
         if (hasLegacyCodes) {
-            return SERIALIZER.deserialize(text);
+            return SERIALIZER.deserialize(normalizedText);
         } else if (hasAmpersandCodes) {
-            return AMPERSAND_SERIALIZER.deserialize(text);
+            return AMPERSAND_SERIALIZER.deserialize(normalizedText);
         } else {
             // No color codes, use fallback color
-            return Component.text(text, fallbackColor);
+            return Component.text(normalizedText, fallbackColor);
         }
+    }
+
+    /**
+     * Normalizes MiniMessage-style hex colors to Adventure legacy hex colors so
+     * server owners can use compact gradients like {@code <#FF6700>&lS} in
+     * existing properties files without switching the entire message parser.
+     */
+    private boolean containsMiniMessageHexColor(String text) {
+        return MINIMESSAGE_HEX_COLOR.matcher(text).find();
+    }
+
+    private String normalizeMiniMessageHexColors(String text, String legacyPrefix) {
+        return MINIMESSAGE_HEX_COLOR.matcher(text).replaceAll(legacyPrefix + "#$1");
     }
 
     public Component loginSuccess() {
