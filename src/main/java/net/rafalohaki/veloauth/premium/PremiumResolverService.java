@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -22,6 +23,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
@@ -33,14 +35,17 @@ import java.util.regex.Pattern;
  * (player not premium) use the much shorter {@code miss-ttl-minutes}. Capacity is
  * bounded by {@code memory-cache-max-size}; W-TinyLFU handles eviction in O(1).
  * <p>
- * No explicit lock or hand-rolled LRU sweep is needed any more — Caffeine's per-node
- * synchronization covers both the size cap and the per-entry TTL.
+ * Cache expiry and eviction are delegated to Caffeine. Cold external work is additionally
+ * protected by per-source admission, single-flight nickname deduplication and a global
+ * concurrency semaphore.
  */
 public class PremiumResolverService {
 
     private static final Pattern VALID_USERNAME = Pattern.compile("^\\w{3,16}$");
     private static final String RESOLVER_SERVICE = "resolver-service";
     private static final Marker PREMIUM_MARKER = MarkerFactory.getMarker("PREMIUM");
+    private static final int DEFAULT_MAX_LOOKUPS_PER_IP_PER_MINUTE = 30;
+    private static final int DEFAULT_MAX_CONCURRENT_LOOKUPS = 32;
 
     /** Resolver ID treated as authoritative for OFFLINE classification. Must match
      *  {@link ResolverConfig#MOJANG}{@code .id()} — that resolver is the single source of
@@ -57,6 +62,11 @@ public class PremiumResolverService {
     private final long missTtlMillis;
     private final int maxCacheSize;
     private final PremiumResolverAlertService alertService;
+    private final PremiumLookupAdmissionController admissionController;
+    private final Semaphore externalLookupPermits;
+    private final ConcurrentHashMap<String, CompletableFuture<PremiumResolution>> inFlight =
+            new ConcurrentHashMap<>();
+    private volatile boolean shuttingDown;
 
     public PremiumResolverService(Logger logger, Settings settings, PremiumUuidDao premiumUuidDao) {
         this(logger, settings, premiumUuidDao, null);
@@ -83,6 +93,11 @@ public class PremiumResolverService {
         int configuredMaxSize = rs.getMemoryCacheMaxSize();
         this.maxCacheSize = configuredMaxSize > 0 ? configuredMaxSize : 10_000;
         this.cache = VeloAuthCaches.variableTtl(this.maxCacheSize, perEntryExpiry());
+        this.admissionController = new PremiumLookupAdmissionController(
+                positiveOrDefault(rs.getMaxLookupsPerIpPerMinute(),
+                        DEFAULT_MAX_LOOKUPS_PER_IP_PER_MINUTE));
+        this.externalLookupPermits = new Semaphore(
+                positiveOrDefault(rs.getMaxConcurrentLookups(), DEFAULT_MAX_CONCURRENT_LOOKUPS), true);
 
         if (premiumTtlMillis == 0 && logger.isWarnEnabled()) {
             logger.warn(PREMIUM_MARKER, "[PremiumResolver] hitTtlMinutes = 0 — premium cache disabled, every login will query API!");
@@ -97,6 +112,17 @@ public class PremiumResolverService {
                            List<PremiumResolver> resolvers,
                            long premiumTtlMillis,
                            long missTtlMillis) {
+        this(logger, premiumUuidDao, resolvers, premiumTtlMillis, missTtlMillis,
+                DEFAULT_MAX_LOOKUPS_PER_IP_PER_MINUTE, DEFAULT_MAX_CONCURRENT_LOOKUPS);
+    }
+
+    PremiumResolverService(Logger logger,
+                           PremiumUuidDao premiumUuidDao,
+                           List<PremiumResolver> resolvers,
+                           long premiumTtlMillis,
+                           long missTtlMillis,
+                           int maxLookupsPerIpPerMinute,
+                           int maxConcurrentLookups) {
         this.logger = Objects.requireNonNull(logger, "logger");
         this.dao = Objects.requireNonNull(premiumUuidDao, "premiumUuidDao");
         this.resolvers = List.copyOf(Objects.requireNonNull(resolvers, "resolvers"));
@@ -105,6 +131,15 @@ public class PremiumResolverService {
         this.maxCacheSize = 10_000;
         this.alertService = null;
         this.cache = VeloAuthCaches.variableTtl(this.maxCacheSize, perEntryExpiry());
+        this.admissionController = new PremiumLookupAdmissionController(maxLookupsPerIpPerMinute);
+        if (maxConcurrentLookups <= 0) {
+            throw new IllegalArgumentException("maxConcurrentLookups must be > 0");
+        }
+        this.externalLookupPermits = new Semaphore(maxConcurrentLookups, true);
+    }
+
+    private static int positiveOrDefault(int configured, int fallback) {
+        return configured > 0 ? configured : fallback;
     }
 
     /**
@@ -261,12 +296,10 @@ public class PremiumResolverService {
     private void awaitResolverFutures(List<CompletableFuture<Void>> futures) {
         try {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .orTimeout(5, TimeUnit.SECONDS)
-                    .exceptionally(ex -> null)
                     .join();
         } catch (Exception e) {
             if (logger.isDebugEnabled()) {
-                logger.debug(PREMIUM_MARKER, "[PARALLEL] Timeout or error waiting for resolvers: {}", e.getMessage());
+                logger.debug(PREMIUM_MARKER, "[PARALLEL] Error waiting for resolvers: {}", e.getMessage());
             }
         }
     }
@@ -432,6 +465,14 @@ public class PremiumResolverService {
     }
 
     public PremiumResolution resolve(String username) {
+        return resolve(username, null);
+    }
+
+    /**
+     * Resolves premium status while enforcing an abuse budget for external client traffic.
+     * A {@code null} address is reserved for trusted internal refreshes and tests.
+     */
+    public PremiumResolution resolve(String username, InetAddress sourceAddress) {
         if (username == null || username.isBlank()) {
             return PremiumResolution.offline(username, RESOLVER_SERVICE, "empty username");
         }
@@ -477,8 +518,54 @@ public class PremiumResolverService {
                     trimmed);
         }
 
-        // 3. Cache miss (or stale DB entry) - wywołaj API
-        return resolveFromApi(trimmed, cacheKey);
+        // 3. Cache miss (or stale DB entry) — admit external API work per source.
+        if (!admissionController.tryAcquire(sourceAddress)) {
+            logger.debug(PREMIUM_MARKER,
+                    "[PremiumResolver] External lookup budget exhausted for source {}",
+                    sourceAddress.getHostAddress());
+            return PremiumResolution.unknown(RESOLVER_SERVICE, "source lookup budget exhausted");
+        }
+
+        return resolveExternalSingleFlight(trimmed, cacheKey);
+    }
+
+    private PremiumResolution resolveExternalSingleFlight(String username, String cacheKey) {
+        if (shuttingDown) {
+            return PremiumResolution.unknown(RESOLVER_SERVICE, "resolver service shutting down");
+        }
+
+        CompletableFuture<PremiumResolution> leaderFuture = new CompletableFuture<>();
+        CompletableFuture<PremiumResolution> existing = inFlight.putIfAbsent(cacheKey, leaderFuture);
+        if (existing != null) {
+            return existing.join();
+        }
+
+        boolean permitAcquired = externalLookupPermits.tryAcquire();
+        if (!permitAcquired) {
+            PremiumResolution saturated = PremiumResolution.unknown(
+                    RESOLVER_SERVICE, "global lookup capacity exhausted");
+            leaderFuture.complete(saturated);
+            inFlight.remove(cacheKey, leaderFuture);
+            logger.debug(PREMIUM_MARKER,
+                    "[PremiumResolver] Global external lookup capacity exhausted for {}", username);
+            return saturated;
+        }
+
+        try {
+            PremiumResolution resolution = resolveFromApi(username, cacheKey);
+            leaderFuture.complete(resolution);
+            return resolution;
+        } catch (RuntimeException e) {
+            PremiumResolution failed = PremiumResolution.unknown(
+                    RESOLVER_SERVICE, "external lookup failed");
+            leaderFuture.complete(failed);
+            logger.warn(PREMIUM_MARKER,
+                    "[PremiumResolver] External lookup failed for {}: {}", username, e.getMessage());
+            return failed;
+        } finally {
+            externalLookupPermits.release();
+            inFlight.remove(cacheKey, leaderFuture);
+        }
     }
 
     /**
@@ -563,6 +650,12 @@ public class PremiumResolverService {
      * Must be called during plugin shutdown before DatabaseManager is closed.
      */
     public void shutdown() {
+        shuttingDown = true;
+        PremiumResolution shutdownResolution = PremiumResolution.unknown(
+                RESOLVER_SERVICE, "resolver service shutting down");
+        inFlight.values().forEach(future -> future.complete(shutdownResolution));
+        inFlight.clear();
+        admissionController.clear();
         long size = cache.estimatedSize();
         cache.invalidateAll();
         cache.cleanUp();

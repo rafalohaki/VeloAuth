@@ -167,15 +167,17 @@ auth-server:
 
 - **VeloAuth `config.yml`** — secrets redacted (`password`, `webhook-url`, `ssl-password`, `forwarding-secret`, connection-URL credentials → `<redacted>`)
 - **`velocity.toml`** — secrets redacted (same redaction rules)
-- **Recent proxy logs** — `logs/latest.log` (tail, capped at 10 MiB). mclo.gs attempts to strip IP addresses server-side, but this is not guaranteed — share the link only with trusted parties.
-- **Metadata** — VeloAuth/Velocity/Java versions, online-mode, server count, database type, ping timeout, premium-check settings (visible); auth server name, try-list, server list (hidden, visible to support only).
-
-Disable the command entirely:
+- **Recent proxy logs (opt-in)** — omitted by default because logs can contain IPs, chat and third-party secrets. With `include-logs: true`, the tail of `logs/latest.log` is capped at 10 MiB and passed through local best-effort redaction before upload.
+- **Metadata** — VeloAuth/Velocity/Java versions, online-mode, server count, database type, ping timeout, premium-check settings (visible); auth server name, try-list and backend names (hidden, without backend addresses).
 
 ```yaml
 report:
-  enabled: false
+  enabled: true
+  include-logs: false # privacy-safe default
 ```
+
+Set `enabled: false` to disable the command entirely. Even with local redaction, treat every
+generated link as public and share it only with trusted support staff.
 
 #### Password complexity policy (optional, off by default)
 
@@ -296,7 +298,7 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 | `/2fa setup` | Enroll a TOTP authenticator (see [2FA.md](2FA.md)) | Must be logged in. Disabled when `two-factor.enabled: false` |
 | `/2fa verify <code>` | Confirm enrollment OR pass 2FA at login | — |
 | `/2fa disable <code>` | Disable 2FA on your account | Requires a valid code |
-| `/2fa qr` / `/2fa status` | Re-show QR / show 2FA status | Must be logged in |
+| `/2fa qr` / `/2fa status` | Explain secure re-enrollment / show 2FA status | Must be logged in. Existing secrets are never re-displayed |
 
 ## Admin Commands
 
@@ -327,7 +329,9 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 Connect → [In-memory cache] → [Database cache] → [Mojang/Ashcon API]
               ~0ms                ~1ms                 ~200-500ms
 ```
-All API calls run in parallel on virtual threads. Results are cached in the database and survive proxy restarts.
+API calls run in parallel on virtual threads. Concurrent requests for the same cold nickname
+share one lookup; per-IP and global admission limits prevent one source from consuming resolver
+capacity for the whole proxy. Results are cached in the database and survive proxy restarts.
 
 ### Nickname Change Detection
 When a premium player logs in with a different username than what is stored (Mojang account rename), VeloAuth automatically detects the mismatch and updates the database record, keeping the UUID-to-username mapping accurate without any admin intervention.
@@ -356,6 +360,10 @@ These messages come from different layers:
 
 - `You are already connecting. Please wait.` is VeloAuth's concurrent `PreLogin` guard. Since 1.4, an abandoned connection releases ownership immediately; a genuinely active login attempt is still denied to prevent concurrent authentication races. The log contains `[DUPLICATE PRELOGIN]` when this guard is responsible.
 - `You are already connected to this proxy!` is Velocity's duplicate-player check after login. For cracked players VeloAuth must not automatically kick the existing session merely because another client supplied the same nickname — that would let anyone disconnect an authenticated player without knowing their password. If this persists beyond a normal network timeout, inspect Velocity's connection logs for a connection that never closed cleanly.
+
+VeloAuth 1.4 invalidates offline authorization, session state and pending 2FA as soon as Velocity
+emits the disconnect event. A cracked player therefore has to `/login` again after reconnecting;
+this prevents another client on the same public IP from inheriting a previous connection's session.
 
 **Q: The `Failed to transfer player X: TextComponentImpl{content="...", style=StyleImpl{...}}` spam in logs is gone — anything I need to do?**
 No action needed. VeloAuth 1.2.0+ renders kick reasons as plain text via `KickReasonRenderer`. Log lines now read e.g. `Failed to transfer player Alice to server lobby (Status: CONNECTION_CANCELLED): You must link your Discord account to play.`

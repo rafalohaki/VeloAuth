@@ -35,8 +35,8 @@ import java.util.Optional;
  *                                 (transfers the player to a backend).</li>
  *   <li>{@code /2fa disable <c>}— wipes the TOTP token from the DB after verifying the player owns the current
  *                                 authenticator (i.e. they pass a valid code).</li>
- *   <li>{@code /2fa qr}         — re-shows the otpauth URI + clickable QR link for the player's existing token. Useful when
- *                                 a phone is lost and the player needs to re-enroll on a new device.</li>
+ *   <li>{@code /2fa qr}         — retained for command compatibility, but never re-displays an
+ *                                 enrolled secret. Re-enrollment requires disable + setup.</li>
  *   <li>{@code /2fa status}     — prints whether the account currently has 2FA enabled.</li>
  * </ul>
  * <p>
@@ -192,13 +192,7 @@ class TwoFactorCommand implements SimpleCommand {
             return;
         }
 
-        // Defense in depth: gate /2fa verify behind the same brute-force tracker that gates /login.
-        // Otherwise an attacker holding a leaked password can park at the TOTP step and burn through
-        // codes — completeLogin() increments the counter on each fail, but without this read-side
-        // check the counter never converts into a block until the *next* /login attempt.
-        java.net.InetAddress address = PlayerAddressUtils.getPlayerAddress(player);
-        if (address != null && ctx.authCache().isBlocked(address, player.getUsername())) {
-            player.sendMessage(ctx.sm().bruteForceBlocked());
+        if (rejectBlockedTotpAttempt(player)) {
             return;
         }
 
@@ -226,12 +220,14 @@ class TwoFactorCommand implements SimpleCommand {
         }
         long matchedWindow = ctx.totpService().matchedWindow(pending.newSecret(), code);
         if (matchedWindow == net.rafalohaki.veloauth.auth.totp.TotpService.NO_WINDOW_MATCH) {
+            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "setup-wrong-code");
             player.sendMessage(ctx.sm().twoFactorVerifyWrongCode());
             return;
         }
         // RFC 6238 §5.2 — claim the window so the same code can't be re-used (covers concurrent
         // /2fa verify from a parallel session in the tolerance band).
         if (!ctx.totpReplayGuard().consume(player.getUniqueId(), matchedWindow)) {
+            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "setup-replay");
             player.sendMessage(ctx.sm().twoFactorVerifyWrongCode());
             return;
         }
@@ -261,20 +257,14 @@ class TwoFactorCommand implements SimpleCommand {
         String storedSecret = dbPlayer.getTotpToken();
         long matchedWindow = ctx.totpService().matchedWindow(storedSecret, code);
         if (matchedWindow == net.rafalohaki.veloauth.auth.totp.TotpService.NO_WINDOW_MATCH) {
-            ctx.authCache().registerFailedLogin(
-                    PlayerAddressUtils.getPlayerAddress(player), dbPlayer.getNickname());
-            emit(AuditEventType.TWO_FACTOR_VERIFY_FAIL, dbPlayer.getNickname(),
-                    PlayerAddressUtils.getPlayerIp(player), "wrong-code");
+            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "login-wrong-code");
             player.sendMessage(ctx.sm().twoFactorVerifyWrongCode());
             return;
         }
         // RFC 6238 §5.2 — bail out if this window was already consumed by an earlier verify
         // (race with another session / leaked code being replayed).
         if (!ctx.totpReplayGuard().consume(player.getUniqueId(), matchedWindow)) {
-            ctx.authCache().registerFailedLogin(
-                    PlayerAddressUtils.getPlayerAddress(player), dbPlayer.getNickname());
-            emit(AuditEventType.TWO_FACTOR_VERIFY_FAIL, dbPlayer.getNickname(),
-                    PlayerAddressUtils.getPlayerIp(player), "replay");
+            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "login-replay");
             player.sendMessage(ctx.sm().twoFactorVerifyWrongCode());
             return;
         }
@@ -306,6 +296,9 @@ class TwoFactorCommand implements SimpleCommand {
             player.sendMessage(ctx.sm().twoFactorVerifyInvalidFormat());
             return;
         }
+        if (rejectBlockedTotpAttempt(player)) {
+            return;
+        }
         RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa disable");
         if (dbPlayer == null) {
             return;
@@ -316,10 +309,12 @@ class TwoFactorCommand implements SimpleCommand {
         }
         long matchedWindow = ctx.totpService().matchedWindow(dbPlayer.getTotpToken(), code);
         if (matchedWindow == net.rafalohaki.veloauth.auth.totp.TotpService.NO_WINDOW_MATCH) {
+            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "disable-wrong-code");
             player.sendMessage(ctx.sm().twoFactorDisableWrongCode());
             return;
         }
         if (!ctx.totpReplayGuard().consume(player.getUniqueId(), matchedWindow)) {
+            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "disable-replay");
             player.sendMessage(ctx.sm().twoFactorDisableWrongCode());
             return;
         }
@@ -359,10 +354,7 @@ class TwoFactorCommand implements SimpleCommand {
             return;
         }
 
-        Settings.TwoFactorSettings settings = ctx.settings().getTwoFactorSettings();
-        String otpUri = ctx.totpService().otpAuthUri(settings.getIssuer(), dbPlayer.getNickname(), dbPlayer.getTotpToken());
         player.sendMessage(ctx.sm().twoFactorQrWarning());
-        sendSetupPanel(player, dbPlayer.getNickname(), dbPlayer.getTotpToken(), otpUri, settings);
     }
 
     // ===== status =====
@@ -407,6 +399,21 @@ class TwoFactorCommand implements SimpleCommand {
         }
         player.sendMessage(ctx.sm().twoFactorDisabledInConfig());
         return true;
+    }
+
+    private boolean rejectBlockedTotpAttempt(Player player) {
+        java.net.InetAddress address = PlayerAddressUtils.getPlayerAddress(player);
+        if (address == null || !ctx.authCache().isBlocked(address, player.getUsername())) {
+            return false;
+        }
+        player.sendMessage(ctx.sm().bruteForceBlocked());
+        return true;
+    }
+
+    private void recordFailedTotpAttempt(Player player, String nickname, String details) {
+        ctx.authCache().registerFailedLogin(PlayerAddressUtils.getPlayerAddress(player), nickname);
+        emit(AuditEventType.TWO_FACTOR_VERIFY_FAIL, nickname,
+                PlayerAddressUtils.getPlayerIp(player), details);
     }
 
     private static boolean hasTotp(RegisteredPlayer player) {

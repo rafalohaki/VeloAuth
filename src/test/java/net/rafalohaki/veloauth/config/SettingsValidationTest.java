@@ -296,6 +296,8 @@ class SettingsValidationTest {
         assertTrue(settings.load(), "Should load with default configuration");
         assertTrue(settings.isReportEnabled(),
                 "Default report.enabled should be true when not specified in config");
+        assertFalse(settings.isReportIncludeLogs(),
+                "Logs must be excluded from public reports unless explicitly enabled");
     }
 
     @Test
@@ -314,6 +316,42 @@ class SettingsValidationTest {
     }
 
     @Test
+    void shouldLoadReportIncludeLogsOnlyWhenExplicitlyEnabled() {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                report:
+                  enabled: true
+                  include-logs: true
+                """);
+
+        assertTrue(settings.load());
+        assertTrue(settings.isReportIncludeLogs());
+    }
+
+    @Test
+    void securitySensitiveOptIns_removedOnReload_returnToSafeDefaults() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                report:
+                  include-logs: true
+                two-factor:
+                  qr-link-enabled: true
+                """);
+        assertTrue(settings.load());
+        assertTrue(settings.isReportIncludeLogs());
+        assertTrue(settings.getTwoFactorSettings().isQrLinkEnabled());
+
+        writeConfigFile(configFile, """
+                report:
+                  enabled: true
+                two-factor:
+                  enabled: true
+                """);
+        assertTrue(settings.load());
+        assertFalse(settings.isReportIncludeLogs());
+        assertFalse(settings.getTwoFactorSettings().isQrLinkEnabled());
+    }
+
+    @Test
     void generatedDefaultConfigShouldDocumentReportEnabled() throws IOException {
         settings.load();
         String generatedConfig = Files.readString(tempDir.resolve("config.yml"));
@@ -322,6 +360,30 @@ class SettingsValidationTest {
                 "Generated default config should contain the report section");
         assertTrue(generatedConfig.contains("enabled: true"),
                 "Generated default config should document report.enabled: true");
+        assertTrue(generatedConfig.contains("include-logs: false"),
+                "Generated default config should keep logs private by default");
+        assertTrue(generatedConfig.contains("qr-link-enabled: false"),
+                "Generated default config should not send TOTP enrollment secrets externally by default");
+        assertTrue(generatedConfig.contains("max-lookups-per-ip-per-minute: 30"));
+        assertTrue(generatedConfig.contains("max-concurrent-lookups: 32"));
+    }
+
+    @ParameterizedTest(name = "shouldReject premium resolver limit {0}={1}")
+    @CsvSource({
+        "max-lookups-per-ip-per-minute, 0",
+        "max-lookups-per-ip-per-minute, -1",
+        "max-concurrent-lookups, 0",
+        "max-concurrent-lookups, -1"
+    })
+    void shouldRejectNonPositivePremiumResolverLimits(String key, int value) {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                premium:
+                  resolver:
+                    mojang-enabled: true
+                    %s: %d
+                """.formatted(key, value));
+
+        assertFalse(settings.load());
     }
 
     @Test
@@ -417,6 +479,7 @@ class SettingsValidationTest {
                 "bcryptCost",
                 "debugEnabled",
                 "reportEnabled",
+                "reportIncludeLogs",
                 "language");
 
         for (String fieldName : hotReloadable) {

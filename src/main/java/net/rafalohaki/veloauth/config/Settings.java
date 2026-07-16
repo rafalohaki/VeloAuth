@@ -102,8 +102,9 @@ public class Settings {
     private int conflictModeTtlHours = 168;
     // Debug settings — hot-reloadable (volatile).
     private volatile boolean debugEnabled = false;
-    // Report settings (/vauth report — uploads redacted config + logs to mclo.gs) — hot-reloadable.
+    // Report settings (/vauth report — uploads redacted config and optionally logs) — hot-reloadable.
     private volatile boolean reportEnabled = true;
+    private volatile boolean reportIncludeLogs = false;
     // Language settings — hot-reloadable (reloadLanguageFiles swaps the Messages instance).
     private volatile String language = "en";
 
@@ -205,6 +206,7 @@ public class Settings {
         maxPasswordLength = state.maxPasswordLength;
         debugEnabled = state.debugEnabled;
         reportEnabled = state.reportEnabled;
+        reportIncludeLogs = state.reportIncludeLogs;
         language = state.language;
         copyPostgreSqlSettings(state.postgreSQLSettings);
         copyPremiumSettings(state.premiumSettings);
@@ -446,6 +448,10 @@ public class Settings {
         return reportEnabled;
     }
 
+    public boolean isReportIncludeLogs() {
+        return reportIncludeLogs;
+    }
+
     public Path getDataDirectory() {
         return dataDirectory;
     }
@@ -484,6 +490,8 @@ public class Settings {
         private int missTtlMinutes = 10;
         private boolean caseSensitive = true;
         private int memoryCacheMaxSize = 10_000;
+        private int maxLookupsPerIpPerMinute = 30;
+        private int maxConcurrentLookups = 32;
 
         public boolean isMojangEnabled() { return mojangEnabled; }
         void setMojangEnabled(boolean value) { this.mojangEnabled = value; }
@@ -501,6 +509,10 @@ public class Settings {
         void setCaseSensitive(boolean value) { this.caseSensitive = value; }
         public int getMemoryCacheMaxSize() { return memoryCacheMaxSize; }
         void setMemoryCacheMaxSize(int value) { this.memoryCacheMaxSize = value; }
+        public int getMaxLookupsPerIpPerMinute() { return maxLookupsPerIpPerMinute; }
+        void setMaxLookupsPerIpPerMinute(int value) { this.maxLookupsPerIpPerMinute = value; }
+        public int getMaxConcurrentLookups() { return maxConcurrentLookups; }
+        void setMaxConcurrentLookups(int value) { this.maxConcurrentLookups = value; }
 
         void copyFrom(PremiumResolverSettings source) {
             this.mojangEnabled = source.mojangEnabled;
@@ -511,6 +523,8 @@ public class Settings {
             this.missTtlMinutes = source.missTtlMinutes;
             this.caseSensitive = source.caseSensitive;
             this.memoryCacheMaxSize = source.memoryCacheMaxSize;
+            this.maxLookupsPerIpPerMinute = source.maxLookupsPerIpPerMinute;
+            this.maxConcurrentLookups = source.maxConcurrentLookups;
         }
     }
 
@@ -623,7 +637,7 @@ public class Settings {
     public static class TwoFactorSettings {
         private boolean enabled = true;
         private String issuer = "VeloAuth";
-        private boolean qrLinkEnabled = true;
+        private boolean qrLinkEnabled = false;
         private int pendingTimeoutSeconds = 300;
 
         public boolean isEnabled() { return enabled; }

@@ -183,6 +183,26 @@ class ReportRedactorTest {
     }
 
     @Test
+    void redactLog_commonRuntimeSecrets_replaced() {
+        String input = """
+                Authorization: Bearer runtime-token-value
+                token=plain-token-value
+                password: leaked-password
+                webhook https://discord.com/api/webhooks/123456/secret-token
+                connected to postgresql://user:pass@db.example/veloauth
+                """;
+
+        String result = ReportRedactor.redactLog(input);
+
+        assertFalse(result.contains("runtime-token-value"));
+        assertFalse(result.contains("plain-token-value"));
+        assertFalse(result.contains("leaked-password"));
+        assertFalse(result.contains("secret-token"));
+        assertFalse(result.contains("user:pass@"));
+        assertTrue(result.contains("<redacted>"));
+    }
+
+    @Test
     void redact_passwordInComment_notRedacted() {
         // Comments starting with # should not be redacted — they are documentation, not values.
         // The regex anchors on ^\s*<key> which won't match a # prefix.

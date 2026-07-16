@@ -41,6 +41,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -81,6 +82,9 @@ public class AuthListener {
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofSeconds(30))
             .build();
+
+    /** Connection identity owning UUID-keyed authorization state. */
+    private final ConcurrentHashMap<UUID, Player> activeConnections = new ConcurrentHashMap<>();
 
     /** Fail-secure hand-off from GameProfileRequestEvent to LoginEvent. */
     private final Cache<String, Boolean> rejectedProfileBindings = Caffeine.newBuilder()
@@ -345,7 +349,8 @@ public class AuthListener {
      * @return CompletableFuture that completes when event result is set
      */
     private CompletableFuture<Void> handlePremiumDetectionAsync(PreLoginEvent event, String username) {
-        return preLoginHandler.resolvePremiumStatusAsync(username)
+        InetAddress sourceAddress = PlayerAddressUtils.getAddressFromPreLogin(event);
+        return preLoginHandler.resolvePremiumStatusAsync(username, sourceAddress)
                 .thenCompose(result -> handlePremiumResolutionResult(event, username, result))
                 .exceptionally(throwable -> {
                     logger.error("[ASYNC] Error during premium detection for {} - denying login for safety",
@@ -554,25 +559,67 @@ public class AuthListener {
     }
 
     /**
-     * Obsługuje disconnect gracza - kończy sesję premium.
-     * Zapobiega session hijacking przez natychmiastowe kończenie sesji.
+     * Invalidates every connection-bound authentication state on disconnect. Offline UUIDs and
+     * public IP addresses are not unique client credentials (multiple users can share one NAT),
+     * so retaining authorization would let a new connection inherit a previous player's login.
      */
     @Subscribe(priority = 0) // NORMAL priority
     public void onDisconnect(DisconnectEvent event) {
         Player player = event.getPlayer();
+        UUID playerUuid = player.getUniqueId();
 
         rejectedProfileBindings.invalidate(profileBindingKey(player.getUsername(), player));
 
-        // ✅ SESJE TRWAŁE: Nie kończ sesji przy rozłączeniu
-        // Sesje powinny być trwałe dla autoryzowanych graczy offline
-        // Kończymy tylko przy /logout, timeout lub banie
+        if (!releaseConnectionOwnership(event, player)) {
+            logger.debug(SECURITY_MARKER,
+                    "Ignoring {} disconnect cleanup for non-owning connection {} ({})",
+                    event.getLoginStatus(), player.getUsername(), playerUuid);
+            return;
+        }
 
-        // Cleanup retry attempts counter to prevent memory leak
-        connectionManager.clearRetryAttempts(player.getUniqueId());
-        plugin.getAuthTimeoutScheduler().cancel(player.getUniqueId());
+        clearConnectionBoundState(playerUuid);
 
         if (logger.isDebugEnabled()) {
-            logger.debug("Player {} disconnected - session remains active", player.getUsername());
+            logger.debug(SECURITY_MARKER,
+                    "Player {} disconnected - authorization and pending authentication state invalidated",
+                    player.getUsername());
+        }
+    }
+
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Player identity distinguishes same-UUID connections.
+    private boolean releaseConnectionOwnership(DisconnectEvent event, Player player) {
+        UUID uuid = player.getUniqueId();
+        if (activeConnections.remove(uuid, player)) {
+            return true;
+        }
+
+        Player knownOwner = activeConnections.get(uuid);
+        if (knownOwner != null && knownOwner != player) {
+            return false;
+        }
+
+        DisconnectEvent.LoginStatus status = event.getLoginStatus();
+        if (status != DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN
+                && status != DisconnectEvent.LoginStatus.PRE_SERVER_JOIN) {
+            return false;
+        }
+
+        return plugin.getServer().getPlayer(uuid)
+                .map(active -> active == player)
+                .orElse(true);
+    }
+
+    private void clearConnectionBoundState(UUID playerUuid) {
+        authCache.removeAuthorizedPlayer(playerUuid);
+        authCache.endSession(playerUuid);
+        if (plugin.getPendingTotpStore() != null) {
+            plugin.getPendingTotpStore().invalidate(playerUuid);
+        }
+
+        // Cleanup retry attempts counter to prevent memory leak
+        connectionManager.clearRetryAttempts(playerUuid);
+        if (plugin.getAuthTimeoutScheduler() != null) {
+            plugin.getAuthTimeoutScheduler().cancel(playerUuid);
         }
     }
 
@@ -581,8 +628,19 @@ public class AuthListener {
      * Kieruje gracza na odpowiedni serwer (auth server lub backend).
      */
     @Subscribe(priority = 0) // NORMAL priority
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Replacement detection requires connection identity.
     public void onPostLogin(PostLoginEvent event) {
         Player player = event.getPlayer();
+        Player previousConnection = activeConnections.put(player.getUniqueId(), player);
+        if (previousConnection != null && previousConnection != player) {
+            // The old DisconnectEvent may still be queued. Clear its UUID-keyed state before the
+            // replacement connection can consult it, then let the normal post-login path rebuild
+            // only the authorization justified by the new connection.
+            clearConnectionBoundState(player.getUniqueId());
+            logger.debug(SECURITY_MARKER,
+                    "Replaced stale connection owner for {} - previous auth state invalidated",
+                    player.getUsername());
+        }
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
 
         logger.debug("PostLoginEvent for player {} with IP {}",

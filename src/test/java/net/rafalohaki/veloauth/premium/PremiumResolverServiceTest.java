@@ -15,10 +15,15 @@ import org.slf4j.Logger;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.List;
+import java.net.InetAddress;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -107,6 +112,90 @@ class PremiumResolverServiceTest {
         verify(dao, never()).saveOrUpdate(any(UUID.class), anyString());
         verify(premiumResolver, times(1)).resolve(username);
         verify(offlineResolver, times(1)).resolve(username);
+    }
+
+    @Test
+    void resolve_concurrentSameNickname_usesSingleExternalLookup() throws Exception {
+        String username = "SharedLookup";
+        InetAddress address = InetAddress.getByName("192.0.2.10");
+        CountDownLatch resolverStarted = new CountDownLatch(1);
+        CountDownLatch releaseResolver = new CountDownLatch(1);
+        PremiumResolver resolver = mock(PremiumResolver.class);
+        when(resolver.enabled()).thenReturn(true);
+        when(resolver.id()).thenReturn("mojang");
+        when(resolver.resolve(username)).thenAnswer(ignored -> {
+            resolverStarted.countDown();
+            assertTrue(releaseResolver.await(2, TimeUnit.SECONDS));
+            return PremiumResolution.offline(username, "mojang", "not found");
+        });
+        when(dao.findByNickname(username)).thenReturn(Optional.empty());
+        service = new PremiumResolverService(
+                logger, dao, List.of(resolver), 10 * 60_000L, 3 * 60_000L, 10, 4);
+
+        CompletableFuture<PremiumResolution> first = CompletableFuture.supplyAsync(
+                () -> service.resolve(username, address));
+        assertTrue(resolverStarted.await(2, TimeUnit.SECONDS));
+        CompletableFuture<PremiumResolution> second = CompletableFuture.supplyAsync(
+                () -> service.resolve(username, address));
+        releaseResolver.countDown();
+
+        assertTrue(first.get(2, TimeUnit.SECONDS).isOffline());
+        assertTrue(second.get(2, TimeUnit.SECONDS).isOffline());
+        verify(resolver, times(1)).resolve(username);
+    }
+
+    @Test
+    void resolve_perIpBudgetExhausted_deniesOnlyThatAddress() throws Exception {
+        PremiumResolver resolver = mock(PremiumResolver.class);
+        when(resolver.enabled()).thenReturn(true);
+        when(resolver.id()).thenReturn("mojang");
+        when(resolver.resolve(anyString())).thenAnswer(invocation -> {
+            String username = invocation.getArgument(0);
+            return PremiumResolution.offline(username, "mojang", "not found");
+        });
+        when(dao.findByNickname(anyString())).thenReturn(Optional.empty());
+        service = new PremiumResolverService(
+                logger, dao, List.of(resolver), 10 * 60_000L, 3 * 60_000L, 2, 4);
+        InetAddress noisyAddress = InetAddress.getByName("192.0.2.20");
+        InetAddress otherAddress = InetAddress.getByName("192.0.2.21");
+
+        assertTrue(service.resolve("LookupOne", noisyAddress).isOffline());
+        assertTrue(service.resolve("LookupTwo", noisyAddress).isOffline());
+        PremiumResolution limited = service.resolve("LookupThree", noisyAddress);
+        PremiumResolution isolated = service.resolve("LookupFour", otherAddress);
+
+        assertTrue(limited.isUnknown(), "The over-budget source must fail closed");
+        assertTrue(isolated.isOffline(), "One source must not consume another source's budget");
+        verify(resolver, times(3)).resolve(anyString());
+    }
+
+    @Test
+    void resolve_globalLookupCapacityExhausted_rejectsWithoutStartingMoreWork() throws Exception {
+        CountDownLatch resolverStarted = new CountDownLatch(1);
+        CountDownLatch releaseResolver = new CountDownLatch(1);
+        PremiumResolver resolver = mock(PremiumResolver.class);
+        when(resolver.enabled()).thenReturn(true);
+        when(resolver.id()).thenReturn("mojang");
+        when(resolver.resolve("BlockingName")).thenAnswer(ignored -> {
+            resolverStarted.countDown();
+            assertTrue(releaseResolver.await(2, TimeUnit.SECONDS));
+            return PremiumResolution.offline("BlockingName", "mojang", "not found");
+        });
+        when(dao.findByNickname(anyString())).thenReturn(Optional.empty());
+        service = new PremiumResolverService(
+                logger, dao, List.of(resolver), 10 * 60_000L, 3 * 60_000L, 10, 1);
+
+        CompletableFuture<PremiumResolution> first = CompletableFuture.supplyAsync(
+                () -> service.resolve("BlockingName", InetAddress.getLoopbackAddress()));
+        assertTrue(resolverStarted.await(2, TimeUnit.SECONDS));
+        PremiumResolution saturated = service.resolve(
+                "SecondName", InetAddress.getByAddress(new byte[]{(byte) 192, 0, 2, 30}));
+        releaseResolver.countDown();
+
+        assertTrue(saturated.isUnknown(), "Saturated resolver capacity must fail closed");
+        assertTrue(first.get(2, TimeUnit.SECONDS).isOffline());
+        verify(resolver, never()).resolve("SecondName");
+        assertFalse(saturated.isOffline());
     }
 
     @Test

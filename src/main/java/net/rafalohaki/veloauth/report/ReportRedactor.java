@@ -53,6 +53,19 @@ final class ReportRedactor {
             "(://)[^@\\s]+(@)"
     );
 
+    private static final Pattern DISCORD_WEBHOOK = Pattern.compile(
+            "(?i)https://discord(?:app)?\\.com/api/webhooks/[^\\s\\\"']+"
+    );
+
+    private static final Pattern BEARER_TOKEN = Pattern.compile(
+            "(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/=-]+"
+    );
+
+    private static final Pattern LOG_SECRET_KEY_VALUE = Pattern.compile(
+            "(?i)(\\b(?:password|passwd|token|api[-_]?key|secret|webhook-url)\\b\\s*[:=]\\s*)"
+                    + "(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;]+)"
+    );
+
     private ReportRedactor() {
     }
 
@@ -96,6 +109,27 @@ final class ReportRedactor {
         // connection-url values may contain embedded credentials even after the key pass
         // because the key name "connection-url" is not in the secret-key list — only its
         // value carries credentials. Run the URL pass on the whole file to catch them.
+        return redactConnectionUrl(redacted);
+    }
+
+    /**
+     * Best-effort redaction for unstructured runtime logs. Logs are excluded from reports by
+     * default; this additional pass protects explicit opt-in reports from common credentials
+     * emitted by VeloAuth or third-party plugins.
+     *
+     * @param input raw log tail
+     * @return log text with common token, password, webhook and URL credentials removed
+     */
+    static String redactLog(String input) {
+        if (input == null || input.isEmpty()) {
+            return input;
+        }
+        String redacted = DISCORD_WEBHOOK.matcher(input).replaceAll(REDACTED);
+        redacted = BEARER_TOKEN.matcher(redacted)
+                .replaceAll(m -> m.group(1) + REDACTED);
+        redacted = LOG_SECRET_KEY_VALUE.matcher(redacted)
+                .replaceAll(m -> m.group(1) + REDACTED);
+        redacted = redactYaml(redacted);
         return redactConnectionUrl(redacted);
     }
 }

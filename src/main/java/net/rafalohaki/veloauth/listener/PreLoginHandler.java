@@ -129,6 +129,15 @@ public class PreLoginHandler {
      * @return CompletableFuture with PremiumResolutionResult (may be null on UNKNOWN/API failure)
      */
     public CompletableFuture<PremiumResolutionResult> resolvePremiumStatusAsync(String username) {
+        return resolvePremiumStatusAsync(username, null);
+    }
+
+    /**
+     * Resolves premium status for a connection. The source address is forwarded only to the
+     * cold external-lookup admission controller; it is never part of premium identity.
+     */
+    public CompletableFuture<PremiumResolutionResult> resolvePremiumStatusAsync(
+            String username, InetAddress sourceAddress) {
         CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> authLookup =
                 databaseManager.findPlayerByNickname(username);
         if (authLookup == null) {
@@ -138,7 +147,8 @@ public class PreLoginHandler {
         }
 
         return authLookup
-                .thenCompose(dbResult -> resolveAfterAuthoritativeAuthLookup(username, dbResult))
+                .thenCompose(dbResult -> resolveAfterAuthoritativeAuthLookup(
+                        username, sourceAddress, dbResult))
                 .exceptionally(throwable -> {
                     logger.warn(SECURITY_MARKER, "Premium resolution failed for {} - denying login: {}",
                             username, describeThrowable(throwable));
@@ -147,7 +157,8 @@ public class PreLoginHandler {
     }
 
     private CompletableFuture<PremiumResolutionResult> resolveAfterAuthoritativeAuthLookup(
-            String username, DatabaseManager.DbResult<RegisteredPlayer> dbResult) {
+            String username, InetAddress sourceAddress,
+            DatabaseManager.DbResult<RegisteredPlayer> dbResult) {
         if (dbResult == null || dbResult.isDatabaseError()) {
             logger.error(SECURITY_MARKER,
                     "Cannot read authoritative AUTH premium state for {} - denying login", username);
@@ -167,7 +178,7 @@ public class PreLoginHandler {
             return CompletableFuture.completedFuture(new PremiumResolutionResult(true, premiumUuid));
         }
 
-        return resolveFromMemoryOrApi(username);
+        return resolveFromMemoryOrApi(username, sourceAddress);
     }
 
     private UUID parsePremiumUuid(RegisteredPlayer player) {
@@ -184,7 +195,8 @@ public class PreLoginHandler {
         }
     }
 
-    private CompletableFuture<PremiumResolutionResult> resolveFromMemoryOrApi(String username) {
+    private CompletableFuture<PremiumResolutionResult> resolveFromMemoryOrApi(
+            String username, InetAddress sourceAddress) {
         PremiumCacheEntry cachedStatus = authCache.getPremiumStatus(username);
         if (cachedStatus != null) {
             logger.debug("Premium cache hit for {} -> {} (age: {}ms, TTL: {}ms)",
@@ -199,7 +211,10 @@ public class PreLoginHandler {
         }
 
         // Cache miss — async resolution (does NOT block Netty IO thread)
-        return CompletableFuture.supplyAsync(() -> premiumResolverService.resolve(username),
+        return CompletableFuture.supplyAsync(
+                        () -> sourceAddress == null
+                                ? premiumResolverService.resolve(username)
+                                : premiumResolverService.resolve(username, sourceAddress),
                         VirtualThreadExecutorProvider.getVirtualExecutor())
                 .thenApply(resolution -> cacheFromResolution(username, resolution));
     }

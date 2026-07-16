@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.report;
 
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
+import com.velocitypowered.api.proxy.server.ServerInfo;
 import net.rafalohaki.veloauth.BuildConstants;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.config.Settings;
@@ -19,7 +20,7 @@ import java.util.Optional;
  * <ul>
  *   <li>VeloAuth {@code config.yml} — secrets redacted via {@link ReportRedactor}</li>
  *   <li>Velocity {@code velocity.toml} — secrets redacted via {@link ReportRedactor}</li>
- *   <li>Recent proxy logs (tail, capped at 10 MiB) via {@link LogReader}</li>
+ *   <li>Optional recent proxy logs (tail, capped at 10 MiB) via {@link LogReader}; omitted by default</li>
  *   <li>Metadata: VeloAuth/Velocity/Java versions, online-mode, server count, etc.</li>
  * </ul>
  * The assembled text is ready to be uploaded by {@link McLogsClient}.
@@ -88,9 +89,13 @@ final class ReportGenerator {
     }
 
     private String readLogs() {
+        if (!settings.isReportIncludeLogs()) {
+            return "[omitted — set report.include-logs: true to include locally redacted logs]";
+        }
         Path logPath = LogReader.resolveLogPath(plugin.getDataDirectory());
         Optional<String> logs = LogReader.readTail(logPath);
-        return logs.orElse("[log file not found at " + logPath + "]");
+        return logs.map(ReportRedactor::redactLog)
+                .orElse("[log file not found at " + logPath + "]");
     }
 
     private Path resolveVelocityConfigPath() {
@@ -117,7 +122,7 @@ final class ReportGenerator {
                 server.getConfiguration().getAttemptConnectionOrder().toString()));
         List<String> serverNames = server.getAllServers().stream()
                 .map(RegisteredServer::getServerInfo)
-                .map(info -> info.getName() + " -> " + info.getAddress())
+                .map(ServerInfo::getName)
                 .toList();
         meta.add(McLogsClient.MetadataEntry.hidden("servers", String.join(", ", serverNames)));
         return meta;

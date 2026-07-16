@@ -74,19 +74,11 @@ public class DiscordWebhookClient {
         return segments.length >= 2 && !segments[0].isEmpty() && !segments[1].isEmpty();
     }
     
-    /**
-     * Masks webhook URL for safe logging (shows only last 8 characters).
-     * Example: https://discord.com/api/webhooks/[MASKED]/[MASKED]/[TOKEN_TAIL]
-     *
-     * @return Masked webhook URL safe for logging
-     */
+    /** @return fully masked webhook URL safe for logging */
     private String maskWebhookUrl() {
-        if (webhookUrl == null || webhookUrl.length() < 50) {
-            return "***MASKED***";
-        }
-        // Show only last 8 chars for debugging purposes
-        return "https://discord.com/api/webhooks/***/***/***" + 
-               webhookUrl.substring(webhookUrl.length() - 8);
+        return webhookUrl == null || webhookUrl.isBlank()
+                ? "***MASKED***"
+                : "https://discord.com/api/webhooks/***/***";
     }
 
     /**

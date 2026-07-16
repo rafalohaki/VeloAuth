@@ -57,6 +57,9 @@ public final class SettingsValidator {
             throw new IllegalArgumentException(
                 "two-factor.issuer must not contain ':' (reserved separator in otpauth URI)");
         }
+        if (twoFactor.isQrLinkEnabled()) {
+            logger.warn("Config 'two-factor.qr-link-enabled=true' sends each newly generated TOTP enrollment secret to an external QR service. Keep it false for local-only enrollment.");
+        }
     }
 
     static void validateDatabase(Settings settings) {
@@ -108,6 +111,9 @@ public final class SettingsValidator {
         if (settings.getConflictModeTtlHours() < 0) {
             throw new IllegalArgumentException("conflict-mode-ttl-hours must be >= 0 (0 = disabled)");
         }
+        if (settings.getConflictModeTtlHours() == 0) {
+            logger.warn("Config 'security.conflict-mode-ttl-hours=0' keeps UUID conflict exceptions permanently. Use a positive TTL unless this legacy compatibility mode is intentional.");
+        }
     }
 
     static void validateConnection(Settings settings) {
@@ -142,6 +148,7 @@ public final class SettingsValidator {
         validatePremiumResolverSources(resolver);
         validatePremiumResolverTimeout(resolver);
         validatePremiumResolverTtl(resolver);
+        validatePremiumResolverLimits(resolver);
     }
 
     private static void warnAllowCrackedOnPremiumNicks(Settings settings) {
@@ -211,6 +218,17 @@ public final class SettingsValidator {
         }
         if (resolver.getMemoryCacheMaxSize() <= 0) {
             throw new IllegalArgumentException("Premium resolver: memory-cache-max-size must be > 0");
+        }
+    }
+
+    private static void validatePremiumResolverLimits(Settings.PremiumResolverSettings resolver) {
+        if (resolver.getMaxLookupsPerIpPerMinute() <= 0) {
+            throw new IllegalArgumentException(
+                    "Premium resolver: max-lookups-per-ip-per-minute must be > 0");
+        }
+        if (resolver.getMaxConcurrentLookups() <= 0) {
+            throw new IllegalArgumentException(
+                    "Premium resolver: max-concurrent-lookups must be > 0");
         }
     }
 

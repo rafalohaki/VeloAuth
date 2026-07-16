@@ -6,11 +6,8 @@ import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Abstract base class for premium resolvers using HTTP APIs.
@@ -18,14 +15,9 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 abstract class AbstractPremiumResolver implements PremiumResolver {
 
-    private static final int REQUESTS_PER_MINUTE = 60; // Max 60 requests per minute
-    private static final long MINUTE_IN_MILLIS = 60_000L;
     private final Logger logger;
     private final boolean enabled;
     private final int timeoutMs;
-    // Rate limiting protection
-    private final Map<String, AtomicInteger> requestCounts = new java.util.concurrent.ConcurrentHashMap<>();
-    private final Map<String, AtomicLong> lastResetTime = new java.util.concurrent.ConcurrentHashMap<>();
 
     protected AbstractPremiumResolver(Logger logger, boolean enabled, int timeoutMs) {
         this.logger = Objects.requireNonNull(logger, "logger");
@@ -40,9 +32,8 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
 
     @Override
     public PremiumResolution resolve(String username) {
-        PremiumResolution pre = preResolve(username);
-        if (pre != null) {
-            return pre;
+        if (!enabled) {
+            return PremiumResolution.unknown(id(), "disabled");
         }
         return executeWithRetriesAsync(username, 0, 2, 100).join();
     }
@@ -162,49 +153,6 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
         } catch (IllegalArgumentException ex) {
             return null;
         }
-    }
-
-    /**
-     * Checks if the resolver is currently rate limited.
-     * Uses per-resolver rate limiting with sliding window.
-     */
-    private boolean isRateLimited() {
-        String resolverId = id();
-        long currentTime = System.currentTimeMillis();
-
-        // Get or initialize request count and last reset time
-        AtomicInteger count = requestCounts.computeIfAbsent(resolverId, k -> new AtomicInteger(0));
-        AtomicLong lastReset = lastResetTime.computeIfAbsent(resolverId, k -> new AtomicLong(currentTime));
-
-        // Reset counter if more than a minute has passed using atomic compute to avoid Virtual Thread pinning
-        long timeSinceReset = currentTime - lastReset.get();
-        if (timeSinceReset > MINUTE_IN_MILLIS) {
-            // Use atomic compute on ConcurrentHashMap to avoid synchronization that pins Virtual Threads
-            lastResetTime.compute(resolverId, (key, existingValue) -> {
-                if (existingValue == null || currentTime - existingValue.get() > MINUTE_IN_MILLIS) {
-                    // Reset counter atomically
-                    count.set(0);
-                    return new AtomicLong(currentTime);
-                }
-                return existingValue; // No reset needed
-            });
-        }
-
-        // Check if rate limit exceeded
-        return count.incrementAndGet() > REQUESTS_PER_MINUTE;
-    }
-
-    private PremiumResolution preResolve(String username) {
-        if (!enabled) {
-            return PremiumResolution.unknown(id(), "disabled");
-        }
-        if (isRateLimited()) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("[{}] Rate limited for {}", getClass().getSimpleName(), username);
-            }
-            return PremiumResolution.unknown(id(), "rate limited");
-        }
-        return null;
     }
 
     private PremiumResolution resolveFromResponse(HttpJsonClient.HttpJsonResponse response, String username) {

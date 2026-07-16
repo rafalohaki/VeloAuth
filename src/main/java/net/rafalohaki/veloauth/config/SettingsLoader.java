@@ -61,12 +61,14 @@ final class SettingsLoader {
 
     @SuppressWarnings("unchecked")
     private static void loadTwoFactorSettings(Map<String, Object> config, LoadedState state) {
+        Settings.TwoFactorSettings target = state.twoFactorSettings;
+        // Security-sensitive opt-in: removing the key on reload must restore the safe default.
+        target.setQrLinkEnabled(false);
         Object section = config.get("two-factor");
         if (!(section instanceof Map<?, ?>)) {
             return;
         }
         Map<String, Object> twoFactor = (Map<String, Object>) section;
-        Settings.TwoFactorSettings target = state.twoFactorSettings;
         target.setEnabled(YamlParserUtils.getBoolean(twoFactor, YAML_FIELD_ENABLED, target.isEnabled()));
         target.setIssuer(YamlParserUtils.getString(twoFactor, "issuer", target.getIssuer()));
         target.setQrLinkEnabled(YamlParserUtils.getBoolean(twoFactor, "qr-link-enabled", target.isQrLinkEnabled()));
@@ -120,9 +122,13 @@ final class SettingsLoader {
 
     @SuppressWarnings("unchecked")
     private static void loadReportSettings(Map<String, Object> config, LoadedState state) {
+        // Logs are opt-in. A hot reload that removes the key must not retain a previous true.
+        state.reportIncludeLogs = false;
         Map<String, Object> report = (Map<String, Object>) config.get("report");
         if (report != null) {
             state.reportEnabled = YamlParserUtils.getBoolean(report, YAML_FIELD_ENABLED, state.reportEnabled);
+            state.reportIncludeLogs = YamlParserUtils.getBoolean(
+                    report, "include-logs", state.reportIncludeLogs);
         }
     }
 
@@ -260,6 +266,10 @@ final class SettingsLoader {
         target.setMissTtlMinutes(YamlParserUtils.getInt(resolver, "miss-ttl-minutes", target.getMissTtlMinutes()));
         target.setCaseSensitive(YamlParserUtils.getBoolean(resolver, "case-sensitive", target.isCaseSensitive()));
         target.setMemoryCacheMaxSize(YamlParserUtils.getInt(resolver, "memory-cache-max-size", target.getMemoryCacheMaxSize()));
+        target.setMaxLookupsPerIpPerMinute(YamlParserUtils.getInt(
+                resolver, "max-lookups-per-ip-per-minute", target.getMaxLookupsPerIpPerMinute()));
+        target.setMaxConcurrentLookups(YamlParserUtils.getInt(
+                resolver, "max-concurrent-lookups", target.getMaxConcurrentLookups()));
     }
 
     @SuppressWarnings("unchecked")
@@ -427,6 +437,7 @@ final class SettingsLoader {
         int maxPasswordLength;
         boolean debugEnabled;
         boolean reportEnabled;
+        boolean reportIncludeLogs;
         String language;
         final Settings.PostgreSQLSettings postgreSQLSettings = new Settings.PostgreSQLSettings();
         final Settings.PremiumSettings premiumSettings = new Settings.PremiumSettings();
@@ -467,6 +478,7 @@ final class SettingsLoader {
             state.maxPasswordLength = settings.getMaxPasswordLength();
             state.debugEnabled = settings.isDebugEnabled();
             state.reportEnabled = settings.isReportEnabled();
+            state.reportIncludeLogs = settings.isReportIncludeLogs();
             state.language = settings.getLanguage();
             copyPostgreSqlSettings(settings.getPostgreSQLSettings(), state.postgreSQLSettings);
             copyPremiumSettings(settings.getPremiumSettings(), state.premiumSettings);

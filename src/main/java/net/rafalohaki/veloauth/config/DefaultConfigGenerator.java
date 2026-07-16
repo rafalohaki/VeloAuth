@@ -261,10 +261,17 @@ final class DefaultConfigGenerator {
                     miss-ttl-minutes: 10
                     # Preserve username case in resolver cache
                     case-sensitive: true
-                    # Maximum entries kept in the in-memory premium resolution cache. Once exceeded,
-                    # the oldest 10% are evicted in a batched LRU sweep. Raise this on busy proxies
-                    # (1000+ concurrent players); the default suits servers with up to a few hundred.
-                    memory-cache-max-size: 10000""";
+                    # Maximum entries kept in the Caffeine W-TinyLFU premium resolution cache.
+                    # Raise this on busy proxies (1000+ concurrent players); the default suits
+                    # servers with up to a few hundred active players.
+                    memory-cache-max-size: 10000
+                    # Maximum cold premium lookups accepted from one source IP per minute.
+                    # Cache hits do not consume this budget. This prevents one client from
+                    # exhausting Mojang/Ashcon capacity for every player behind the proxy.
+                    max-lookups-per-ip-per-minute: 30
+                    # Maximum distinct cold lookups executing at once. Concurrent requests for
+                    # the same nickname share one lookup and consume only one global slot.
+                    max-concurrent-lookups: 32""";
 
     private static final String FLOODGATE_SECTION = """
                 
@@ -325,7 +332,7 @@ final class DefaultConfigGenerator {
                   # Name displayed in authenticator apps (Google Authenticator, Authy, …)
                   # next to each saved code. Must not contain ':' (reserved by otpauth URI).
                   issuer: "VeloAuth"
-                  # Append a clickable [Scan QR] link to /2fa setup / /2fa qr output. Clicking it
+                  # Append a clickable [Scan QR] link to fresh /2fa setup output. Clicking it
                   # opens the player's browser, which renders the otpauth:// URI as a real QR.
                   # Without it players still get the plain Base32 secret + otpauth URI for manual
                   # entry into their authenticator app.
@@ -334,7 +341,7 @@ final class DefaultConfigGenerator {
                   # that secret over TLS to the VeloAuth-maintained QR endpoint. If you don't want
                   # any data leaving your infrastructure set this to false — players can still type
                   # the Base32 secret into their app manually.
-                  qr-link-enabled: true
+                  qr-link-enabled: false
                   # Maximum window (seconds) between successful BCrypt verify and TOTP code entry.
                   # After this the player must run /login again. Range: 30-1800. Default: 300 (5 min).
                   pending-timeout-seconds: 300""";
@@ -345,10 +352,13 @@ final class DefaultConfigGenerator {
                 # https://mclo.gs so you can share it with support. The report bundles:
                 #   - VeloAuth config.yml (secrets redacted: passwords, webhook URLs, SSL keys)
                 #   - velocity.toml (secrets redacted: forwarding-secret, etc.)
-                #   - recent proxy logs (mclo.gs attempts to strip IP addresses server-side,
-                #     but this is not guaranteed — only share the link with trusted parties)
+                #   - recent proxy logs only when include-logs is explicitly enabled
                 #   - metadata: VeloAuth/Velocity/Java versions, server count, online-mode, etc.
                 # Set to false to disable the /vauth report command entirely.
                 report:
-                  enabled: true""";
+                  enabled: true
+                  # Logs can contain IP addresses, chat and third-party plugin secrets. They are
+                  # omitted by default. Explicit opt-in applies local best-effort redaction too,
+                  # but reports should still be shared only with trusted support staff.
+                  include-logs: false""";
 }

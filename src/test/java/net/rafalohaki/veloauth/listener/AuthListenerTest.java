@@ -3,6 +3,8 @@ package net.rafalohaki.veloauth.listener;
 import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
+import com.velocitypowered.api.event.connection.DisconnectEvent;
+import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.player.GameProfileRequestEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
@@ -12,13 +14,16 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.api.util.GameProfile;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.format.TextDecoration;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
+import net.rafalohaki.veloauth.auth.totp.PendingTotpState;
+import net.rafalohaki.veloauth.auth.totp.PendingTotpStore;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
+import net.rafalohaki.veloauth.connection.AuthTimeoutScheduler;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -28,8 +33,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
@@ -39,6 +44,7 @@ import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -53,6 +59,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
@@ -153,7 +160,8 @@ class AuthListenerTest {
         String username = "SharedName";
         CompletableFuture<PreLoginHandler.PremiumResolutionResult> firstResolution = new CompletableFuture<>();
         CompletableFuture<PreLoginHandler.PremiumResolutionResult> secondResolution = new CompletableFuture<>();
-        when(preLoginHandler.resolvePremiumStatusAsync(username)).thenReturn(firstResolution, secondResolution);
+        when(preLoginHandler.resolvePremiumStatusAsync(eq(username), any(InetAddress.class)))
+                .thenReturn(firstResolution, secondResolution);
 
         PreLoginEvent firstEvent = new PreLoginEvent(createConnection("192.0.2.10"), username);
         PreLoginEvent secondEvent = new PreLoginEvent(createConnection("192.0.2.11"), username);
@@ -177,7 +185,7 @@ class AuthListenerTest {
     void testOnPreLogin_sameUsernameSameIpShouldDenyDuplicateConnectionUntilFirstCompletes() {
         String username = "DuplicateSource";
         CompletableFuture<PreLoginHandler.PremiumResolutionResult> firstResolution = new CompletableFuture<>();
-        when(preLoginHandler.resolvePremiumStatusAsync(username)).thenReturn(
+        when(preLoginHandler.resolvePremiumStatusAsync(eq(username), any(InetAddress.class))).thenReturn(
                 firstResolution,
                 CompletableFuture.completedFuture(new PreLoginHandler.PremiumResolutionResult(false, null))
         );
@@ -212,7 +220,7 @@ class AuthListenerTest {
         String username = "ReconnectingPlayer";
         CompletableFuture<PreLoginHandler.PremiumResolutionResult> firstResolution = new CompletableFuture<>();
         CompletableFuture<PreLoginHandler.PremiumResolutionResult> replacementResolution = new CompletableFuture<>();
-        when(preLoginHandler.resolvePremiumStatusAsync(username)).thenReturn(
+        when(preLoginHandler.resolvePremiumStatusAsync(eq(username), any(InetAddress.class))).thenReturn(
                 firstResolution,
                 replacementResolution,
                 CompletableFuture.completedFuture(new PreLoginHandler.PremiumResolutionResult(false, null))
@@ -262,7 +270,7 @@ class AuthListenerTest {
         assertNull(task, "A Floodgate registry hit should use the synchronous pre-login path");
         assertTrue(event.getResult().isForceOfflineMode(),
                 "Linked Bedrock accounts must not be sent through Mojang's Java handshake");
-        verify(preLoginHandler, never()).resolvePremiumStatusAsync(anyString());
+        verify(preLoginHandler, never()).resolvePremiumStatusAsync(anyString(), nullable(InetAddress.class));
         verify(databaseManager, never())
                 .findPlayerByNicknameOrPremiumUuidReadOnly(anyString(), nullable(UUID.class));
     }
@@ -400,6 +408,70 @@ class AuthListenerTest {
     }
 
     @Test
+    void onDisconnect_alwaysInvalidatesAuthorizationSessionAndPendingTwoFactor() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("DisconnectedPlayer");
+        PendingTotpStore pendingTotpStore = new PendingTotpStore(Duration.ofMinutes(5), null);
+        pendingTotpStore.put(PendingTotpState.forSetup(playerUuid, "JBSWY3DPEHPK3PXP", "192.0.2.50"));
+        AuthTimeoutScheduler timeoutScheduler = org.mockito.Mockito.mock(AuthTimeoutScheduler.class);
+        setPluginField("pendingTotpStore", pendingTotpStore);
+        setPluginField("authTimeoutScheduler", timeoutScheduler);
+
+        authListener.onDisconnect(new DisconnectEvent(
+                player, DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN));
+
+        verify(authCache).removeAuthorizedPlayer(playerUuid);
+        verify(authCache).endSession(playerUuid);
+        verify(connectionManager).clearRetryAttempts(playerUuid);
+        verify(timeoutScheduler).cancel(playerUuid);
+        assertTrue(pendingTotpStore.get(playerUuid).isEmpty(),
+                "A disconnected connection must not leave a reusable 2FA continuation");
+    }
+
+    @Test
+    void onDisconnect_conflictingLogin_doesNotClearActivePlayersUuidState() {
+        UUID sharedOfflineUuid = UUID.randomUUID();
+        Player activePlayer = org.mockito.Mockito.mock(Player.class);
+        Player conflictingConnection = org.mockito.Mockito.mock(Player.class);
+        when(activePlayer.getUniqueId()).thenReturn(sharedOfflineUuid);
+        when(conflictingConnection.getUniqueId()).thenReturn(sharedOfflineUuid);
+        when(conflictingConnection.getUsername()).thenReturn("DuplicateName");
+        when(proxyServer.getPlayer(sharedOfflineUuid)).thenReturn(Optional.of(activePlayer));
+
+        authListener.onDisconnect(new DisconnectEvent(
+                conflictingConnection, DisconnectEvent.LoginStatus.CONFLICTING_LOGIN));
+
+        verify(authCache, never()).removeAuthorizedPlayer(sharedOfflineUuid);
+        verify(authCache, never()).endSession(sharedOfflineUuid);
+        verify(connectionManager, never()).clearRetryAttempts(sharedOfflineUuid);
+    }
+
+    @Test
+    void onPostLogin_replacementConnection_clearsStaleUuidStateBeforeRouting() {
+        UUID sharedOfflineUuid = UUID.randomUUID();
+        Player oldConnection = org.mockito.Mockito.mock(Player.class);
+        Player replacementConnection = org.mockito.Mockito.mock(Player.class);
+        when(oldConnection.getUniqueId()).thenReturn(sharedOfflineUuid);
+        when(oldConnection.getUsername()).thenReturn("ReconnectPlayer");
+        when(oldConnection.getRemoteAddress()).thenReturn(
+                new InetSocketAddress("192.0.2.70", 25565));
+        when(replacementConnection.getUniqueId()).thenReturn(sharedOfflineUuid);
+        when(replacementConnection.getUsername()).thenReturn("ReconnectPlayer");
+        when(replacementConnection.getRemoteAddress()).thenReturn(
+                new InetSocketAddress("192.0.2.70", 25565));
+
+        authListener.onPostLogin(new PostLoginEvent(oldConnection));
+        authListener.onPostLogin(new PostLoginEvent(replacementConnection));
+
+        verify(authCache).removeAuthorizedPlayer(sharedOfflineUuid);
+        verify(authCache).endSession(sharedOfflineUuid);
+        verify(connectionManager).clearRetryAttempts(sharedOfflineUuid);
+        verify(postLoginHandler).handleOfflinePlayer(replacementConnection, "192.0.2.70");
+    }
+
+    @Test
     void onServerConnected_authHeaderWithHexFormatting_parsesColors() throws Exception {
         messages = new Messages() {
             @Override
@@ -435,8 +507,7 @@ class AuthListenerTest {
         ServerInfo serverInfo = org.mockito.Mockito.mock(ServerInfo.class);
         when(authServer.getServerInfo()).thenReturn(serverInfo);
         when(serverInfo.getName()).thenReturn("auth");
-        net.rafalohaki.veloauth.connection.AuthTimeoutScheduler timeoutScheduler =
-                org.mockito.Mockito.mock(net.rafalohaki.veloauth.connection.AuthTimeoutScheduler.class);
+        AuthTimeoutScheduler timeoutScheduler = org.mockito.Mockito.mock(AuthTimeoutScheduler.class);
         setPluginField("authTimeoutScheduler", timeoutScheduler);
 
         authListener.onServerConnected(new ServerConnectedEvent(player, authServer, null));
@@ -455,7 +526,7 @@ class AuthListenerTest {
         String username = "CrackedOnPremium";
         UUID premiumUuid = UUID.randomUUID();
         when(settings.isAllowCrackedOnPremiumNicks()).thenReturn(true);
-        when(preLoginHandler.resolvePremiumStatusAsync(username))
+        when(preLoginHandler.resolvePremiumStatusAsync(eq(username), any(InetAddress.class)))
                 .thenReturn(CompletableFuture.completedFuture(
                         new PreLoginHandler.PremiumResolutionResult(true, premiumUuid)));
         when(databaseManager.findPlayerByNicknameOrPremiumUuidReadOnly(username, premiumUuid))
@@ -476,7 +547,7 @@ class AuthListenerTest {
         String username = "DefaultPremiumNick";
         UUID premiumUuid = UUID.randomUUID();
         when(settings.isAllowCrackedOnPremiumNicks()).thenReturn(false);
-        when(preLoginHandler.resolvePremiumStatusAsync(username))
+        when(preLoginHandler.resolvePremiumStatusAsync(eq(username), any(InetAddress.class)))
                 .thenReturn(CompletableFuture.completedFuture(
                         new PreLoginHandler.PremiumResolutionResult(true, premiumUuid)));
         when(databaseManager.findPlayerByNicknameOrPremiumUuidReadOnly(username, premiumUuid))
@@ -497,7 +568,7 @@ class AuthListenerTest {
         String username = "LegitPremiumOwner";
         UUID premiumUuid = UUID.randomUUID();
         when(settings.isAllowCrackedOnPremiumNicks()).thenReturn(true);
-        when(preLoginHandler.resolvePremiumStatusAsync(username))
+        when(preLoginHandler.resolvePremiumStatusAsync(eq(username), any(InetAddress.class)))
                 .thenReturn(CompletableFuture.completedFuture(
                         new PreLoginHandler.PremiumResolutionResult(true, premiumUuid)));
 

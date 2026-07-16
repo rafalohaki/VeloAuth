@@ -55,9 +55,9 @@ Run this **after** logging in (the normal `/login <password>` flow). VeloAuth wi
 
 1. The Base32 secret (in case your app prefers manual entry).
 2. The `otpauth://` URI.
-3. A clickable QR link, if the operator keeps `qr-link-enabled: true`.
+3. A clickable QR link, if the operator explicitly enables `qr-link-enabled: true`.
 
-If `qr-link-enabled: true` (default), the chat also contains a clickable `[ Click here to
+If `qr-link-enabled: true` (explicit opt-in; the default is `false`), the chat also contains a clickable `[ Click here to
 scan the QR code in your browser ]` line — clicking it opens your default browser to a
 configured QR rendering service that draws a real, scannable QR image. Once you see it,
 scan with your authenticator app.
@@ -96,16 +96,14 @@ exactly like 5 wrong passwords would.
 You must produce a valid code to disable. This prevents anyone with temporary access to your
 account from quietly turning 2FA off.
 
-### Re-scanning on a new phone
+### Enrolling a new phone
 
 If you switch phones and **still have access to the account** (you're already logged in on
 Minecraft):
 
-```
-/2fa qr
-```
-
-…re-prints the otpauth URI + QR for your existing secret. Scan with the new app, done.
+An enrolled secret is never printed again. While you still have the old authenticator, run
+`/2fa disable <6-digit code>` and then `/2fa setup` to generate a new secret for the new phone.
+The legacy `/2fa qr` command remains available, but only explains this safe re-enrollment flow.
 
 If you lost the phone **and** can't log in — talk to an operator. See "Operator handbook" below.
 
@@ -129,7 +127,7 @@ It's on by default. The relevant block in `config.yml`:
 two-factor:
   enabled: true
   issuer: "VeloAuth"
-  qr-link-enabled: true
+  qr-link-enabled: false
   pending-timeout-seconds: 300
 ```
 
@@ -138,13 +136,12 @@ two-factor:
   clean state.
 - `issuer` — what shows up in the player's authenticator app next to each saved code
   (typically your server name). Must not contain `:` (reserved by the otpauth URI format).
-- `qr-link-enabled` — when `true` (default), `/2fa setup` and `/2fa qr` append a clickable
+- `qr-link-enabled` — when `true` (explicit opt-in), fresh `/2fa setup` output appends a clickable
   `[ Click here to scan ... ]` line that opens the VeloAuth-maintained QR endpoint
   ([`qr.autarch.workers.dev`](https://qr.autarch.workers.dev)) in the player's browser.
   The URL shape is `qr.autarch.workers.dev/<base32-secret>` — the worker hosts a fixed
-  otpauth template (issuer / account / algorithm / digits / period) and only the secret
-  travels in the path. The worker is operated by the VeloAuth maintainer and does only
-  text-to-QR rendering (no logging, no storage). Set to `false` for fully air-gapped
+  otpauth template (issuer / account / algorithm / digits / period) and the secret
+  travels in the path. Set to `false` for fully air-gapped
   enrollment — the player still gets the Base32 secret and the `otpauth://` URI in chat
   and can either type the secret into their authenticator app or paste the URI on a phone
   that supports it. The endpoint URL is hardcoded on purpose; there's no operator-tunable
@@ -171,7 +168,8 @@ Every 2FA event is recorded in `VELOAUTH_AUDIT_LOG` (when `audit-log.enabled=tru
 - `TWO_FACTOR_DISABLED` — fires on a successful `/2fa disable` (player) or
   `/vauth 2fa-remove` (admin; the `details` column holds `admin=<name> uuid=<dbUuid>`).
 - `TWO_FACTOR_VERIFY_OK` — fires on a successful login-time code verification.
-- `TWO_FACTOR_VERIFY_FAIL` — fires on each wrong code submitted during login verification.
+- `TWO_FACTOR_VERIFY_FAIL` — fires on each wrong or replayed code submitted during setup,
+  login verification or self-disable.
 - `TWO_FACTOR_PENDING_EXPIRED` — fires when a `pending-timeout-seconds` window elapses without
   the player completing verification.
 
@@ -216,10 +214,9 @@ What 2FA does **not** protect:
 - **An operator with database access.** `TOTPTOKEN` is stored in plaintext (Base32-encoded
   shared secret, as required by RFC 6238 — the server must HMAC against it, so it can't be a
   one-way hash). Encrypt your database backups.
-- **Replay within the 90 s tolerance window.** A code is valid for ±30 s around its generation.
-  We do not store "this code was already used" — if you need that level of paranoia, point a PR
-  at `TotpService.verify`. Practically irrelevant for any real-world attacker because the
-  rate-limiter blocks them after 5 attempts.
+- **A stolen live code before first use.** A code is accepted from the ±30 s tolerance band,
+  but each matched time window is consumed once per account and replay attempts are rejected
+  and counted by the brute-force tracker.
 
 ---
 
@@ -232,12 +229,12 @@ What 2FA does **not** protect:
   works regardless of how the app formats the secret.
 - Pending 2FA state lives in memory (Caffeine cache, bounded to 10 000 concurrent entries,
   TTL = `pending-timeout-seconds`). A plugin reload or proxy restart wipes pending states; the
-  affected players just `/login` again.
+  affected players just `/login` again. Disconnecting also invalidates pending state immediately.
 - QR rendering is **not** done in-chat. Earlier versions tried to render an ASCII QR using
   Unicode block characters but Minecraft's chat font is taller-than-wide and varies across
   resource packs / client mods — the result was unscannable on most setups. The clickable
-  link approach (delegated to a browser-rendered QR) is the practical replacement; set
-  `qr-link-enabled: false` to keep enrollment fully on-server.
+  link approach (delegated to a browser-rendered QR) is the practical replacement. It is disabled
+  by default; keep `qr-link-enabled: false` for fully local enrollment.
 
 ---
 
