@@ -372,8 +372,7 @@ public class PreLoginHandler {
                 logger.error("[SECURITY BREACH] Name snipe BLOCKED for {}: DB owner UUID={}, Attacker UUID={}",
                         username, dbUuid, currentPremiumUuid);
                 event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                        net.kyori.adventure.text.Component.text(
-                                messages.get("security.name_snipe.denied"),
+                        messages.component("security.name_snipe.denied",
                                 net.kyori.adventure.text.format.NamedTextColor.RED)));
             } else {
                 logger.debug("Premium UUID verified for {} — forcing online mode", username);
@@ -382,8 +381,7 @@ public class PreLoginHandler {
         } catch (IllegalArgumentException ex) {
             logger.error(SECURITY_MARKER, "Malformed UUID for {} in database: {}", username, ex.getMessage());
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    net.kyori.adventure.text.Component.text(
-                            messages.get("security.name_snipe.denied"),
+                    messages.component("security.name_snipe.denied",
                             net.kyori.adventure.text.format.NamedTextColor.RED)));
         }
     }

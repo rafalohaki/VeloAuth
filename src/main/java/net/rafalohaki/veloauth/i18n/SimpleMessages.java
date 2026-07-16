@@ -48,6 +48,10 @@ public final class SimpleMessages {
         return restoreFormattingArguments(parseWithColors(text, fallbackColor));
     }
 
+    Component resolvedText(String text, NamedTextColor fallbackColor) {
+        return parseWithColors(text, fallbackColor);
+    }
+
     /**
      * Parses text with color codes. If no color codes found, uses fallback color.
      */

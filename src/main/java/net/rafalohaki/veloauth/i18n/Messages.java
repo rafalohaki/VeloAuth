@@ -1,5 +1,7 @@
 package net.rafalohaki.veloauth.i18n;
 
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +31,8 @@ public class Messages {
     // Cache for loaded message files (legacy support)
     private static final Map<String, Properties> messageCache = new ConcurrentHashMap<>();
     private static final Map<String, String> normalizedPatternCache = new ConcurrentHashMap<>();
+
+    private final SimpleMessages componentRenderer = new SimpleMessages(this);
 
     // Current language
     private String currentLanguage;
@@ -184,6 +188,33 @@ public class Messages {
         } else {
             return getForLanguage(currentLanguage, resolvedKey, args);
         }
+    }
+
+    /**
+     * Resolves a localized player-facing message and parses its supported color codes.
+     * Template formatting is handled by {@link SimpleMessages}, including protection of
+     * placeholder values from accidental color parsing.
+     *
+     * @param key message key
+     * @param fallbackColor color used when the template contains no formatting codes
+     * @param args message format arguments
+     * @return rendered Adventure component
+     */
+    public Component component(String key, NamedTextColor fallbackColor, Object... args) {
+        return componentRenderer.key(key, fallbackColor, args);
+    }
+
+    /**
+     * Parses a localized message that has already been resolved by a collaborator.
+     * Prefer {@link #component(String, NamedTextColor, Object...)} when the key and
+     * formatting arguments are still available, because that path keeps arguments literal.
+     *
+     * @param resolvedText already localized text
+     * @param fallbackColor color used when the text contains no formatting codes
+     * @return rendered Adventure component
+     */
+    public Component componentFromResolvedText(String resolvedText, NamedTextColor fallbackColor) {
+        return componentRenderer.resolvedText(resolvedText, fallbackColor);
     }
 
     /**

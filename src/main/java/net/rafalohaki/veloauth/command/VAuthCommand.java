@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.command;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -55,8 +56,8 @@ class VAuthCommand implements SimpleCommand {
             case "2fa-remove" -> handleTwoFactorRemoveCommand(source, args);
             case "report" -> handleReportCommand(source);
             default -> {
-                source.sendMessage(ValidationUtils.createErrorComponent(
-                    ctx.messages().get("admin.unknown_command", subcommand)));
+                source.sendMessage(ctx.messages().component(
+                        "admin.unknown_command", NamedTextColor.RED, subcommand));
                 sendAdminHelp(source);
             }
         }
@@ -91,13 +92,13 @@ class VAuthCommand implements SimpleCommand {
 
         RegisteredPlayer registered = dbResult.getValue();
         if (registered == null) {
-            source.sendMessage(ValidationUtils.createErrorComponent(
-                    ctx.messages().get("admin.2fa.remove.not_found", nickname)));
+            source.sendMessage(ctx.messages().component(
+                    "admin.2fa.remove.not_found", NamedTextColor.RED, nickname));
             return;
         }
         if (registered.getTotpToken() == null || registered.getTotpToken().isBlank()) {
-            source.sendMessage(ValidationUtils.createWarningComponent(
-                    ctx.messages().get("admin.2fa.remove.not_enabled", nickname)));
+            source.sendMessage(ctx.messages().component(
+                    "admin.2fa.remove.not_enabled", NamedTextColor.YELLOW, nickname));
             return;
         }
 
@@ -127,7 +128,8 @@ class VAuthCommand implements SimpleCommand {
 
         emitAdminAudit(source, nickname, registered);
 
-        CommandHelper.sendSuccess(source, ctx.messages().get("admin.2fa.remove.success", nickname));
+        source.sendMessage(ctx.messages().component(
+                "admin.2fa.remove.success", NamedTextColor.GREEN, nickname));
     }
 
     private void emitAdminAudit(CommandSource source, String nickname, RegisteredPlayer registered) {
@@ -161,7 +163,7 @@ class VAuthCommand implements SimpleCommand {
             ctx.runAsyncCommand(source, () -> processSinglePlayerCacheReset(source, nickname), ERROR_DATABASE_QUERY);
         } else {
             ctx.authCache().clearAll();
-            source.sendMessage(ValidationUtils.createSuccessComponent(ctx.messages().get("admin.cache_reset.success")));
+            source.sendMessage(ctx.messages().component("admin.cache_reset.success", NamedTextColor.GREEN));
         }
     }
 
@@ -171,31 +173,28 @@ class VAuthCommand implements SimpleCommand {
 
     private void handleReportCommand(CommandSource source) {
         if (!ctx.settings().isReportEnabled()) {
-            source.sendMessage(ValidationUtils.createErrorComponent(
-                    ctx.messages().get("admin.report.disabled")));
+            source.sendMessage(ctx.messages().component("admin.report.disabled", NamedTextColor.RED));
             return;
         }
-        source.sendMessage(ValidationUtils.createWarningComponent(
-                ctx.messages().get("admin.report.generating")));
-        source.sendMessage(ValidationUtils.createWarningComponent(
-                ctx.messages().get("admin.report.warning")));
+        source.sendMessage(ctx.messages().component("admin.report.generating", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.report.warning", NamedTextColor.YELLOW));
         ctx.runAsyncCommand(source, () -> processReport(source), ERROR_REPORT_FAILED);
     }
 
     private void processReport(CommandSource source) {
         net.rafalohaki.veloauth.report.ReportService reportService = ctx.reportService();
         if (reportService == null) {
-            source.sendMessage(ValidationUtils.createErrorComponent(
-                    ctx.messages().get(ERROR_REPORT_FAILED, "report service not initialized")));
+            source.sendMessage(ctx.messages().component(
+                    ERROR_REPORT_FAILED, NamedTextColor.RED, "report service not initialized"));
             return;
         }
         net.rafalohaki.veloauth.report.ReportService.ReportResult result = reportService.generateAndUpload();
         if (result.success()) {
-            source.sendMessage(ValidationUtils.createSuccessComponent(
-                    ctx.messages().get("admin.report.success", result.url())));
+            source.sendMessage(ctx.messages().component(
+                    "admin.report.success", NamedTextColor.GREEN, result.url()));
         } else {
-            source.sendMessage(ValidationUtils.createErrorComponent(
-                    ctx.messages().get(ERROR_REPORT_FAILED, result.error())));
+            source.sendMessage(ctx.messages().component(
+                    ERROR_REPORT_FAILED, NamedTextColor.RED, result.error()));
         }
     }
 
@@ -239,15 +238,15 @@ class VAuthCommand implements SimpleCommand {
             return;
         }
 
-        source.sendMessage(ValidationUtils.createWarningComponent(ctx.messages().get("admin.conflicts.header")));
+        source.sendMessage(ctx.messages().component("admin.conflicts.header", NamedTextColor.YELLOW));
 
         if (conflicts.isEmpty()) {
-            source.sendMessage(ValidationUtils.createSuccessComponent(ctx.messages().get("admin.conflicts.none")));
+            source.sendMessage(ctx.messages().component("admin.conflicts.none", NamedTextColor.GREEN));
             return;
         }
 
-        source.sendMessage(ValidationUtils.createWarningComponent(
-                ctx.messages().get("admin.conflicts.found", conflicts.size())));
+        source.sendMessage(ctx.messages().component(
+                "admin.conflicts.found", NamedTextColor.YELLOW, conflicts.size()));
 
         for (int i = 0; i < conflicts.size(); i++) {
             RegisteredPlayer conflict = conflicts.get(i);
@@ -278,10 +277,10 @@ class VAuthCommand implements SimpleCommand {
         }
 
         source.sendMessage(ValidationUtils.createWarningComponent(""));
-        source.sendMessage(ValidationUtils.createWarningComponent(ctx.messages().get("admin.conflicts.tips_header")));
-        source.sendMessage(ValidationUtils.createWarningComponent(ctx.messages().get("admin.conflicts.tip_premium")));
-        source.sendMessage(ValidationUtils.createWarningComponent(ctx.messages().get("admin.conflicts.tip_offline")));
-        source.sendMessage(ValidationUtils.createWarningComponent(ctx.messages().get("admin.conflicts.tip_admin")));
+        source.sendMessage(ctx.messages().component("admin.conflicts.tips_header", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.conflicts.tip_premium", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.conflicts.tip_offline", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.conflicts.tip_admin", NamedTextColor.YELLOW));
     }
 
     private void processSinglePlayerCacheReset(CommandSource source, String nickname) {
@@ -292,21 +291,21 @@ class VAuthCommand implements SimpleCommand {
 
         UUID playerUuid = playerLookup.playerUuid();
         if (playerUuid == null) {
-            source.sendMessage(ValidationUtils.createErrorComponent(
-                    ctx.messages().get("admin.cache_reset.player_not_found", nickname)));
+            source.sendMessage(ctx.messages().component(
+                    "admin.cache_reset.player_not_found", NamedTextColor.RED, nickname));
             return;
         }
 
         if (ctx.authCache().findAuthorizedPlayer(playerUuid).isEmpty()) {
-            source.sendMessage(ValidationUtils.createErrorComponent(
-                    ctx.messages().get("admin.cache_reset.player_not_found", nickname)));
+            source.sendMessage(ctx.messages().component(
+                    "admin.cache_reset.player_not_found", NamedTextColor.RED, nickname));
             return;
         }
 
         ctx.authCache().removeAuthorizedPlayer(playerUuid);
         ctx.authCache().endSession(playerUuid);
-        source.sendMessage(ValidationUtils.createSuccessComponent(
-                ctx.messages().get("admin.cache_reset.player", nickname)));
+        source.sendMessage(ctx.messages().component(
+                "admin.cache_reset.player", NamedTextColor.GREEN, nickname));
     }
 
     private void processStatsCommand(CommandSource source) {
@@ -381,7 +380,7 @@ class VAuthCommand implements SimpleCommand {
         try {
             return new PlayerLookupResult(UUID.fromString(registeredPlayer.getUuid()), false);
         } catch (IllegalArgumentException e) {
-            source.sendMessage(ValidationUtils.createErrorComponent(ctx.messages().get("admin.uuid_invalid")));
+            source.sendMessage(ctx.messages().component("admin.uuid_invalid", NamedTextColor.RED));
             return new PlayerLookupResult(null, true);
         }
     }
@@ -392,7 +391,8 @@ class VAuthCommand implements SimpleCommand {
                 || ("Missing: " + RELOAD_WARNING_KEY).equals(warningMessage)) {
             return;
         }
-        source.sendMessage(ValidationUtils.createWarningComponent(warningMessage));
+        source.sendMessage(ctx.messages().componentFromResolvedText(
+                warningMessage, NamedTextColor.YELLOW));
     }
 
     private record PlayerLookupResult(UUID playerUuid, boolean handledError) {}

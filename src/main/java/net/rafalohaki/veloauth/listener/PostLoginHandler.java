@@ -100,17 +100,17 @@ public class PostLoginHandler {
      */
     public void showConflictResolutionMessage(Player player) {
         Component message = Component.text()
-                .append(Component.text(messages.get("player.conflict.header"), NamedTextColor.YELLOW))
+                .append(messages.component("player.conflict.header", NamedTextColor.YELLOW))
                 .append(Component.newline())
-                .append(Component.text(messages.get("player.conflict.description"), NamedTextColor.RED))
+                .append(messages.component("player.conflict.description", NamedTextColor.RED))
                 .append(Component.newline())
-                .append(Component.text(messages.get("player.conflict.options"), NamedTextColor.WHITE))
+                .append(messages.component("player.conflict.options", NamedTextColor.WHITE))
                 .append(Component.newline())
-                .append(Component.text(messages.get("player.conflict.option1"), NamedTextColor.GRAY))
+                .append(messages.component("player.conflict.option1", NamedTextColor.GRAY))
                 .append(Component.newline())
-                .append(Component.text(messages.get("player.conflict.option2"), NamedTextColor.GREEN))
+                .append(messages.component("player.conflict.option2", NamedTextColor.GREEN))
                 .append(Component.newline())
-                .append(Component.text(messages.get("player.conflict.resolution"), NamedTextColor.AQUA))
+                .append(messages.component("player.conflict.resolution", NamedTextColor.AQUA))
                 .build();
 
         player.sendMessage(message);

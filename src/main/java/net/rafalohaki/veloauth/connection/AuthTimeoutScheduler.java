@@ -2,7 +2,6 @@ package net.rafalohaki.veloauth.connection;
 
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.scheduler.ScheduledTask;
-import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
@@ -82,8 +81,7 @@ public final class AuthTimeoutScheduler {
                 return; // already moved on, nothing to do
             }
 
-            String kickMessage = messages.get("auth.timeout.kick", seconds);
-            player.disconnect(Component.text(kickMessage, NamedTextColor.RED));
+            player.disconnect(messages.component("auth.timeout.kick", NamedTextColor.RED, seconds));
             if (logger.isInfoEnabled()) {
                 logger.info(AUTH_MARKER,
                         "Kicked player {} after {}s auth timeout (no login/register)",

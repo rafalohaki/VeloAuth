@@ -3,7 +3,7 @@ package net.rafalohaki.veloauth.command;
 import at.favre.lib.crypto.bcrypt.BCrypt;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
-import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -136,7 +136,7 @@ class RegisterCommand implements SimpleCommand {
         }
 
         if (exceedsIpRegistrationLimit(authContext)) {
-            player.sendMessage(Component.text(ctx.messages().get("register.ip_limit_reached")));
+            player.sendMessage(ctx.messages().component("register.ip_limit_reached", NamedTextColor.RED));
             return;
         }
 

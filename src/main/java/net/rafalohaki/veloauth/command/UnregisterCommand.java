@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.command;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.database.DatabaseManager;
@@ -54,7 +55,8 @@ class UnregisterCommand implements SimpleCommand {
 
             RegisteredPlayer registeredPlayer = dbResult.getValue();
             if (registeredPlayer == null) {
-                source.sendMessage(ValidationUtils.createErrorComponent(ctx.messages().get("admin.player_not_found", nickname)));
+                source.sendMessage(ctx.messages().component(
+                        "admin.player_not_found", NamedTextColor.RED, nickname));
                 return;
             }
 
@@ -80,7 +82,8 @@ class UnregisterCommand implements SimpleCommand {
                     ctx.logger().info("Disconnected player {} — account deleted by admin", nickname);
                 });
 
-                CommandHelper.sendSuccess(source, ctx.messages().get("admin.account_deleted", nickname));
+                source.sendMessage(ctx.messages().component(
+                        "admin.account_deleted", NamedTextColor.GREEN, nickname));
                 String adminName = source instanceof Player player ? player.getUsername() : "CONSOLE";
                 ctx.logger().info(AUTH_MARKER, "Admin {} deleted player account: {}", adminName, nickname);
 
@@ -110,7 +113,7 @@ class UnregisterCommand implements SimpleCommand {
             return UUID.fromString(registeredPlayer.getUuid());
         } catch (IllegalArgumentException e) {
             ctx.logger().warn("Invalid UUID for player {}: {}", nickname, registeredPlayer.getUuid());
-            source.sendMessage(ValidationUtils.createErrorComponent(ctx.messages().get("admin.uuid_invalid")));
+            source.sendMessage(ctx.messages().component("admin.uuid_invalid", NamedTextColor.RED));
             return null;
         }
     }

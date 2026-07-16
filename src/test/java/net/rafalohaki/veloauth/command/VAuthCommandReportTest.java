@@ -4,6 +4,7 @@ import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.ProxyServer;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
@@ -105,7 +106,7 @@ class VAuthCommandReportTest {
         ArgumentCaptor<Component> captor = ArgumentCaptor.forClass(Component.class);
         verify(commandSource).sendMessage(captor.capture());
         List<String> sent = capturedTexts(captor);
-        assertTrue(sent.contains(messages.get("admin.report.disabled")),
+        assertTrue(sent.contains(expectedText("admin.report.disabled")),
                 () -> "Expected disabled message, got: " + sent);
         verify(reportService, never()).generateAndUpload();
     }
@@ -121,11 +122,11 @@ class VAuthCommandReportTest {
         ArgumentCaptor<Component> captor = ArgumentCaptor.forClass(Component.class);
         verify(commandSource, org.mockito.Mockito.atLeast(3)).sendMessage(captor.capture());
         List<String> sent = capturedTexts(captor);
-        assertTrue(sent.contains(messages.get("admin.report.generating")),
+        assertTrue(sent.contains(expectedText("admin.report.generating")),
                 () -> "Expected generating message, got: " + sent);
-        assertTrue(sent.contains(messages.get("admin.report.warning")),
+        assertTrue(sent.contains(expectedText("admin.report.warning")),
                 () -> "Expected warning message, got: " + sent);
-        assertTrue(sent.contains(messages.get("admin.report.success", "https://mclo.gs/abc123")),
+        assertTrue(sent.contains(expectedText("admin.report.success", "https://mclo.gs/abc123")),
                 () -> "Expected success message with URL, got: " + sent);
     }
 
@@ -140,7 +141,7 @@ class VAuthCommandReportTest {
         ArgumentCaptor<Component> captor = ArgumentCaptor.forClass(Component.class);
         verify(commandSource, org.mockito.Mockito.atLeast(2)).sendMessage(captor.capture());
         List<String> sent = capturedTexts(captor);
-        assertTrue(sent.contains(messages.get("admin.report.failed", "HTTP 500: server error")),
+        assertTrue(sent.contains(expectedText("admin.report.failed", "HTTP 500: server error")),
                 () -> "Expected failure message with error, got: " + sent);
         assertFalse(sent.stream().anyMatch(s -> s.contains("mclo.gs/")),
                 () -> "Should not contain a URL on failure: " + sent);
@@ -185,6 +186,10 @@ class VAuthCommandReportTest {
         return captor.getAllValues().stream()
                 .map(PLAIN_TEXT::serialize)
                 .toList();
+    }
+
+    private String expectedText(String key, Object... args) {
+        return PLAIN_TEXT.serialize(messages.component(key, NamedTextColor.WHITE, args));
     }
 
     private void setReportService(ReportService service) throws Exception {

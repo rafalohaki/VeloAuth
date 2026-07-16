@@ -205,6 +205,16 @@ security:
 
 Counters apply **on top of** `min-password-length`. Validation error messages (`validation.password.needs_digit/upper/lower/special`) are localized to all 17 supported languages.
 
+#### Message colors and HEX gradients
+
+Player-facing messages in `plugins/VeloAuth/lang/messages_<lang>.properties` support legacy colors, decorations, and six-digit RGB colors. The recommended HEX form is `<#RRGGBB>`; legacy `&#RRGGBB`, `§#RRGGBB`, and `§x§R§R§G§G§B§B` forms are also accepted.
+
+```properties
+auth.header=<#FF6700>&lS<#FF7312>&le<#FF8024>&lc<#FF8C36>&lu<#FF9848>&lr<#FFA45A>&li<#FFB16C>&lt<#FFBD7E>&ly
+```
+
+Use `&l` for bold, `&o` for italic, `&n` for underline, and `&r` to reset formatting. Colors must contain exactly six hexadecimal digits: `<#FF6700>` is valid, while `<#HEX>` is not. This compact syntax is supported, but arbitrary MiniMessage tags such as `<gradient:...>` are not. Run `/vauth reload` after editing the active language file.
+
 #### Silencing "no server available" notifications
 
 If your setup runs DiscordSRV or another plugin that kicks players before VeloAuth's backend-wait flow finishes, you can silence the in-chat "Waiting for a server…" notifications without forking the plugin: open the language file under `plugins/VeloAuth/lang/messages_<lang>.properties` and set the keys to empty values:

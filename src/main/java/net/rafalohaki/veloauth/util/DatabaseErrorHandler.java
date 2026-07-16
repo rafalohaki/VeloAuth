@@ -2,7 +2,8 @@ package net.rafalohaki.veloauth.util;
 
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.proxy.Player;
-import net.rafalohaki.veloauth.command.ValidationUtils;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.slf4j.Logger;
@@ -54,7 +55,7 @@ public final class DatabaseErrorHandler {
     public static boolean handleError(DbResult<?> result, CommandSource source, String identifier,
                                      String operation, Logger logger, Messages messages) {
         return handleErrorCore(result, identifier, operation, logger, messages, DEFAULT_ERROR_KEY,
-                msg -> source.sendMessage(ValidationUtils.createErrorComponent(msg)));
+                source::sendMessage);
     }
 
     /**
@@ -71,7 +72,7 @@ public final class DatabaseErrorHandler {
     public static boolean handleErrorWithKey(DbResult<?> result, Player player, String operation,
                                             Logger logger, Messages messages, String errorKey) {
         return handleErrorCore(result, player.getUsername(), operation, logger, messages, errorKey,
-                msg -> player.sendMessage(ValidationUtils.createErrorComponent(msg)));
+                player::sendMessage);
     }
 
     /**
@@ -79,12 +80,12 @@ public final class DatabaseErrorHandler {
      */
     private static boolean handleErrorCore(DbResult<?> result, String identifier, String operation,
                                           Logger logger, Messages messages, String errorKey,
-                                          java.util.function.Consumer<String> messageSender) {
+                                          java.util.function.Consumer<Component> messageSender) {
         if (!result.isDatabaseError()) {
             return false;
         }
         logDatabaseError(logger, operation, identifier, result.getErrorMessage());
-        messageSender.accept(messages.get(errorKey));
+        messageSender.accept(messages.component(errorKey, NamedTextColor.RED));
         return true;
     }
 

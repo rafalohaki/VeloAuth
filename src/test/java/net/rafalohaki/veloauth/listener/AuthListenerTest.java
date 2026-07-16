@@ -4,6 +4,7 @@ import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
 import com.velocitypowered.api.event.player.GameProfileRequestEvent;
+import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.proxy.InboundConnection;
 import com.velocitypowered.api.proxy.Player;
@@ -11,6 +12,8 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.api.util.GameProfile;
+import net.kyori.adventure.text.format.TextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
@@ -25,6 +28,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -396,6 +400,57 @@ class AuthListenerTest {
     }
 
     @Test
+    void onServerConnected_authHeaderWithHexFormatting_parsesColors() throws Exception {
+        messages = new Messages() {
+            @Override
+            public String get(String key, Object... args) {
+                if ("auth.header".equals(key)) {
+                    return "<#FF6700>&lSecurity";
+                }
+                return super.get(key, args);
+            }
+        };
+        authListener = new AuthListener(
+                plugin,
+                authCache,
+                settings,
+                preLoginHandler,
+                postLoginHandler,
+                connectionManager,
+                databaseManager,
+                messages
+        );
+
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("GradientPlayer");
+        when(player.getRemoteAddress()).thenReturn(new InetSocketAddress("192.0.2.80", 25565));
+        when(player.isOnlineMode()).thenReturn(false);
+        when(authCache.isPlayerAuthorized(playerUuid, "192.0.2.80")).thenReturn(false);
+        when(databaseManager.findPlayerByNickname("GradientPlayer"))
+                .thenReturn(new CompletableFuture<>());
+
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerInfo serverInfo = org.mockito.Mockito.mock(ServerInfo.class);
+        when(authServer.getServerInfo()).thenReturn(serverInfo);
+        when(serverInfo.getName()).thenReturn("auth");
+        net.rafalohaki.veloauth.connection.AuthTimeoutScheduler timeoutScheduler =
+                org.mockito.Mockito.mock(net.rafalohaki.veloauth.connection.AuthTimeoutScheduler.class);
+        setPluginField("authTimeoutScheduler", timeoutScheduler);
+
+        authListener.onServerConnected(new ServerConnectedEvent(player, authServer, null));
+
+        ArgumentCaptor<net.kyori.adventure.text.Component> componentCaptor =
+                ArgumentCaptor.forClass(net.kyori.adventure.text.Component.class);
+        verify(player).sendMessage(componentCaptor.capture());
+        net.kyori.adventure.text.Component header = componentCaptor.getValue();
+        assertEquals("Security", PLAIN_TEXT.serialize(header));
+        assertEquals(TextColor.color(0xFF6700), header.color());
+        assertEquals(TextDecoration.State.TRUE, header.decoration(TextDecoration.BOLD));
+    }
+
+    @Test
     void onPreLogin_premiumNickWithoutDbRecord_andFlagEnabled_forcesOfflineMode() {
         String username = "CrackedOnPremium";
         UUID premiumUuid = UUID.randomUUID();
@@ -545,6 +600,12 @@ class AuthListenerTest {
         Field initializedField = VeloAuth.class.getDeclaredField("initialized");
         initializedField.setAccessible(true);
         initializedField.set(plugin, value);
+    }
+
+    private void setPluginField(String fieldName, Object value) throws Exception {
+        Field field = VeloAuth.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(plugin, value);
     }
 
     private void awaitEventTask(EventTask task) {

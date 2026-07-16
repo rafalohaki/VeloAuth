@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.util;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -69,28 +71,28 @@ class DatabaseErrorHandlerTest {
         assertFalse(handled);
         verify(player, never()).sendMessage(any(Component.class));
         verify(logger, never()).error(any(org.slf4j.Marker.class), any(String.class), any(), any(), any());
-        verify(messages, never()).get(any());
+        verifyNoInteractions(messages);
     }
 
     @Test
     void handleErrorPlayer_errorResult_logsAndSendsLocalizedError() {
         when(logger.isErrorEnabled()).thenReturn(true);
         when(player.getUsername()).thenReturn("alice");
-        when(messages.get(DEFAULT_MESSAGE_ID)).thenReturn("Database error, please try again.");
+        Component localizedError = Component.text("Database error, please try again.", NamedTextColor.RED);
+        when(messages.component(DEFAULT_MESSAGE_ID, NamedTextColor.RED)).thenReturn(localizedError);
 
         boolean handled = DatabaseErrorHandler.handleError(
                 errorResult(), player, OPERATION, logger, messages);
 
         assertTrue(handled);
-        verify(messages).get(DEFAULT_MESSAGE_ID);
-        verify(player).sendMessage(any(Component.class));
+        verify(messages).component(DEFAULT_MESSAGE_ID, NamedTextColor.RED);
+        verify(player).sendMessage(localizedError);
     }
 
     @Test
     void handleErrorPlayer_errorResult_logIncludesOperationAndIdentifier() {
         when(logger.isErrorEnabled()).thenReturn(true);
         when(player.getUsername()).thenReturn("alice");
-        when(messages.get(DEFAULT_MESSAGE_ID)).thenReturn("err");
 
         DatabaseErrorHandler.handleError(errorResult(), player, OPERATION, logger, messages);
 
@@ -114,20 +116,21 @@ class DatabaseErrorHandlerTest {
 
         assertFalse(handled);
         verify(commandSource, never()).sendMessage(any(Component.class));
-        verify(messages, never()).get(any());
+        verifyNoInteractions(messages);
     }
 
     @Test
     void handleErrorCommandSource_errorResult_logsAndSendsLocalizedError() {
         when(logger.isErrorEnabled()).thenReturn(true);
-        when(messages.get(DEFAULT_MESSAGE_ID)).thenReturn("Database error");
+        Component localizedError = Component.text("Database error", NamedTextColor.RED);
+        when(messages.component(DEFAULT_MESSAGE_ID, NamedTextColor.RED)).thenReturn(localizedError);
 
         boolean handled = DatabaseErrorHandler.handleError(
                 errorResult(), commandSource, "alice", OPERATION, logger, messages);
 
         assertTrue(handled);
-        verify(messages).get(DEFAULT_MESSAGE_ID);
-        verify(commandSource).sendMessage(any(Component.class));
+        verify(messages).component(DEFAULT_MESSAGE_ID, NamedTextColor.RED);
+        verify(commandSource).sendMessage(localizedError);
     }
 
     // ===== handleErrorWithKey =====
@@ -139,36 +142,38 @@ class DatabaseErrorHandlerTest {
 
         assertFalse(handled);
         verify(player, never()).sendMessage(any(Component.class));
-        verify(messages, never()).get(any());
+        verifyNoInteractions(messages);
     }
 
     @Test
     void handleErrorWithKey_errorResult_usesCustomKeyNotDefault() {
         when(logger.isErrorEnabled()).thenReturn(true);
         when(player.getUsername()).thenReturn("alice");
-        when(messages.get(CUSTOM_MESSAGE_ID)).thenReturn("Custom error");
+        Component localizedError = Component.text("Custom error", NamedTextColor.RED);
+        when(messages.component(CUSTOM_MESSAGE_ID, NamedTextColor.RED)).thenReturn(localizedError);
 
         boolean handled = DatabaseErrorHandler.handleErrorWithKey(
                 errorResult(), player, OPERATION, logger, messages, CUSTOM_MESSAGE_ID);
 
         assertTrue(handled);
-        verify(messages).get(CUSTOM_MESSAGE_ID);
-        verify(messages, never()).get(DEFAULT_MESSAGE_ID);
-        verify(player).sendMessage(any(Component.class));
+        verify(messages).component(CUSTOM_MESSAGE_ID, NamedTextColor.RED);
+        verify(messages, never()).component(DEFAULT_MESSAGE_ID, NamedTextColor.RED);
+        verify(player).sendMessage(localizedError);
     }
 
     @Test
     void handleErrorWithKey_loggerErrorDisabled_doesNotLogButStillSends() {
         when(logger.isErrorEnabled()).thenReturn(false);
         when(player.getUsername()).thenReturn("alice");
-        when(messages.get(CUSTOM_MESSAGE_ID)).thenReturn("Custom error");
+        Component localizedError = Component.text("Custom error", NamedTextColor.RED);
+        when(messages.component(CUSTOM_MESSAGE_ID, NamedTextColor.RED)).thenReturn(localizedError);
 
         boolean handled = DatabaseErrorHandler.handleErrorWithKey(
                 errorResult(), player, OPERATION, logger, messages, CUSTOM_MESSAGE_ID);
 
         assertTrue(handled);
         // Still sends localized message even when logger is silenced
-        verify(player).sendMessage(any(Component.class));
+        verify(player).sendMessage(localizedError);
         verify(logger, never()).error(any(org.slf4j.Marker.class), any(String.class), any(), any(), any());
     }
 }

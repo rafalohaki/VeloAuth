@@ -7,8 +7,10 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -42,6 +44,18 @@ class MessagesSourceScanTest {
             "\\bmessages\\s*\\.\\s*get\\s*\\(\\s*\"([a-zA-Z0-9._-]+)\"");
     private static final Pattern MESSAGES_GET_FOR_LANGUAGE = Pattern.compile(
             "\\bmessages\\s*\\.\\s*getForLanguage\\s*\\(\\s*\"[a-zA-Z0-9_]+\"\\s*,\\s*\"([a-zA-Z0-9._-]+)\"");
+    private static final Pattern RAW_LOCALIZED_COMPONENT = Pattern.compile(
+            "(?:Component\\s*\\.\\s*text|ValidationUtils\\s*\\.\\s*create(?:Error|Warning|Success)Component)"
+                    + "\\s*\\(\\s*(?:messages|ctx\\s*\\.\\s*messages\\s*\\(\\s*\\))"
+                    + "\\s*\\.\\s*get\\s*\\(",
+            Pattern.DOTALL);
+    private static final Pattern RESOLVED_LOCALIZED_COMPONENT = Pattern.compile(
+            "(?:String|var)\\s+([a-zA-Z][a-zA-Z0-9_]*)\\s*=\\s*[^;]*"
+                    + "(?:messages|ctx\\s*\\.\\s*messages\\s*\\(\\s*\\))"
+                    + "\\s*\\.\\s*get\\s*\\([^;]+;.{0,500}?"
+                    + "(?:Component\\s*\\.\\s*text|ValidationUtils\\s*\\.\\s*create"
+                    + "(?:Error|Warning|Success)Component)\\s*\\(\\s*\\1\\b",
+            Pattern.DOTALL);
 
     @Test
     void everyLiteralMessagesGetKey_existsInEnglishProperties() throws IOException {
@@ -64,6 +78,19 @@ class MessagesSourceScanTest {
                         + EN_PROPERTIES + ":\n  " + String.join("\n  ", missing));
     }
 
+    @Test
+    void playerFacingLocalizedComponents_useColorAwareRenderer() throws IOException {
+        List<String> bypasses = new ArrayList<>();
+        try (Stream<Path> paths = Files.walk(SRC_MAIN)) {
+            paths.filter(path -> path.toString().endsWith(".java"))
+                    .forEach(path -> collectRawComponentBypasses(path, bypasses));
+        }
+
+        assertTrue(bypasses.isEmpty(),
+                "Localized components bypassing Messages.component(...):\n  "
+                        + String.join("\n  ", bypasses));
+    }
+
     private Set<String> scanLiteralKeys() throws IOException {
         Set<String> keys = new HashSet<>();
         try (Stream<Path> paths = Files.walk(SRC_MAIN)) {
@@ -78,6 +105,24 @@ class MessagesSourceScanTest {
             String source = Files.readString(javaFile, StandardCharsets.UTF_8);
             collectMatches(MESSAGES_GET, source, keys);
             collectMatches(MESSAGES_GET_FOR_LANGUAGE, source, keys);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to read source file: " + javaFile, e);
+        }
+    }
+
+    private void collectRawComponentBypasses(Path javaFile, List<String> bypasses) {
+        try {
+            String source = Files.readString(javaFile, StandardCharsets.UTF_8);
+            Matcher matcher = RAW_LOCALIZED_COMPONENT.matcher(source);
+            while (matcher.find()) {
+                long line = source.substring(0, matcher.start()).lines().count();
+                bypasses.add(javaFile + ":" + line);
+            }
+            matcher = RESOLVED_LOCALIZED_COMPONENT.matcher(source);
+            while (matcher.find()) {
+                long line = source.substring(0, matcher.start()).lines().count();
+                bypasses.add(javaFile + ":" + line);
+            }
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to read source file: " + javaFile, e);
         }

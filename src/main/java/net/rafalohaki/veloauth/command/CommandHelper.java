@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.command;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
@@ -34,7 +35,7 @@ public final class CommandHelper {
      */
     public static Player validatePlayerSource(CommandSource source, Messages messages) {
         if (!(source instanceof Player player)) {
-            source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.player_only")));
+            source.sendMessage(messages.component("error.player_only", NamedTextColor.RED));
             return null;
         }
         return player;
@@ -54,7 +55,7 @@ public final class CommandHelper {
         }
         String[] args = invocation.arguments();
         if (args.length != requiredArgs) {
-            player.sendMessage(ValidationUtils.createWarningComponent(messages.get(usageKey)));
+            player.sendMessage(messages.component(usageKey, NamedTextColor.YELLOW));
             return null;
         }
         return new CommandInputs(player, args);
@@ -143,7 +144,8 @@ public final class CommandHelper {
         ValidationUtils.ValidationResult result =
                 ValidationUtils.validatePassword(password, settings, messages);
         if (!result.valid()) {
-            player.sendMessage(ValidationUtils.createErrorComponent(result.getErrorMessage()));
+            player.sendMessage(messages.componentFromResolvedText(
+                    result.getErrorMessage(), NamedTextColor.RED));
             return false;
         }
         return true;
@@ -158,7 +160,8 @@ public final class CommandHelper {
         ValidationUtils.ValidationResult result =
                 ValidationUtils.validatePasswordMatch(password, confirm, messages);
         if (!result.valid()) {
-            player.sendMessage(ValidationUtils.createErrorComponent(result.getErrorMessage()));
+            player.sendMessage(messages.componentFromResolvedText(
+                    result.getErrorMessage(), NamedTextColor.RED));
             return false;
         }
         return true;
@@ -225,7 +228,7 @@ public final class CommandHelper {
      */
     public static boolean checkAdminPermission(CommandSource source, Messages messages) {
         if (!source.hasPermission("veloauth.admin")) {
-            source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.permission")));
+            source.sendMessage(messages.component("error.permission", NamedTextColor.RED));
             return false;
         }
         return true;
@@ -249,7 +252,7 @@ public final class CommandHelper {
      * @param key      Message key to localize
      */
     public static void sendError(CommandSource source, Messages messages, String key) {
-        source.sendMessage(ValidationUtils.createErrorComponent(messages.get(key)));
+        source.sendMessage(messages.component(key, NamedTextColor.RED));
     }
 
     /**
@@ -270,7 +273,7 @@ public final class CommandHelper {
      * @param key      Message key to localize
      */
     public static void sendSuccess(CommandSource source, Messages messages, String key) {
-        source.sendMessage(ValidationUtils.createSuccessComponent(messages.get(key)));
+        source.sendMessage(messages.component(key, NamedTextColor.GREEN));
     }
 
     /**
@@ -294,9 +297,9 @@ public final class CommandHelper {
     private static void handleAsyncCommandException(Throwable throwable, CommandSource source, 
                                                      Messages messages, String errorKey) {
         if (throwable instanceof java.util.concurrent.RejectedExecutionException) {
-            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(MSG_KEY_SERVER_OVERLOADED)));
+            source.sendMessage(messages.component(MSG_KEY_SERVER_OVERLOADED, NamedTextColor.RED));
         } else {
-            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(errorKey)));
+            source.sendMessage(messages.component(errorKey, NamedTextColor.RED));
         }
     }
 
@@ -312,7 +315,7 @@ public final class CommandHelper {
                                        CommandSource source, String errorKey) {
         // Check if executor is shutting down
         if (VirtualThreadExecutorProvider.isShutdown()) {
-            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(MSG_KEY_SERVER_SHUTTING_DOWN)));
+            source.sendMessage(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
             return;
         }
 
@@ -324,7 +327,7 @@ public final class CommandHelper {
                         return null;
                     });
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(MSG_KEY_SERVER_SHUTTING_DOWN)));
+            source.sendMessage(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
         }
     }
 
@@ -341,7 +344,7 @@ public final class CommandHelper {
                                                   CommandSource source, String errorKey, String timeoutKey) {
         // Check if executor is shutting down
         if (VirtualThreadExecutorProvider.isShutdown()) {
-            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(MSG_KEY_SERVER_SHUTTING_DOWN)));
+            source.sendMessage(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
             return;
         }
 
@@ -351,14 +354,14 @@ public final class CommandHelper {
                     .orTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .exceptionally(throwable -> {
                         if (throwable instanceof java.util.concurrent.TimeoutException) {
-                            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(timeoutKey)));
+                            source.sendMessage(messages.component(timeoutKey, NamedTextColor.RED));
                         } else {
                             handleAsyncCommandException(throwable, source, messages, errorKey);
                         }
                         return null;
                     });
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            source.sendMessage(ValidationUtils.createErrorComponent(messages.get(MSG_KEY_SERVER_SHUTTING_DOWN)));
+            source.sendMessage(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
         }
     }
 }

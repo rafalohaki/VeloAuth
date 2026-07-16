@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.command;
 
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.proxy.Player;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
@@ -186,14 +187,14 @@ class CommandContext {
      * Sends a database error message to the player.
      */
     void sendDatabaseErrorMessage(Player player) {
-        player.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+        player.sendMessage(messages.component("error.database.query", NamedTextColor.RED));
     }
 
     /**
      * Sends a database error message to any command source.
      */
     void sendDatabaseErrorMessage(CommandSource source) {
-        source.sendMessage(ValidationUtils.createErrorComponent(messages.get("error.database.query")));
+        source.sendMessage(messages.component("error.database.query", NamedTextColor.RED));
     }
 
     /**
@@ -230,7 +231,7 @@ class CommandContext {
      * Sends the standard per-player in-progress message.
      */
     void sendCommandInProgress(Player player) {
-        player.sendMessage(ValidationUtils.createWarningComponent(messages.get("auth.command.in_progress")));
+        player.sendMessage(messages.component("auth.command.in_progress", NamedTextColor.YELLOW));
     }
 
     /**

@@ -2,7 +2,6 @@ package net.rafalohaki.veloauth.connection;
 
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
-import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
@@ -120,10 +119,7 @@ public class ConnectionManager {
             logger.error("Auth server '{}' is not registered!",
                     settings.getAuthServerName());
 
-            player.disconnect(Component.text(
-                    messages.get("connection.error.auth_server"),
-                    NamedTextColor.RED
-            ));
+            player.disconnect(messages.component("connection.error.auth_server", NamedTextColor.RED));
             return null;
         }
         
@@ -135,7 +131,7 @@ public class ConnectionManager {
             logger.error("Critical error transferring player to auth server: {}", player.getUsername(), e);
         }
 
-        disconnectWithError(player, messages.get("connection.error.auth_connect"));
+        player.disconnect(messages.component("connection.error.auth_connect", NamedTextColor.RED));
         return false;
     }
 
@@ -168,10 +164,7 @@ public class ConnectionManager {
                         player.getUsername(), throwable.getMessage(), throwable);
             }
 
-            player.sendMessage(Component.text(
-                    messages.get("connection.error.auth_server"),
-                    NamedTextColor.RED
-            ));
+            player.sendMessage(messages.component("connection.error.auth_server", NamedTextColor.RED));
             return false;
         }
 
@@ -188,10 +181,7 @@ public class ConnectionManager {
                     KickReasonRenderer.renderPlain(result));
         }
 
-        player.sendMessage(Component.text(
-                messages.get("connection.error.auth_connect"),
-                NamedTextColor.RED
-        ));
+        player.sendMessage(messages.component("connection.error.auth_connect", NamedTextColor.RED));
         return false;
     }
 
@@ -262,10 +252,7 @@ public class ConnectionManager {
             String serverName = targetServer.getServerInfo().getName();
 
             // Send connecting message
-            player.sendMessage(Component.text(
-                    messages.get("connection.connecting"),
-                    NamedTextColor.YELLOW
-            ));
+            player.sendMessage(messages.component("connection.connecting", NamedTextColor.YELLOW));
 
             if (logger.isDebugEnabled()) {
                 logger.debug(messages.get("player.transfer.backend.attempt", player.getUsername(), serverName));
@@ -508,7 +495,7 @@ public class ConnectionManager {
         if (resolved == null || resolved.isEmpty()) {
             return;
         }
-        player.sendMessage(Component.text(resolved, color));
+        player.sendMessage(messages.componentFromResolvedText(resolved, color));
     }
 
     private void executeBackendRetryAfterLimbo(Player player, RegisteredServer targetServer, String serverName) {
@@ -551,7 +538,7 @@ public class ConnectionManager {
     }
 
     private void sendErrorMessage(Player player, String reason) {
-        player.sendMessage(Component.text(messages.get(CONNECTION_ERROR_GAME_SERVER, reason), NamedTextColor.RED));
+        player.sendMessage(messages.component(CONNECTION_ERROR_GAME_SERVER, NamedTextColor.RED, reason));
     }
 
     /**
@@ -564,7 +551,7 @@ public class ConnectionManager {
         }
 
         retryAttempts.computeIfAbsent(player.getUniqueId(), k -> new AtomicInteger(0)).incrementAndGet();
-        player.sendMessage(Component.text(messages.get("connection.retry"), NamedTextColor.YELLOW));
+        player.sendMessage(messages.component("connection.retry", NamedTextColor.YELLOW));
 
         scheduleTimeoutRetry(player, targetServer, serverName);
         return true;
@@ -829,10 +816,7 @@ public class ConnectionManager {
             // Transfer na auth server bez blokowania wątku wywołującego.
             transferToAuthServerAsync(player);
 
-            player.sendMessage(Component.text(
-                    messages.get("auth.logged_out"),
-                    NamedTextColor.YELLOW
-            ));
+            player.sendMessage(messages.component("auth.logged_out", NamedTextColor.YELLOW));
 
             if (logger.isDebugEnabled()) {
                 logger.debug("Forced re-authentication for player: {}", player.getUsername());
@@ -1042,8 +1026,4 @@ public class ConnectionManager {
         return "unknown";
     }
 
-    // Helper methods for consistent messaging
-    private void disconnectWithError(Player player, String message) {
-        player.disconnect(Component.text(message, NamedTextColor.RED));
-    }
 }

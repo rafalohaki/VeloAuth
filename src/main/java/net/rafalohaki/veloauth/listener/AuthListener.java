@@ -214,7 +214,7 @@ public class AuthListener {
             logger.warn(SECURITY_MARKER, "[DUPLICATE PRELOGIN] {} from {} - already connecting, denying",
                     username, pendingLoginKey);
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    Component.text(messages.get("connection.already_connecting"), NamedTextColor.RED)));
+                    messages.component("connection.already_connecting", NamedTextColor.RED)));
             return null;
         }
 
@@ -295,8 +295,8 @@ public class AuthListener {
     private boolean validatePluginInitialized(PreLoginEvent event, String username) {
         if (!plugin.isInitialized()) {
             logger.warn("STARTUP BLOCK: Player {} tried to connect before VeloAuth fully initialized - PreLogin block", username);
-            String msg = messages != null ? messages.get("system.starting") : "VeloAuth is starting. Please wait.";
-            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(Component.text(msg, NamedTextColor.RED)));
+            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(localizedOrFallback(
+                    "system.starting", "VeloAuth is starting. Please wait.", NamedTextColor.RED)));
             return false;
         }
         return true;
@@ -305,8 +305,8 @@ public class AuthListener {
     private boolean validateHandlerInitialized(PreLoginEvent event, String username) {
         if (preLoginHandler == null) {
             logger.error("CRITICAL: PreLoginHandler is null during event processing for player {}", username);
-            String msg = messages != null ? messages.get("system.init_error") : "System initialization error.";
-            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(Component.text(msg, NamedTextColor.RED)));
+            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(localizedOrFallback(
+                    "system.init_error", "System initialization error.", NamedTextColor.RED)));
             return false;
         }
         return true;
@@ -316,7 +316,7 @@ public class AuthListener {
         if (!preLoginHandler.isValidUsername(username)) {
             logger.warn(SECURITY_MARKER, "[USERNAME VALIDATION FAILED] {} - invalid format", username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    Component.text(messages.get("validation.username.invalid"), NamedTextColor.RED)));
+                    messages.component("validation.username.invalid", NamedTextColor.RED)));
             return false;
         }
         return true;
@@ -330,7 +330,7 @@ public class AuthListener {
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} blocked", playerIp);
             }
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    Component.text(messages.get("security.brute_force.blocked"), NamedTextColor.RED)));
+                    messages.component("security.brute_force.blocked", NamedTextColor.RED)));
             return true;
         }
         return false;
@@ -351,7 +351,7 @@ public class AuthListener {
                     logger.error("[ASYNC] Error during premium detection for {} - denying login for safety",
                             username, throwable);
                     event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                            Component.text(messages.get("connection.error.database"), NamedTextColor.RED)));
+                            messages.component("connection.error.database", NamedTextColor.RED)));
                     return null;
                 });
     }
@@ -371,7 +371,7 @@ public class AuthListener {
         logger.error("[SECURITY] Login DENIED for {} - cannot verify premium status (all API resolvers failed)",
                 username);
         event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                Component.text(messages.get("security.api_failure.denied"), NamedTextColor.RED)));
+                messages.component("security.api_failure.denied", NamedTextColor.RED)));
     }
 
     private void applyPremiumDetectionResult(
@@ -400,7 +400,7 @@ public class AuthListener {
             logger.warn("[SECURITY] Denying premium player {} - DB error would corrupt UUID in offline mode",
                     username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    Component.text(messages.get("connection.error.database"), NamedTextColor.RED)));
+                    messages.component("connection.error.database", NamedTextColor.RED)));
         } else {
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
         }
@@ -517,10 +517,8 @@ public class AuthListener {
                 "STARTUP BLOCK: Player {} tried to login before VeloAuth fully initialized - login block",
                 playerName);
             // Use English fallback - Messages may not be available yet
-            String msg = messages != null ? messages.get("system.starting") : "VeloAuth is starting. Please wait.";
-            event.setResult(ComponentResult.denied(
-                Component.text(msg,
-                    NamedTextColor.RED)));
+            event.setResult(ComponentResult.denied(localizedOrFallback(
+                    "system.starting", "VeloAuth is starting. Please wait.", NamedTextColor.RED)));
             return;
         }
 
@@ -531,7 +529,7 @@ public class AuthListener {
                     "Denying {} because the Mojang profile could not be safely bound to AUTH.UUID",
                     playerName);
             event.setResult(ComponentResult.denied(
-                    Component.text(messages.get("connection.error.database"), NamedTextColor.RED)));
+                    messages.component("connection.error.database", NamedTextColor.RED)));
             return;
         }
 
@@ -547,7 +545,7 @@ public class AuthListener {
                     playerName, playerAddressText);
 
             event.setResult(ComponentResult.denied(
-                Component.text(messages.get("security.brute_force.blocked"), NamedTextColor.RED)));
+                messages.component("security.brute_force.blocked", NamedTextColor.RED)));
             return;
         }
 
@@ -594,8 +592,8 @@ public class AuthListener {
         if (postLoginHandler == null) {
             logger.error("CRITICAL: PostLoginHandler is null during event processing for player {}", 
                 player.getUsername());
-            String msg = messages != null ? messages.get("system.init_error") : "System initialization error.";
-            player.disconnect(Component.text(msg, NamedTextColor.RED));
+            player.disconnect(localizedOrFallback(
+                    "system.init_error", "System initialization error.", NamedTextColor.RED));
             return;
         }
 
@@ -624,9 +622,8 @@ public class AuthListener {
         } catch (RuntimeException e) {
             logger.error("Error handling PostLoginEvent for player: {}", event.getPlayer().getUsername(), e);
 
-            event.getPlayer().disconnect(Component.text(
-                    messages.get("connection.error.generic"),
-                    NamedTextColor.RED));
+            event.getPlayer().disconnect(messages.component(
+                    "connection.error.generic", NamedTextColor.RED));
         }
     }
 
@@ -804,8 +801,7 @@ public class AuthListener {
         player.sendMessage(Component.text()
                 .content("❌ ")
                 .color(NamedTextColor.RED)
-                .append(Component.text(messages.get("auth.must_login"))
-                        .color(NamedTextColor.RED))
+                .append(messages.component("auth.must_login", NamedTextColor.RED))
                 .build());
 
         // Jeśli UUID mismatch - usuń z cache dla bezpieczeństwa
@@ -844,7 +840,7 @@ public class AuthListener {
             logger.debug(AUTH_MARKER, messages.get("player.connected.backend"),
                     player.getUsername(), serverName);
         }
-        player.sendMessage(Component.text(messages.get("general.welcome.full"), NamedTextColor.GREEN));
+        player.sendMessage(messages.component("general.welcome.full", NamedTextColor.GREEN));
     }
 
     private void handleAuthServerConnection(Player player) {
@@ -878,7 +874,7 @@ public class AuthListener {
     }
 
     private void sendAuthInstructions(Player player) {
-        player.sendMessage(Component.text(messages.get("auth.header"), NamedTextColor.GOLD));
+        player.sendMessage(messages.component("auth.header", NamedTextColor.GOLD));
 
         databaseManager.findPlayerByNickname(player.getUsername())
                 .thenAccept(dbResult -> sendAuthPrompt(player, dbResult))
@@ -890,16 +886,23 @@ public class AuthListener {
 
     private void sendAuthPrompt(Player player, DbResult<RegisteredPlayer> dbResult) {
         if (dbResult.isDatabaseError()) {
-            player.sendMessage(Component.text(messages.get("auth.prompt.generic"), NamedTextColor.YELLOW));
+            player.sendMessage(messages.component("auth.prompt.generic", NamedTextColor.YELLOW));
             return;
         }
 
         RegisteredPlayer registeredPlayer = dbResult.getValue();
         if (registeredPlayer != null) {
-            player.sendMessage(Component.text(messages.get("auth.account_exists"), NamedTextColor.GREEN));
+            player.sendMessage(messages.component("auth.account_exists", NamedTextColor.GREEN));
         } else {
-            player.sendMessage(Component.text(messages.get("auth.first_time"), NamedTextColor.AQUA));
+            player.sendMessage(messages.component("auth.first_time", NamedTextColor.AQUA));
         }
+    }
+
+    private Component localizedOrFallback(String key, String fallback, NamedTextColor fallbackColor) {
+        if (messages == null) {
+            return Component.text(fallback, fallbackColor);
+        }
+        return messages.component(key, fallbackColor);
     }
 
     private record PendingLoginAttempt(InboundConnection connection) {
