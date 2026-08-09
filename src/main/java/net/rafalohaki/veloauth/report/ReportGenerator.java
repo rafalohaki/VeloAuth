@@ -5,6 +5,7 @@ import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import net.rafalohaki.veloauth.BuildConstants;
 import net.rafalohaki.veloauth.VeloAuth;
+import net.rafalohaki.veloauth.authserver.AuthServerProvider;
 import net.rafalohaki.veloauth.config.Settings;
 
 import java.io.IOException;
@@ -119,7 +120,18 @@ final class ReportGenerator {
         meta.add(McLogsClient.MetadataEntry.visible("premium_bypass_auth_server",
                 settings.isPremiumBypassAuthServerEnabled(), "Premium auth-server bypass"));
         // Hidden metadata — useful for support but not displayed on the public page.
-        meta.add(McLogsClient.MetadataEntry.hidden("auth_server", settings.getAuthServerName()));
+        AuthServerProvider authServerProvider = plugin.getAuthServerProvider();
+        String authServerName = authServerProvider == null
+                ? settings.getAuthServerName() : authServerProvider.serverName();
+        String authServerMode = authServerProvider == null
+                ? settings.getAuthServerMode().getConfigValue()
+                : authServerProvider.mode().getConfigValue();
+        meta.add(McLogsClient.MetadataEntry.hidden("auth_server", authServerName));
+        meta.add(McLogsClient.MetadataEntry.hidden("auth_server_mode", authServerMode));
+        if (authServerProvider != null) {
+            meta.add(McLogsClient.MetadataEntry.hidden(
+                    "auth_server_client_compatibility", authServerProvider.compatibilityDescription()));
+        }
         meta.add(McLogsClient.MetadataEntry.hidden("try_list",
                 server.getConfiguration().getAttemptConnectionOrder().toString()));
         List<String> serverNames = server.getAllServers().stream()

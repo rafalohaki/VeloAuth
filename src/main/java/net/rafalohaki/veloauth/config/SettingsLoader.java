@@ -156,21 +156,66 @@ final class SettingsLoader {
 
     @SuppressWarnings("unchecked")
     private static void loadAuthServerSettings(Map<String, Object> config, LoadedState state, Logger logger) {
-        Map<String, Object> authServer = (Map<String, Object>) config.get("auth-server");
-        if (authServer != null) {
+        // Embedded topology is an explicit opt-in. Removing the key on reload must never retain
+        // a previously loaded embedded mode or custom embedded network settings.
+        state.authServerMode = Settings.AuthServerMode.EXTERNAL.getConfigValue();
+        state.embeddedAuthServerSettings.resetToDefaults();
+
+        Object authServerSection = config.get("auth-server");
+        if (authServerSection instanceof Map<?, ?>) {
+            Map<String, Object> authServer = (Map<String, Object>) authServerSection;
+            state.authServerMode = explicitStringOrDefault(authServer, "mode", state.authServerMode);
             state.authServerName = YamlParserUtils.getString(authServer, "server-name", state.authServerName);
             state.authServerTimeoutSeconds = YamlParserUtils.getInt(authServer,
                     CONFIG_KEY_TIMEOUT_SECONDS, state.authServerTimeoutSeconds);
+            loadEmbeddedAuthServerSettings(authServer, state.embeddedAuthServerSettings);
             return;
         }
+        if (config.containsKey("auth-server")) {
+            throw new IllegalArgumentException("Config section 'auth-server:' must be a YAML map");
+        }
 
-        Map<String, Object> picolimbo = (Map<String, Object>) config.get("picolimbo");
-        if (picolimbo != null) {
+        Object picoLimboSection = config.get("picolimbo");
+        if (picoLimboSection instanceof Map<?, ?>) {
+            Map<String, Object> picolimbo = (Map<String, Object>) picoLimboSection;
             logger.warn("Config section 'picolimbo:' is deprecated — rename to 'auth-server:' in config.yml");
             state.authServerName = YamlParserUtils.getString(picolimbo, "server-name", state.authServerName);
             state.authServerTimeoutSeconds = YamlParserUtils.getInt(picolimbo,
                     CONFIG_KEY_TIMEOUT_SECONDS, state.authServerTimeoutSeconds);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void loadEmbeddedAuthServerSettings(
+            Map<String, Object> authServer,
+            Settings.EmbeddedAuthServerSettings target) {
+        Object embeddedSection = authServer.get("embedded");
+        if (!(embeddedSection instanceof Map<?, ?>)) {
+            if (authServer.containsKey("embedded")) {
+                throw new IllegalArgumentException(
+                        "Config section 'auth-server.embedded:' must be a YAML map");
+            }
+            return;
+        }
+
+        Map<String, Object> embedded = (Map<String, Object>) embeddedSection;
+        target.setPort(YamlParserUtils.getInt(embedded, "port", target.getPort()));
+        target.setMaxConnections(YamlParserUtils.getInt(
+                embedded, "max-connections", target.getMaxConnections()));
+        target.setHandshakeTimeoutSeconds(YamlParserUtils.getInt(
+                embedded, "handshake-timeout-seconds", target.getHandshakeTimeoutSeconds()));
+        target.setLoginTimeoutSeconds(YamlParserUtils.getInt(
+                embedded, "login-timeout-seconds", target.getLoginTimeoutSeconds()));
+    }
+
+    private static String explicitStringOrDefault(
+            Map<String, Object> section,
+            String key,
+            String defaultValue) {
+        if (section.containsKey(key) && section.get(key) == null) {
+            return "";
+        }
+        return YamlParserUtils.getString(section, key, defaultValue);
     }
 
     @SuppressWarnings("unchecked")
@@ -430,6 +475,7 @@ final class SettingsLoader {
         int sessionTimeoutMinutes;
         int premiumTtlHours;
         double premiumRefreshThreshold;
+        String authServerMode;
         String authServerName;
         int authServerTimeoutSeconds;
         int connectionTimeoutSeconds;
@@ -452,6 +498,8 @@ final class SettingsLoader {
         final Settings.PasswordPolicy passwordPolicy = new Settings.PasswordPolicy();
         final Settings.AuditLogSettings auditLogSettings = new Settings.AuditLogSettings();
         final Settings.TwoFactorSettings twoFactorSettings = new Settings.TwoFactorSettings();
+        final Settings.EmbeddedAuthServerSettings embeddedAuthServerSettings =
+                new Settings.EmbeddedAuthServerSettings();
 
         static LoadedState from(Settings settings) {
             LoadedState state = new LoadedState();
@@ -471,8 +519,10 @@ final class SettingsLoader {
             state.sessionTimeoutMinutes = settings.getSessionTimeoutMinutes();
             state.premiumTtlHours = settings.getPremiumTtlHours();
             state.premiumRefreshThreshold = settings.getPremiumRefreshThreshold();
+            state.authServerMode = settings.getConfiguredAuthServerMode();
             state.authServerName = settings.getAuthServerName();
             state.authServerTimeoutSeconds = settings.getAuthServerTimeoutSeconds();
+            state.embeddedAuthServerSettings.copyFrom(settings.getEmbeddedAuthServerSettings());
             state.connectionTimeoutSeconds = settings.getConnectionTimeoutSeconds();
             state.pingTimeoutMillis = settings.getPingTimeoutMillis();
             state.bcryptCost = settings.getBcryptCost();

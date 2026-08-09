@@ -21,6 +21,7 @@ import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
+import static net.rafalohaki.veloauth.testsupport.EventTaskTestSupport.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -59,7 +60,7 @@ class EarlyLoginBlockerTest {
         assertNotNull(task, "Connections during initialization should be queued");
         setPluginInitialized(true);
         getInitializationFuture().complete(null);
-        awaitEventTask(task);
+        await(task);
         assertTrue(event.getResult().isAllowed(), "Queued connection should resume after initialization completes");
     }
 
@@ -71,7 +72,7 @@ class EarlyLoginBlockerTest {
 
         assertNotNull(task, "Connections during initialization should still return an EventTask");
         getInitializationFuture().completeExceptionally(new IllegalStateException("init failed"));
-        awaitEventTask(task);
+        await(task);
         assertFalse(event.getResult().isAllowed(), "Initialization failure should deny queued connections");
         assertEquals("VeloAuth ⏳",
                 event.getResult().getReasonComponent().map(PLAIN_TEXT::serialize).orElse(null));
@@ -96,18 +97,4 @@ class EarlyLoginBlockerTest {
         initializedField.set(plugin, value);
     }
 
-    private void awaitEventTask(EventTask task) {
-        try {
-            Field futureField = task.getClass().getDeclaredField("future");
-            futureField.setAccessible(true);
-            ((CompletableFuture<?>) futureField.get(task)).join();
-        } catch (ReflectiveOperationException e) {
-            // Velocity's EventTask impl doesn't expose its CompletableFuture by name on some
-            // builds. Park briefly so the async work submitted by the listener has time to
-            // run before the assertion. LockSupport.parkNanos is the Sonar-safe alternative
-            // to Thread.sleep — same wait semantics, not flagged by java:S2925.
-            java.util.concurrent.locks.LockSupport.parkNanos(
-                    java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(100));
-        }
-    }
 }

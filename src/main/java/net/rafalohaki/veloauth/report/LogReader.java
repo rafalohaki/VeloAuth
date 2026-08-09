@@ -14,7 +14,7 @@ import java.util.Optional;
  * {@code /vauth report} upload.
  * <p>
  * Velocity does not expose the proxy working directory or log path through its API, so the
- * path is derived from the plugin data directory: {@code plugins/VeloAuth/../../logs/latest.log}
+ * path is derived from the plugin data directory: {@code plugins/veloauth/../../logs/latest.log}
  * resolves to {@code <proxy-root>/logs/latest.log}. This matches the default Velocity layout
  * and is the same heuristic used by other Velocity plugins that need to read proxy logs.
  * <p>
@@ -35,7 +35,7 @@ final class LogReader {
     /**
      * Resolves the proxy log file path from the plugin data directory.
      *
-     * @param pluginDataDirectory the {@code plugins/VeloAuth} directory
+     * @param pluginDataDirectory the {@code plugins/veloauth} directory
      * @return path to {@code <proxy-root>/logs/latest.log}
      */
     static Path resolveLogPath(Path pluginDataDirectory) {
@@ -44,7 +44,7 @@ final class LogReader {
 
     /**
      * Resolves the Velocity proxy root from the plugin data directory
-     * ({@code plugins/VeloAuth -> plugins -> <proxy-root>}).
+     * ({@code plugins/veloauth -> plugins -> <proxy-root>}).
      * <p>
      * Velocity may hand the data directory to plugins as a <em>relative</em> path
      * (e.g. {@code plugins/veloauth}). On a relative path {@link Path#getParent()}

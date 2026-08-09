@@ -609,6 +609,223 @@ class SettingsValidationTest {
     }
 
     @Test
+    void previousReleaseConfigWithoutAuthServerModeShouldRemainUnchangedAndExternal() throws IOException {
+        Path configFile = tempDir.resolve("config.yml");
+        String previousReleaseConfig = """
+                language: pl
+                auth-server:
+                  server-name: legacy-limbo
+                  timeout-seconds: 180
+                premium:
+                  check-enabled: true
+                  allow-cracked-on-premium-nicks: false
+                floodgate:
+                  enabled: false
+                  bypass-auth-server: true
+                """;
+        writeConfigFile(configFile, previousReleaseConfig);
+
+        assertTrue(settings.load(), "Existing auth-server configuration should remain valid");
+        assertEquals(Settings.AuthServerMode.EXTERNAL, settings.getAuthServerMode());
+        assertEquals("legacy-limbo", settings.getAuthServerName());
+        assertEquals(180, settings.getAuthServerTimeoutSeconds());
+        assertFalse(settings.isPremiumBypassAuthServerEnabled());
+        assertEquals(0, settings.getEmbeddedAuthServerSettings().getPort());
+        assertEquals(previousReleaseConfig, Files.readString(configFile),
+                "Loading a previous-release config must not rewrite it or inject embedded mode");
+    }
+
+    @Test
+    void legacyPicolimboSectionShouldRemainExternalAndPreserveRoutingValues() {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                picolimbo:
+                  server-name: historical-limbo
+                  timeout-seconds: 210
+                """);
+
+        assertTrue(settings.load(), "Deprecated picolimbo configuration should remain upgradeable");
+        assertEquals(Settings.AuthServerMode.EXTERNAL, settings.getAuthServerMode());
+        assertEquals("historical-limbo", settings.getAuthServerName());
+        assertEquals(210, settings.getAuthServerTimeoutSeconds());
+        assertFalse(settings.isPremiumBypassAuthServerEnabled());
+    }
+
+    @Test
+    void embeddedAuthServerSettingsShouldLoadExplicitValues() {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                auth-server:
+                  mode: embedded
+                  server-name: ignored-for-embedded
+                  timeout-seconds: 240
+                  embedded:
+                    port: 25570
+                    max-connections: 750
+                    handshake-timeout-seconds: 7
+                    login-timeout-seconds: 12
+                """);
+
+        assertTrue(settings.load());
+        assertEquals(Settings.AuthServerMode.EMBEDDED, settings.getAuthServerMode());
+        Settings.EmbeddedAuthServerSettings embedded = settings.getEmbeddedAuthServerSettings();
+        assertEquals(25570, embedded.getPort());
+        assertEquals(750, embedded.getMaxConnections());
+        assertEquals(7, embedded.getHandshakeTimeoutSeconds());
+        assertEquals(12, embedded.getLoginTimeoutSeconds());
+    }
+
+    @Test
+    void embeddedModeShouldNotRequireUnusedExternalServerName() {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                auth-server:
+                  mode: embedded
+                  server-name: ""
+                """);
+
+        assertTrue(settings.load(), "Embedded mode must be independent of velocity.toml server entries");
+        assertEquals(Settings.AuthServerMode.EMBEDDED, settings.getAuthServerMode());
+    }
+
+    @Test
+    void malformedAuthServerSectionShouldBeRejectedTransactionally() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                auth-server:
+                  server-name: active-limbo
+                """);
+        assertTrue(settings.load());
+
+        writeConfigFile(configFile, "auth-server: embedded\n");
+
+        assertFalse(settings.load());
+        assertEquals(Settings.AuthServerMode.EXTERNAL, settings.getAuthServerMode());
+        assertEquals("active-limbo", settings.getAuthServerName());
+    }
+
+    @Test
+    void malformedEmbeddedAuthServerSectionShouldBeRejectedTransactionally() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                auth-server:
+                  server-name: active-limbo
+                """);
+        assertTrue(settings.load());
+
+        writeConfigFile(configFile, """
+                auth-server:
+                  mode: embedded
+                  embedded: automatic
+                """);
+
+        assertFalse(settings.load());
+        assertEquals(Settings.AuthServerMode.EXTERNAL, settings.getAuthServerMode());
+        assertEquals("active-limbo", settings.getAuthServerName());
+    }
+
+    @Test
+    void removingEmbeddedOptInOnReloadShouldRestoreExternalDefaults() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                auth-server:
+                  mode: embedded
+                  embedded:
+                    port: 25570
+                    max-connections: 750
+                    handshake-timeout-seconds: 7
+                    login-timeout-seconds: 12
+                """);
+        assertTrue(settings.load());
+        assertEquals(Settings.AuthServerMode.EMBEDDED, settings.getAuthServerMode());
+
+        writeConfigFile(configFile, """
+                auth-server:
+                  server-name: external-limbo
+                """);
+
+        assertTrue(settings.load());
+        assertEquals(Settings.AuthServerMode.EXTERNAL, settings.getAuthServerMode());
+        assertEquals("external-limbo", settings.getAuthServerName());
+        Settings.EmbeddedAuthServerSettings embedded = settings.getEmbeddedAuthServerSettings();
+        assertEquals(0, embedded.getPort());
+        assertEquals(512, embedded.getMaxConnections());
+        assertEquals(10, embedded.getHandshakeTimeoutSeconds());
+        assertEquals(15, embedded.getLoginTimeoutSeconds());
+    }
+
+    @ParameterizedTest(name = "shouldReject auth-server.mode={0}")
+    @CsvSource({"unknown", "EMBEDDED", "''"})
+    void invalidAuthServerModeShouldBeRejectedTransactionally(String mode) {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                auth-server:
+                  server-name: active-limbo
+                """);
+        assertTrue(settings.load());
+
+        writeConfigFile(configFile, """
+                auth-server:
+                  mode: %s
+                  server-name: rejected-limbo
+                """.formatted(mode));
+
+        assertFalse(settings.load());
+        assertEquals(Settings.AuthServerMode.EXTERNAL, settings.getAuthServerMode());
+        assertEquals("active-limbo", settings.getAuthServerName(),
+                "Rejected topology must not partially replace the active configuration");
+    }
+
+    @ParameterizedTest(name = "shouldReject embedded.port={0}")
+    @CsvSource({"65536", "-1"})
+    void invalidEmbeddedPortShouldBeRejected(int port) {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                auth-server:
+                  mode: embedded
+                  embedded:
+                    port: %d
+                """.formatted(port));
+
+        assertFalse(settings.load());
+    }
+
+    @Test
+    void invalidEmbeddedLimitsShouldBeRejected() {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                auth-server:
+                  mode: embedded
+                  embedded:
+                    max-connections: 0
+                    handshake-timeout-seconds: 0
+                    login-timeout-seconds: 0
+                """);
+
+        assertFalse(settings.load());
+    }
+
+    @ParameterizedTest(name = "shouldReject embedded.max-connections={0}")
+    @CsvSource({"0", "10001", "-1"})
+    void invalidEmbeddedConnectionCapacityShouldBeRejected(int maximumConnections) {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                auth-server:
+                  mode: embedded
+                  embedded:
+                    max-connections: %d
+                """.formatted(maximumConnections));
+
+        assertFalse(settings.load());
+    }
+
+    @Test
+    void generatedConfigShouldEnableSelfContainedEmbeddedAuthServerForNewInstall() throws IOException {
+        assertTrue(settings.load());
+
+        String generatedConfig = Files.readString(tempDir.resolve("config.yml"));
+
+        assertTrue(generatedConfig.contains("mode: embedded"));
+        assertTrue(generatedConfig.contains("port: 0"));
+        assertFalse(generatedConfig.contains("client-compatibility:"));
+        assertFalse(generatedConfig.contains("forwarding-secret-file:"));
+    }
+
+    @Test
     void hotReloadablePremiumCoreFieldsShouldBeVolatile() throws ReflectiveOperationException {
         Set<String> hotReloadable = Set.of(
                 "checkEnabled", "allowCrackedOnPremiumNicks", "bypassAuthServer");

@@ -6,7 +6,7 @@
 
     <groupId>net.rafalohaki.veloauth</groupId>
     <artifactId>veloauth</artifactId>
-    <version>1.4.0</version>
+    <version>1.5.0</version>
     <packaging>jar</packaging>
 
     <name>VeloAuth</name>
@@ -37,12 +37,63 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
+        <!--
+          Reproducible embedded-limbo network engine. VeloAuth supplies its own minimal 1.8
+          PacketCodec and translates newer clients through the separately managed ViaVersion
+          runtime. This immutable timestamped MCProtocolLib build is not a floating SNAPSHOT.
+          Update only together with protocol/runtime tests and the recorded checksum.
+        -->
+        <mcprotocollib.version>26.2-20260809.160751-16</mcprotocollib.version>
+        <mcprotocollib.resolved-version>${mcprotocollib.version}</mcprotocollib.resolved-version>
+        <mcprotocollib.sha256>07ec18ba92c8b4041286eeff2470e08257fd1f383881515cba4a0a9bf6fa98c1</mcprotocollib.sha256>
+        <!-- Compile/test contract for the Netty API supplied by Velocity at runtime. -->
+        <embedded.netty.version>4.2.15.Final</embedded.netty.version>
+        <!--
+          The embedded protocol runtime is downloaded on first use, verified byte-for-byte and
+          loaded from VeloAuth's private runtime directory. The coordinate remains a compile-only
+          dependency so the main plugin JAR does not silently redistribute the separately licensed
+          GPL-3.0 ViaVersion implementation. The normal build is pinned; the explicit
+          build-latest-protocol.sh workflow may override the dependency coordinate and immutable
+          runtime provenance together, then must pass the full client matrix.
+        -->
+        <viaversion.runtime.dependency-version>5.11.0</viaversion.runtime.dependency-version>
+        <viaversion.runtime.version>5.11.0</viaversion.runtime.version>
+        <viaversion.runtime.url>https://repo.viaversion.com/com/viaversion/viaversion-common/5.11.0/viaversion-common-5.11.0.jar</viaversion.runtime.url>
+        <viaversion.runtime.sha256>a4dd9f63257ed923f73a64ecece31010acd04247db12855383172e1226912b3e</viaversion.runtime.sha256>
+        <embedded.build.channel>stable</embedded.build.channel>
+        <build.finalName>${project.artifactId}-${project.version}</build.finalName>
     </properties>
 
     <repositories>
         <repository>
             <id>papermc-repo</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
+        </repository>
+        <repository>
+            <id>opencollab-main</id>
+            <url>https://repo.opencollab.dev/main/</url>
+        </repository>
+        <repository>
+            <id>opencollab-mcprotocollib-snapshots</id>
+            <url>https://repo.opencollab.dev/maven-snapshots/</url>
+            <!-- The dependency uses an immutable timestamped coordinate. Maven classifies that
+                 coordinate as a release even though OpenCollab stores it in the snapshot repo. -->
+            <releases>
+                <enabled>true</enabled>
+                <updatePolicy>never</updatePolicy>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+                <updatePolicy>never</updatePolicy>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>viaversion</id>
+            <url>https://repo.viaversion.com/</url>
+            <snapshots>
+                <enabled>true</enabled>
+                <updatePolicy>never</updatePolicy>
+            </snapshots>
         </repository>
     </repositories>
 
@@ -144,6 +195,93 @@
             <scope>compile</scope>
         </dependency>
 
+        <!--
+          Embedded auth/limbo network engine. MCProtocolLib is isolated in the shaded JAR; Netty,
+          Adventure and SLF4J remain proxy-provided and are excluded from the shaded artifact below.
+          The exact binary checksum is documented and checked by scripts/verify-embedded-dependencies.sh.
+        -->
+        <dependency>
+            <groupId>org.geysermc.mcprotocollib</groupId>
+            <artifactId>protocol</artifactId>
+            <version>${mcprotocollib.version}</version>
+            <exclusions>
+                <!-- Use Velocity's shared Netty runtime below. Native transports and the
+                     all-modules aggregator are unnecessary for a loopback-only listener. -->
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-all</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.netty.incubator</groupId>
+                    <artifactId>netty-incubator-transport-native-io_uring</artifactId>
+                </exclusion>
+                <!-- Client-side Microsoft authentication is unreachable in VeloAuth's
+                     server-only, Velocity-forwarded login flow. -->
+                <exclusion>
+                    <groupId>net.raphimc</groupId>
+                    <artifactId>MinecraftAuth</artifactId>
+                </exclusion>
+                <!-- cloudburst-math:immutable 2.0 already contains the complete api module
+                     byte-for-byte, plus the immutable implementations. Keeping both produces
+                     duplicate classes in the shaded plugin without adding runtime behavior. -->
+                <exclusion>
+                    <groupId>org.cloudburstmc.math</groupId>
+                    <artifactId>api</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!--
+          Netty channel objects cross the MCProtocolLib -> downloaded ViaVersion boundary, so all
+          three components must use Velocity's single Netty type universe. These provided modules
+          are compile/test-only and are deliberately neither bundled nor relocated.
+        -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-common</artifactId>
+            <version>${embedded.netty.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-buffer</artifactId>
+            <version>${embedded.netty.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport</artifactId>
+            <version>${embedded.netty.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver</artifactId>
+            <version>${embedded.netty.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec</artifactId>
+            <version>${embedded.netty.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-handler</artifactId>
+            <version>${embedded.netty.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Compile-only API + implementation surface for the child-classloader bootstrap. -->
+        <dependency>
+            <groupId>com.viaversion</groupId>
+            <artifactId>viaversion-common</artifactId>
+            <version>${viaversion.runtime.dependency-version}</version>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -173,10 +311,20 @@
 
     <build>
         <defaultGoal>clean package</defaultGoal>
+        <finalName>${build.finalName}</finalName>
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
+            </resource>
+            <resource>
+                <directory>${project.basedir}</directory>
+                <filtering>false</filtering>
+                <targetPath>META-INF/veloauth</targetPath>
+                <includes>
+                    <include>LICENSE</include>
+                    <include>THIRD_PARTY_NOTICES.md</include>
+                </includes>
             </resource>
         </resources>
 
@@ -321,6 +469,20 @@
                                     <exclude>org.slf4j:slf4j-api</exclude>
                                     <exclude>org.checkerframework:checker-qual</exclude>
                                     <exclude>com.google.errorprone:error_prone_annotations</exclude>
+                                    <!-- Velocity owns the Adventure API and public serializers;
+                                         components cross that classloader boundary. -->
+                                    <exclude>net.kyori:adventure-api</exclude>
+                                    <exclude>net.kyori:adventure-key</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-gson</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-json</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-legacy</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-plain</exclude>
+                                    <exclude>net.kyori:adventure-text-serializer-commons</exclude>
+                                    <exclude>net.kyori:option</exclude>
+                                    <exclude>net.kyori:examination-api</exclude>
+                                    <exclude>net.kyori:examination-string</exclude>
+                                    <!-- ViaVersion is a separately downloaded, checksum-pinned runtime. -->
+                                    <exclude>com.viaversion:*</exclude>
                                 </excludes>
                             </artifactSet>
                             <relocations>
@@ -381,6 +543,47 @@
                                 <relocation>
                                     <pattern>com.github.benmanes.caffeine</pattern>
                                     <shadedPattern>net.rafalohaki.veloauth.libs.caffeine</shadedPattern>
+                                </relocation>
+                                <!-- MCProtocolLib and its private runtime implementation packages. -->
+                                <relocation>
+                                    <pattern>org.geysermc.mcprotocollib</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.mcprotocollib</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.cloudburstmc.nbt</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.cloudburst.nbt</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.cloudburstmc.math</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.cloudburst.math</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>it.unimi.dsi.fastutil</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.fastutil</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.nukkitx.fastutil</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.nukkitx.fastutil</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>net.raphimc.minecraftauth</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.minecraftauth</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>net.lenni0451.commons</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.lenni0451</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.gson</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.gson</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>net.kyori.adventure.text.serializer.json.legacyimpl</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.kyori.json.legacyimpl</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>net.kyori.adventure.nbt</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.kyori.nbt</shadedPattern>
                                 </relocation>
                             </relocations>
                             <transformers>

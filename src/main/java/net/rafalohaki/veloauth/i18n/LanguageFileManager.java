@@ -32,7 +32,7 @@ public final class LanguageFileManager {
     /**
      * Creates a new LanguageFileManager.
      *
-     * @param dataDirectory The plugin's data directory (plugins/VeloAuth/)
+     * @param dataDirectory The plugin's data directory (plugins/veloauth/)
      */
     public LanguageFileManager(Path dataDirectory) {
         this.langDirectory = dataDirectory.resolve("lang");

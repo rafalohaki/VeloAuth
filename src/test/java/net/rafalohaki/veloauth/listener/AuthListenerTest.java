@@ -51,6 +51,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
+import static net.rafalohaki.veloauth.testsupport.EventTaskTestSupport.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -115,6 +116,14 @@ class AuthListenerTest {
         when(settings.isFloodgateIntegrationEnabled()).thenReturn(false);
         when(settings.isFloodgateBypassAuthServerEnabled()).thenReturn(false);
         when(settings.getAuthServerName()).thenReturn("auth");
+        when(connectionManager.getAuthServerName()).thenReturn("auth");
+        when(connectionManager.resolveAuthServer()).thenAnswer(ignored -> proxyServer.getServer("auth"));
+        when(connectionManager.isAuthServer(any(RegisteredServer.class))).thenAnswer(invocation -> {
+            RegisteredServer candidate = invocation.getArgument(0);
+            return candidate.getServerInfo() != null
+                    && "auth".equals(candidate.getServerInfo().getName());
+        });
+        when(connectionManager.prepareAuthServerConnection(any(Player.class))).thenReturn(true);
         when(preLoginHandler.isValidUsername(anyString())).thenReturn(true);
         when(preLoginHandler.isBruteForceBlocked(nullable(InetAddress.class), anyString())).thenReturn(false);
         when(databaseManager.findPlayerByNicknameOrPremiumUuidReadOnly(anyString(), nullable(UUID.class)))
@@ -179,8 +188,8 @@ class AuthListenerTest {
         firstResolution.complete(offlineResult);
         secondResolution.complete(offlineResult);
 
-        awaitEventTask(firstTask);
-        awaitEventTask(secondTask);
+        await(firstTask);
+        await(secondTask);
     }
 
     @Test
@@ -207,13 +216,13 @@ class AuthListenerTest {
         );
 
         firstResolution.complete(new PreLoginHandler.PremiumResolutionResult(false, null));
-        awaitEventTask(firstTask);
+        await(firstTask);
 
         PreLoginEvent thirdEvent = new PreLoginEvent(createConnection("192.0.2.20"), username);
         EventTask thirdTask = authListener.onPreLogin(thirdEvent);
 
         assertNotNull(thirdTask, "Pending login key should be cleaned after the first attempt finishes");
-        awaitEventTask(thirdTask);
+        await(thirdTask);
         assertTrue(thirdEvent.getResult().isForceOfflineMode(), "Source lock should be released after completion");
     }
 
@@ -240,7 +249,7 @@ class AuthListenerTest {
         assertNotNull(replacementTask, "A dead connection must not block an immediate reconnect");
 
         firstResolution.complete(new PreLoginHandler.PremiumResolutionResult(false, null));
-        awaitEventTask(abandonedTask);
+        await(abandonedTask);
 
         PreLoginEvent concurrentEvent = new PreLoginEvent(createConnection("192.0.2.21"), username);
         EventTask concurrentTask = authListener.onPreLogin(concurrentEvent);
@@ -248,12 +257,12 @@ class AuthListenerTest {
         assertFalse(concurrentEvent.getResult().isAllowed(), "A genuinely concurrent attempt must remain denied");
 
         replacementResolution.complete(new PreLoginHandler.PremiumResolutionResult(false, null));
-        awaitEventTask(replacementTask);
+        await(replacementTask);
 
         PreLoginEvent nextEvent = new PreLoginEvent(createConnection("192.0.2.21"), username);
         EventTask nextTask = authListener.onPreLogin(nextEvent);
         assertNotNull(nextTask, "Replacement completion should release its own lock");
-        awaitEventTask(nextTask);
+        await(nextTask);
         assertTrue(nextEvent.getResult().isForceOfflineMode(), "A later reconnect should proceed normally");
     }
 
@@ -271,7 +280,7 @@ class AuthListenerTest {
         EventTask task = authListener.onPreLogin(event);
 
         assertNotNull(task, "Floodgate registry scanning must run outside the Velocity event callback");
-        awaitEventTask(task);
+        await(task);
         assertTrue(event.getResult().isForceOfflineMode(),
                 "Linked Bedrock accounts must not be sent through Mojang's Java handshake");
         assertNotSame(callingThread, FloodgateApi.getLastGetPlayersThread(),
@@ -374,7 +383,7 @@ class AuthListenerTest {
         EventTask task = authListener.onServerPreConnect(event);
 
         assertNotNull(task, "Selecting a backend may ping servers and must suspend the event asynchronously");
-        awaitEventTask(task);
+        await(task);
         assertSame(backendServer, event.getResult().getServer().orElse(null));
         verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
         verify(postLoginHandler, never()).handlePremiumPlayer(eq(player), anyString());
@@ -398,7 +407,7 @@ class AuthListenerTest {
         EventTask task = authListener.onServerPreConnect(event);
 
         assertNotNull(task);
-        awaitEventTask(task);
+        await(task);
         assertFalse(event.getResult().isAllowed(), "Missing backend must never fall through to limbo as a fake bypass");
     }
 
@@ -420,7 +429,7 @@ class AuthListenerTest {
         EventTask task = authListener.onServerPreConnect(event);
 
         assertNotNull(task);
-        awaitEventTask(task);
+        await(task);
         assertFalse(event.getResult().isAllowed(), "Selection errors must deny the connection fail-secure");
     }
 
@@ -445,7 +454,7 @@ class AuthListenerTest {
         pendingBackend.complete(Optional.of(backendServer));
 
         assertNotNull(task);
-        awaitEventTask(task);
+        await(task);
         assertFalse(event.getResult().isAllowed(),
                 "A bypass disabled during asynchronous selection must not route around auth");
     }
@@ -466,6 +475,24 @@ class AuthListenerTest {
         assertNull(task, "First connection to auth server should stay synchronous");
         assertTrue(event.getResult().isAllowed(), "Initial auth-server target should be allowed");
         assertSame(authServer, event.getResult().getServer().orElse(null));
+        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+    }
+
+    @Test
+    void onServerPreConnect_embeddedPreparationFailure_ShouldDenyFailSecure() {
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(player.getUsername()).thenReturn("RejectedEmbeddedPlayer");
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(connectionManager.prepareAuthServerConnection(player)).thenReturn(false);
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+
+        assertNull(task);
+        assertFalse(event.getResult().isAllowed(),
+                "Missing protocol support, capacity or forwarding trust must fail closed");
         verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
     }
 
@@ -515,7 +542,7 @@ class AuthListenerTest {
         EventTask task = authListener.onServerPreConnect(event);
 
         assertNotNull(task, "Floodgate bypass must not leave a trusted player parked on auth");
-        awaitEventTask(task);
+        await(task);
         assertSame(backendServer, event.getResult().getServer().orElse(null));
         verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
     }
@@ -580,7 +607,7 @@ class AuthListenerTest {
         EventTask task = authListener.onServerPreConnect(event);
 
         assertNotNull(task, "Backend UUID verification should be asynchronous");
-        awaitEventTask(task);
+        await(task);
         assertFalse(event.getResult().isAllowed(), "UUID mismatch must deny backend access");
         verify(authCache, atLeastOnce()).removeAuthorizedPlayer(playerUuid);
         verify(authCache, atLeastOnce()).endSession(playerUuid);
@@ -716,7 +743,7 @@ class AuthListenerTest {
         EventTask task = authListener.onPreLogin(event);
 
         assertNotNull(task, "Premium resolution path must run asynchronously");
-        awaitEventTask(task);
+        await(task);
         assertTrue(event.getResult().isForceOfflineMode(),
                 "Flag-enabled bypass must force offline mode so cracked clients can register the nick");
     }
@@ -737,7 +764,7 @@ class AuthListenerTest {
         EventTask task = authListener.onPreLogin(event);
 
         assertNotNull(task);
-        awaitEventTask(task);
+        await(task);
         assertTrue(event.getResult().isOnlineModeAllowed(),
                 "Default (flag off) must keep nickname-theft protection: Mojang handshake forced");
     }
@@ -765,7 +792,7 @@ class AuthListenerTest {
         EventTask task = authListener.onPreLogin(event);
 
         assertNotNull(task);
-        awaitEventTask(task);
+        await(task);
         assertTrue(event.getResult().isOnlineModeAllowed(),
                 "SECURITY: returning premium owner with matching DB record must NEVER skip Mojang handshake even when the bypass flag is on");
     }
@@ -786,7 +813,7 @@ class AuthListenerTest {
         EventTask task = authListener.onGameProfileRequest(event);
 
         assertNotNull(task);
-        awaitEventTask(task);
+        await(task);
         assertEquals(historicalBackendUuid, event.getGameProfile().getId());
         assertEquals(originalProfile.getProperties(), event.getGameProfile().getProperties(),
                 "UUID rewrite must retain Mojang-signed profile properties");
@@ -805,7 +832,7 @@ class AuthListenerTest {
                 .thenReturn(CompletableFuture.completedFuture(
                         DatabaseManager.DbResult.databaseError("database.error")));
         GameProfileRequestEvent profileEvent = new GameProfileRequestEvent(connection, originalProfile, true);
-        awaitEventTask(authListener.onGameProfileRequest(profileEvent));
+        await(authListener.onGameProfileRequest(profileEvent));
 
         Player player = org.mockito.Mockito.mock(Player.class);
         when(player.getUsername()).thenReturn(username);
@@ -836,7 +863,7 @@ class AuthListenerTest {
         EventTask task = authListener.onGameProfileRequest(event);
 
         assertNotNull(task, "Live Floodgate username lookup must suspend the event asynchronously");
-        awaitEventTask(task);
+        await(task);
         assertNotSame(callingThread, FloodgateApi.getLastGetPlayersThread(),
                 "GameProfile fallback must not scan Floodgate players on the event thread");
         verify(databaseManager, never()).reconcileVerifiedPremiumProfile(anyString(), any(UUID.class));
@@ -862,18 +889,4 @@ class AuthListenerTest {
         field.set(plugin, value);
     }
 
-    private void awaitEventTask(EventTask task) {
-        try {
-            Field futureField = task.getClass().getDeclaredField("future");
-            futureField.setAccessible(true);
-            ((CompletableFuture<?>) futureField.get(task)).join();
-        } catch (ReflectiveOperationException e) {
-            // Velocity's EventTask impl doesn't expose its CompletableFuture by name on some
-            // builds. Park briefly so the async work submitted by the listener has time to
-            // run before the assertion. LockSupport.parkNanos is the Sonar-safe alternative
-            // to Thread.sleep — same wait semantics, not flagged by java:S2925.
-            java.util.concurrent.locks.LockSupport.parkNanos(
-                    java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(200));
-        }
-    }
 }

@@ -52,7 +52,7 @@ final class DefaultConfigGenerator {
                 language: en
                 # Available built-in language codes: __BUILT_IN_LANGUAGE_CODES__
                 # Examples: en=English, pl=Polski, zh_cn=Chinese Simplified, zh_hk=Chinese Traditional (Hong Kong), ja=Japanese, ko=Korean, th=Thai, id=Indonesian, pt_br=Brazilian Portuguese
-                # To add custom language: create messages_XX.properties in plugins/VeloAuth/lang/""";
+                # To add custom language: create messages_XX.properties in plugins/veloauth/lang/""";
 
     private static final String DEBUG_SECTION = """
                 
@@ -130,12 +130,25 @@ final class DefaultConfigGenerator {
                 # Auth server (limbo/lobby for unauthenticated players)
                 # Compatible with: NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo
                 auth-server:
-                  # Must match server name in velocity.toml [servers]
+                  # New installations use VeloAuth's loopback-only embedded limbo. Existing
+                  # configurations with no mode remain external after an update. Changing the
+                  # mode always requires a full proxy restart.
+                  mode: embedded
+                  # External mode only: must match a server name in velocity.toml [servers].
                   server-name: limbo
                   # Seconds before an unauthenticated player is kicked from the auth server.
                   # Set to 0 (or any value <= 0) to disable the kick — the player can stay on
                   # the auth/limbo server indefinitely.
-                  timeout-seconds: 300""";
+                  timeout-seconds: 300
+                  embedded:
+                    # Supports Java clients from 1.8 through 26.2. VeloAuth downloads its pinned,
+                    # checksum-verified protocol runtime on first embedded-mode startup.
+                    # 0 selects a free loopback port automatically; no forwarding secret is used.
+                    port: 0
+                    # Hard limits for the unauthenticated public edge.
+                    max-connections: 512
+                    handshake-timeout-seconds: 10
+                    login-timeout-seconds: 15""";
 
     private static final String CONNECTION_SECTION = """
                 

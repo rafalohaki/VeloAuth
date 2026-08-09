@@ -4,7 +4,7 @@
 
 # VeloAuth
 
-[![Modrinth](https://img.shields.io/badge/Modrinth-00AF5C?style=for-the-badge&logo=modrinth&logoColor=white)](https://modrinth.com/plugin/veloauth) 
+[![Modrinth](https://img.shields.io/badge/Modrinth-00AF5C?style=for-the-badge&logo=modrinth&logoColor=white)](https://modrinth.com/plugin/veloauth)
 [![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/e2RkPbc3ZR)
 [![License](https://img.shields.io/github/license/rafalohaki/veloauth?style=for-the-badge)](LICENSE)
 [![bStats](https://img.shields.io/badge/bStats-Tracked-blue?style=for-the-badge)](https://bstats.org/plugin/velocity/VeloAuth)
@@ -14,7 +14,7 @@
 
 ## What is VeloAuth?
 
-VeloAuth is a comprehensive authentication system for Velocity proxy that handles all player authorization before they reach your backend servers. It works with any limbo server to provide a smooth login experience while protecting nickname ownership through intelligent conflict resolution.
+VeloAuth is a comprehensive authentication system for Velocity proxy that handles all player authorization before they reach your backend servers. It includes a loopback-only embedded limbo and can also keep using an existing external limbo server, while protecting nickname ownership through intelligent conflict resolution.
 
 ## Key Features
 
@@ -23,6 +23,7 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🔄 **Automatic Nickname Change Detection** - Detects when a premium player renames their Mojang account and updates the database record automatically
 - 🛡️ **Secure Offline Auth** - BCrypt password hashing, brute-force protection, and atomic first-owner registration enforced by the database
 - 📱 **Optional Floodgate Support** - Bedrock and linked Floodgate accounts are detected before Mojang resolution; only UUIDs confirmed by Floodgate can bypass the auth server
+- 🧩 **Self-Contained Limbo** - New installations can use the built-in 1.8-base limbo with staged ViaVersion snapshot updates for newer Java clients; no separate server, forwarding secret, or ViaVersion plugin is required
 - 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
 - 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are hidden while authorization and the matching login session are active; expired sessions expose the recovery commands again
 - 🚀 **High Performance** - Three-layer premium resolution cache: in-memory → database → external API, with configurable positive and negative TTLs
@@ -47,7 +48,7 @@ If you only run a single backend server (Paper/Spigot/Folia) without a proxy, yo
 
 ## Recommended configuration
 
-VeloAuth ships three sensible operating modes. Pick one based on how strict you want nickname-theft protection to be. All settings live under `premium:` in `plugins/VeloAuth/config.yml`.
+VeloAuth ships three sensible operating modes. Pick one based on how strict you want nickname-theft protection to be. All settings live under `premium:` in `plugins/veloauth/config.yml`.
 
 ### Profile 1 — **Mixed strict** (default, recommended)
 
@@ -113,60 +114,71 @@ matches never grant this bypass.
 
 - **Java 21 or newer**
 - **Velocity proxy** (3.5.x; VeloAuth currently targets the 3.5 API line)
-- **External auth/limbo server**: NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo,
-  hpfxd/Limbo, or another Velocity-compatible server. Embedded limbo is not part of the current runtime.
 - **Database**: MySQL, PostgreSQL, H2, or SQLite
+- **Embedded mode:** outbound HTTPS access to `repo.viaversion.com` for the first verified runtime
+  and a small, asynchronous snapshot check after later successful startups; cached startup remains
+  independent of repository availability
+- **Optional external mode:** NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or
+  another Velocity-compatible auth server registered in `velocity.toml`
 
 ## Quick Setup
 
 ### Installation
 
-1. Download VeloAuth from Modrinth
-2. Place the file in your Velocity `plugins/` folder
-3. Start Velocity - the plugin will create a `config.yml` file
-4. Stop Velocity and configure your database and auth server name in `plugins/VeloAuth/config.yml`
-5. Restart Velocity
+1. Download VeloAuth from Modrinth.
+2. Place the file in your Velocity `plugins/` folder.
+3. Start Velocity. A new installation creates `config.yml`, downloads and verifies the build-pinned
+   fallback runtime, and binds its limbo to an automatically selected loopback port. After the proxy
+   is ready, VeloAuth may stage a newer ViaVersion snapshot for the next restart.
+4. Stop Velocity and configure the database in `plugins/veloauth/config.yml`.
+5. Restart Velocity. Plugin upgrades and auth-topology changes always require a full proxy restart.
 
 **Note:** Floodgate support is disabled by default. Enable it only if you actually use Geyser/Floodgate.
 
 ### Velocity Config
 
-Configure your `velocity.toml` with your limbo/auth server and backend servers:
+With the default embedded mode, configure only real backend servers in `velocity.toml`. Do not add
+the reserved `veloauth-embedded-limbo` name; VeloAuth registers and removes it atomically at runtime.
 
 ```toml
 [servers]
-limbo = "127.0.0.1:25566"  # Auth/limbo server (NanoLimbo, LOOHP/Limbo, etc.)
 lobby = "127.0.0.1:25565"  # Typical backend server
 survival = "127.0.0.1:25567" # Another backend server
 
-try = ["lobby", "survival"]  # Order matters. Do NOT put 'limbo' here.
+try = ["lobby", "survival"]  # Backend fallback order
 
 [forced-hosts]
-# VeloAuth fully respects Velocity's forced hosts! 
-# With the default premium routing, players connecting via this host visit limbo
+# VeloAuth fully respects Velocity's forced hosts!
+# With the default premium routing, players connecting via this host visit embedded limbo
 # and are then transferred to 'survival'. Verified premium players can keep the
 # direct 'survival' target only when premium.bypass-auth-server is explicitly true.
-"survival.example.com" = ["survival"] 
+"survival.example.com" = ["survival"]
 ```
 
-**Important:** Keep the auth server out of `try`. VeloAuth filters it from backend fallback and
-preserves a forced-host target across the default auth flow. With premium passthrough enabled, a
-Mojang-verified player keeps Velocity's original backend target; if Velocity initially selected the
+VeloAuth preserves a forced-host target across the auth flow. With premium passthrough enabled, a
+Mojang-verified player keeps Velocity's original backend target; if Velocity initially selected an
 auth server, VeloAuth asynchronously selects the first reachable non-auth backend.
 
 ### VeloAuth Config
 
-Minimal auth server configuration in `plugins/VeloAuth/config.yml`:
+Minimal auth server configuration in `plugins/veloauth/config.yml`:
 
 ```yaml
 language: en
 # Built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
 
 auth-server:
-  server-name: limbo
+  # New config files use embedded. Existing configs without this key stay external after upgrade.
+  mode: embedded
   # Seconds before an unauthenticated player is kicked from the auth server.
   # Set to 0 to disable the kick (player can stay on auth/limbo indefinitely).
   timeout-seconds: 300
+  embedded:
+    # 0 = automatically select a free loopback port. The bind address is never public.
+    port: 0
+    max-connections: 512
+    handshake-timeout-seconds: 10
+    login-timeout-seconds: 15
 
 # Optional tuning for heavy backend servers (large JVM heap, long GC pauses).
 # VeloAuth pings the auth server, forced-host target and try-list/fallback
@@ -181,6 +193,60 @@ auth-server:
 premium:
   bypass-auth-server: false
 ```
+
+Embedded limbo uses a minimal Minecraft 1.8 (protocol 47) server codec. A private ViaVersion runtime
+translates every newer release for which ViaVersion exposes a complete path back to 1.8. The pinned
+fallback in this release supports **1.8 through 26.2**; later support follows the latest usable
+ViaVersion snapshot rather than an MCProtocolLib protocol constant. ViaBackwards is intentionally
+not used: it translates older clients to a newer server, the opposite of this 1.8-base topology.
+MCProtocolLib remains the embedded listener/session/framing engine and hosts VeloAuth's custom
+protocol-47 `PacketCodec`; ViaVersion transforms packets inside that already-created Netty channel.
+Because MCProtocolLib always sees the fixed 1.8 codec, a new client release normally requires only a
+new ViaVersion mapping, not an MCProtocolLib update.
+
+In embedded mode, startup first uses the last successfully activated runtime, with the release's
+checksum-pinned ViaVersion `5.11.0` as the final fallback. Only after VeloAuth reports `Ready` does a
+virtual thread check the official repository (at most once per 15 minutes across restart loops). A
+new snapshot is resolved to an immutable timestamped JAR, downloaded without redirects, checked
+against the repository's SHA-256 sidecar, bounded by size, structurally validated, and written to a
+pending manifest. It never replaces the classes serving current players. On the next full restart,
+VeloAuth initializes and verifies every advertised translation path before promoting it. An
+incompatible/corrupt candidate is rejected automatically and startup falls back to the previous
+working runtime, then to the build-pinned runtime. A valid cache continues to start offline.
+Corrupt or off-repository manifests are removed automatically, and concurrent runtime preparation
+is serialized so one proxy process cannot download/publish the same artifact twice.
+
+External mode performs no snapshot check, download, directory creation, or ViaVersion classloading.
+No Velocity forwarding secret is read or generated, and installing the ViaVersion proxy plugin is
+not required. Snapshot availability cannot precede upstream ViaVersion support; “latest” means the
+newest snapshot that actually publishes and initializes a complete 1.8 translation path. ViaVersion
+is separately licensed under GPL-3.0; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Protocol updates can therefore arrive without a VeloAuth release, but an incompatible future
+ViaVersion API/dependency change or a Velocity/Netty transport change still requires a tested plugin
+release; such a candidate is rejected rather than activated.
+
+Maintainers can also preflight and package the current snapshot without editing `pom.xml`:
+
+```bash
+./scripts/build-latest-protocol.sh
+```
+
+The script pins the resolved timestamp, URL and hashes into
+`META-INF/veloauth/embedded-runtime.properties`, runs Maven/JaCoCo/PMD/CPD and uses the resulting JAR
+in a real Velocity smoke test. `--resolve-only` tests repository resolution, while `--skip-smoke`
+is intended only for local diagnostics. The ordinary `mvnd clean verify` remains reproducible.
+
+To retain an existing standalone limbo, use:
+
+```yaml
+auth-server:
+  mode: external
+  server-name: limbo
+  timeout-seconds: 300
+```
+
+Register `limbo` in `velocity.toml` and keep it out of the backend `try` list. External mode keeps
+the historical routing and does not download or initialize the managed protocol runtime.
 
 With `premium.bypass-auth-server: true`, only a connection whose final
 `Player#isOnlineMode()` is true skips auth/limbo. This is an opt-in resource trade-off: bots using
@@ -199,7 +265,8 @@ valid config restores the safe `false` default.
 
 The following values are intended to apply immediately: premium core routing flags, BCrypt cost,
 password length, registration IP limit, debug, report and language.
-Infrastructure captured during startup — database/pool, auth-server topology, premium-resolver
+Infrastructure captured during startup — database/pool, auth-server topology (including the
+embedded port and managed protocol runtime), premium-resolver
 limits and sources, Floodgate integration, connection tuning, password complexity policy,
 cache/session/brute-force lifetimes, audit retention and 2FA pending-store settings — requires a
 full proxy restart. When in doubt, restart the proxy after
@@ -212,7 +279,7 @@ editing infrastructure settings; `/vauth reload` logs the effective boundary.
 - **VeloAuth `config.yml`** — secrets redacted (`password`/`passwd`, webhook URLs, SSL passwords, API/access tokens, client secrets, forwarding secrets and connection-URL/query credentials → `<redacted>`)
 - **`velocity.toml`** — secrets redacted (same redaction rules)
 - **Recent proxy logs (opt-in)** — omitted by default because logs can contain IPs, chat and third-party secrets. With `include-logs: true`, the tail of `logs/latest.log` is capped at 10 MiB and passed through local best-effort redaction before upload.
-- **Metadata** — VeloAuth/Velocity/Java versions, online-mode, server count, database type, ping timeout and effective premium routing flags (visible); auth server name, try-list and backend names (hidden, without backend addresses).
+- **Metadata** — VeloAuth/Velocity/Java versions, online-mode, server count, database type, ping timeout and effective premium routing flags (visible); active auth-server name/mode/client compatibility, try-list and backend names (hidden, without backend addresses).
 
 ```yaml
 report:
@@ -253,7 +320,7 @@ Counters apply **on top of** `min-password-length`. Validation error messages (`
 
 #### Message colors and HEX gradients
 
-Player-facing messages in `plugins/VeloAuth/lang/messages_<lang>.properties` support legacy colors, decorations, and six-digit RGB colors. The recommended HEX form is `<#RRGGBB>`; legacy `&#RRGGBB`, `§#RRGGBB`, and `§x§R§R§G§G§B§B` forms are also accepted.
+Player-facing messages in `plugins/veloauth/lang/messages_<lang>.properties` support legacy colors, decorations, and six-digit RGB colors. The recommended HEX form is `<#RRGGBB>`; legacy `&#RRGGBB`, `§#RRGGBB`, and `§x§R§R§G§G§B§B` forms are also accepted.
 
 ```properties
 auth.header=<#FF6700>&lS<#FF7312>&le<#FF8024>&lc<#FF8C36>&lu<#FF9848>&lr<#FFA45A>&li<#FFB16C>&lt<#FFBD7E>&ly
@@ -263,7 +330,7 @@ Use `&l` for bold, `&o` for italic, `&n` for underline, and `&r` to reset format
 
 #### Silencing "no server available" notifications
 
-If your setup runs DiscordSRV or another plugin that kicks players before VeloAuth's backend-wait flow finishes, you can silence the in-chat "Waiting for a server…" notifications without forking the plugin: open the language file under `plugins/VeloAuth/lang/messages_<lang>.properties` and set the keys to empty values:
+If your setup runs DiscordSRV or another plugin that kicks players before VeloAuth's backend-wait flow finishes, you can silence the in-chat "Waiting for a server…" notifications without forking the plugin: open the language file under `plugins/veloauth/lang/messages_<lang>.properties` and set the keys to empty values:
 
 ```properties
 connection.waiting_for_server=
@@ -425,7 +492,7 @@ This is **VeloAuth actively enforcing nickname-theft protection**, not Velocity'
 
 If your server explicitly accepts cracked players on premium nicknames, you have three options:
 
-1. **Recommended — opt in per-nickname behavior:** set `premium.allow-cracked-on-premium-nicks: true` in `plugins/VeloAuth/config.yml`. Premium nicks with no DB record will be forced into offline mode so a cracked client can register first. Premium owners returning to a nickname that's *already registered as premium* still get the normal Mojang handshake.
+1. **Recommended — opt in per-nickname behavior:** set `premium.allow-cracked-on-premium-nicks: true` in `plugins/veloauth/config.yml`. Premium nicks with no DB record will be forced into offline mode so a cracked client can register first. Premium owners returning to a nickname that's *already registered as premium* still get the normal Mojang handshake.
 2. **Disable premium detection entirely:** set `premium.check-enabled: false`. Removes nickname-theft protection for **all** nicks — every connection is forced offline.
 3. **Pre-register the nickname:** have an admin (or the cracked player) register the nickname through `/register` before the premium owner tries to join. The existing nickname-conflict path then routes that nickname to offline mode automatically.
 
@@ -437,7 +504,7 @@ These messages come from different layers:
 - `You are already connecting. Please wait.` is VeloAuth's concurrent `PreLogin` guard. Since 1.4, an abandoned connection releases ownership immediately; a genuinely active login attempt is still denied to prevent concurrent authentication races. The log contains `[DUPLICATE PRELOGIN]` when this guard is responsible.
 - `You are already connected to this proxy!` is Velocity's duplicate-player check after login. For cracked players VeloAuth must not automatically kick the existing session merely because another client supplied the same nickname — that would let anyone disconnect an authenticated player without knowing their password. If this persists beyond a normal network timeout, inspect Velocity's connection logs for a connection that never closed cleanly.
 
-VeloAuth 1.4 invalidates offline authorization, session state and pending 2FA as soon as Velocity
+VeloAuth 1.4+ invalidates offline authorization, session state and pending 2FA as soon as Velocity
 emits the disconnect event. A cracked player therefore has to `/login` again after reconnecting;
 this prevents another client on the same public IP from inheriting a previous connection's session.
 
@@ -482,6 +549,11 @@ UPSERT. The MySQL harness verifies the same registration/UPSERT invariants on Co
 ephemeral containers and remove them afterwards. GitHub Actions runs the normal build and both
 database gates before uploading a release artifact.
 
+The normal suite also performs a native 1.8 login, translated status handshakes for representative
+1.12.2, 1.16.5, 1.20.1 and 1.21.4 clients, and a complete MCProtocolLib 26.2 login. The real
+Velocity smoke proves pinned startup, snapshot staging, activation on restart and a third restart
+that rejects a tampered pending manifest while retaining client availability.
+
 Automated tests do not prove the real Velocity protocol flow. Before production, test premium,
 cracked and Floodgate clients on a staging proxy with forced hosts, `try` fallback, reconnects,
 backend outages and both values of `premium.bypass-auth-server`.
@@ -491,6 +563,8 @@ backend outages and both values of `premium.bypass-auth-server`.
 Contributions are welcome. Read [ARCHITECTURE.md](ARCHITECTURE.md), follow the coding rules in
 `.github/skills/java-coding-standards/SKILL.md`, and run all verification commands above before
 opening a pull request.
+
+Release impact and upgrade notes are maintained in [CHANGELOG.md](CHANGELOG.md).
 
 ## Support
 

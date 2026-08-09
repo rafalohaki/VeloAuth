@@ -25,6 +25,7 @@ public final class SettingsValidator {
         validateDatabase(settings);
         validateCache(settings);
         validateSecurity(settings);
+        validateAuthServer(settings);
         validateConnection(settings);
         validatePremium(settings);
         validateFloodgate(settings);
@@ -130,6 +131,36 @@ public final class SettingsValidator {
 
         if (settings.getDatabaseConnectionPoolSize() <= 0) {
             throw new IllegalArgumentException("Connection pool size must be > 0");
+        }
+    }
+
+    static void validateAuthServer(Settings settings) {
+        // Parsing performs the allow-list validation and intentionally remains case-sensitive.
+        Settings.AuthServerMode mode = Settings.AuthServerMode.parse(settings.getConfiguredAuthServerMode());
+
+        String externalServerName = settings.getAuthServerName();
+        if (mode == Settings.AuthServerMode.EXTERNAL && externalServerName.isBlank()) {
+            throw new IllegalArgumentException("auth-server.server-name must not be empty");
+        }
+
+        Settings.EmbeddedAuthServerSettings embedded = settings.getEmbeddedAuthServerSettings();
+
+        int port = embedded.getPort();
+        if (port < 0 || port > 65535) {
+            throw new IllegalArgumentException("auth-server.embedded.port must be in range 0-65535");
+        }
+        if (embedded.getMaxConnections() < 1 || embedded.getMaxConnections() > 10_000) {
+            throw new IllegalArgumentException(
+                    "auth-server.embedded.max-connections must be in range 1-10000");
+        }
+        if (embedded.getHandshakeTimeoutSeconds() < 1
+                || embedded.getHandshakeTimeoutSeconds() > 120) {
+            throw new IllegalArgumentException(
+                    "auth-server.embedded.handshake-timeout-seconds must be in range 1-120");
+        }
+        if (embedded.getLoginTimeoutSeconds() < 1 || embedded.getLoginTimeoutSeconds() > 300) {
+            throw new IllegalArgumentException(
+                    "auth-server.embedded.login-timeout-seconds must be in range 1-300");
         }
     }
 

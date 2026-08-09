@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 /**
  * VeloAuth configuration with YAML support and validation.
@@ -51,6 +52,7 @@ public class Settings {
     private final PasswordPolicy passwordPolicy = new PasswordPolicy();
     private final AuditLogSettings auditLogSettings = new AuditLogSettings();
     private final TwoFactorSettings twoFactorSettings = new TwoFactorSettings();
+    private final EmbeddedAuthServerSettings embeddedAuthServerSettings = new EmbeddedAuthServerSettings();
     @SuppressWarnings("java:S2068")
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
     
@@ -75,6 +77,7 @@ public class Settings {
     private int premiumTtlHours = 24;
     private double premiumRefreshThreshold = 0.8;
     // Auth server settings — requires restart (read by ConnectionManager / forced-hosts setup).
+    private String authServerMode = AuthServerMode.EXTERNAL.configValue;
     private String authServerName = "limbo";
     private int authServerTimeoutSeconds = 300;
     // Connection settings — requires restart (pingTimeoutMillis captured in transfer paths).
@@ -159,6 +162,12 @@ public class Settings {
         } catch (JsonProcessingException e) {
             logger.error("YAML parse error in config file: {}", configFile, e);
             return false;
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid configuration in {}: {}", configFile, e.getMessage());
+            if (logger.isDebugEnabled()) {
+                logger.debug("Configuration loading failure details", e);
+            }
+            return false;
         } catch (IOException e) {
             logger.error("Error reading config file: {}", configFile, e);
             return false;
@@ -200,8 +209,10 @@ public class Settings {
         sessionTimeoutMinutes = state.sessionTimeoutMinutes;
         premiumTtlHours = state.premiumTtlHours;
         premiumRefreshThreshold = state.premiumRefreshThreshold;
+        authServerMode = state.authServerMode;
         authServerName = state.authServerName;
         authServerTimeoutSeconds = state.authServerTimeoutSeconds;
+        embeddedAuthServerSettings.copyFrom(state.embeddedAuthServerSettings);
         connectionTimeoutSeconds = state.connectionTimeoutSeconds;
         pingTimeoutMillis = state.pingTimeoutMillis;
         bcryptCost = state.bcryptCost;
@@ -373,6 +384,18 @@ public class Settings {
         return authServerName != null ? authServerName : "limbo";
     }
 
+    public AuthServerMode getAuthServerMode() {
+        return AuthServerMode.parse(authServerMode);
+    }
+
+    String getConfiguredAuthServerMode() {
+        return authServerMode;
+    }
+
+    public EmbeddedAuthServerSettings getEmbeddedAuthServerSettings() {
+        return embeddedAuthServerSettings;
+    }
+
     public int getAuthServerTimeoutSeconds() {
         return authServerTimeoutSeconds;
     }
@@ -489,6 +512,73 @@ public class Settings {
     }
 
     // ===== Inner Settings Classes =====
+
+    /**
+     * Selects who owns the unauthenticated holding server. Existing configurations without the
+     * key remain {@link #EXTERNAL}; freshly generated configurations select {@link #EMBEDDED}.
+     * Changing topology is always restart-required.
+     */
+    public enum AuthServerMode {
+        EXTERNAL("external"),
+        EMBEDDED("embedded");
+
+        private final String configValue;
+
+        AuthServerMode(String configValue) {
+            this.configValue = configValue;
+        }
+
+        public String getConfigValue() {
+            return configValue;
+        }
+
+        static AuthServerMode parse(String value) {
+            return Arrays.stream(values())
+                    .filter(candidate -> candidate.configValue.equals(value))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "auth-server.mode must be 'external' or 'embedded' (got '" + value + "')"));
+        }
+    }
+
+    /**
+     * Restart-required embedded auth-server settings. The network address is deliberately not
+     * configurable: the implementation always binds to the IP loopback interface.
+     */
+    public static final class EmbeddedAuthServerSettings {
+        static final int DEFAULT_PORT = 0;
+        static final int DEFAULT_MAX_CONNECTIONS = 512;
+        static final int DEFAULT_HANDSHAKE_TIMEOUT_SECONDS = 10;
+        static final int DEFAULT_LOGIN_TIMEOUT_SECONDS = 15;
+
+        private int port = DEFAULT_PORT;
+        private int maxConnections = DEFAULT_MAX_CONNECTIONS;
+        private int handshakeTimeoutSeconds = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS;
+        private int loginTimeoutSeconds = DEFAULT_LOGIN_TIMEOUT_SECONDS;
+
+        public int getPort() { return port; }
+        void setPort(int value) { port = value; }
+        public int getMaxConnections() { return maxConnections; }
+        void setMaxConnections(int value) { maxConnections = value; }
+        public int getHandshakeTimeoutSeconds() { return handshakeTimeoutSeconds; }
+        void setHandshakeTimeoutSeconds(int value) { handshakeTimeoutSeconds = value; }
+        public int getLoginTimeoutSeconds() { return loginTimeoutSeconds; }
+        void setLoginTimeoutSeconds(int value) { loginTimeoutSeconds = value; }
+
+        void resetToDefaults() {
+            port = DEFAULT_PORT;
+            maxConnections = DEFAULT_MAX_CONNECTIONS;
+            handshakeTimeoutSeconds = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS;
+            loginTimeoutSeconds = DEFAULT_LOGIN_TIMEOUT_SECONDS;
+        }
+
+        void copyFrom(EmbeddedAuthServerSettings source) {
+            port = source.port;
+            maxConnections = source.maxConnections;
+            handshakeTimeoutSeconds = source.handshakeTimeoutSeconds;
+            loginTimeoutSeconds = source.loginTimeoutSeconds;
+        }
+    }
 
     /**
      * Resolver-specific configuration mapped from premium.resolver.

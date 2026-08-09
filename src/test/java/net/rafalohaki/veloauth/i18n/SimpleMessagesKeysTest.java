@@ -102,6 +102,12 @@ class SimpleMessagesKeysTest {
             "connection.servers.available",
             "connection.picolimbo.server",
             "connection.picolimbo.found",
+            "embedded.status.motd",
+            "embedded.disconnect.invalid_forwarding",
+            "embedded.disconnect.overloaded",
+            "embedded.disconnect.timeout",
+            "embedded.disconnect.unavailable",
+            "embedded.disconnect.unsupported_protocol",
             // Auth prompt messages
             "auth.header",
             "auth.prompt.generic",

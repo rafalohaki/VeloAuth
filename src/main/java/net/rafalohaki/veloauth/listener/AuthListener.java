@@ -740,18 +740,19 @@ public class AuthListener {
     public EventTask onServerPreConnect(ServerPreConnectEvent event) {
         try {
             Player player = event.getPlayer();
-            String targetServerName = event.getOriginalServer().getServerInfo().getName();
+            RegisteredServer targetServer = event.getOriginalServer();
+            String targetServerName = targetServer.getServerInfo().getName();
             RegisteredServer previousServer = event.getPreviousServer();
 
             logger.debug("ServerPreConnectEvent for player {} -> server {}",
                     player.getUsername(), targetServerName);
 
             if (previousServer == null) {
-                return handleFirstConnection(event, player, targetServerName);
+                return handleFirstConnection(event, player, targetServer, targetServerName);
             }
 
             // ✅ JEŚLI TO AUTH SERVER - SPRAWDŹ DODATKOWO AUTORYZACJĘ
-            if (handleAuthServerConnection(event, player, targetServerName)) {
+            if (handleAuthServerConnection(event, player, targetServer)) {
                 return null;
             }
 
@@ -766,11 +767,11 @@ public class AuthListener {
     }
 
     private EventTask handleFirstConnection(ServerPreConnectEvent event, Player player,
-                                            String targetServerName) {
-        String authServerName = settings.getAuthServerName();
+                                            RegisteredServer targetServer, String targetServerName) {
+        boolean targetIsAuthServer = connectionManager.isAuthServer(targetServer);
 
         if (shouldBypassAuthServerForPremium(player)) {
-            if (targetServerName.equals(authServerName)) {
+            if (targetIsAuthServer) {
                 return EventTask.resumeWhenComplete(selectInitialBackendAsync(
                         event, player, () -> shouldBypassAuthServerForPremium(player),
                         PREMIUM_MARKER, "Premium"));
@@ -785,7 +786,7 @@ public class AuthListener {
         // phase, before this event fires. Redirecting to limbo causes
         // ClientboundLevelChunkWithLightPacket translation failures in Geyser.
         if (shouldBypassAuthServer(player)) {
-            if (targetServerName.equals(authServerName)) {
+            if (targetIsAuthServer) {
                 return EventTask.resumeWhenComplete(selectInitialBackendAsync(
                         event, player, () -> shouldBypassAuthServer(player),
                         AUTH_MARKER, "Floodgate"));
@@ -796,7 +797,11 @@ public class AuthListener {
         }
 
         // Jeśli cel to już auth server - pozwól
-        if (targetServerName.equals(authServerName)) {
+        if (targetIsAuthServer) {
+            if (!connectionManager.prepareAuthServerConnection(player)) {
+                event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                return null;
+            }
             logger.debug("First connection {} -> auth server - allowing", player.getUsername());
             return null;
         }
@@ -807,14 +812,18 @@ public class AuthListener {
         connectionManager.setForcedHostTarget(player.getUniqueId(), targetServerName);
 
         // Przekieruj na auth server zamiast backend
-        Optional<RegisteredServer> authServer = plugin.getServer().getServer(authServerName);
+        Optional<RegisteredServer> authServer = connectionManager.resolveAuthServer();
         if (authServer.isPresent()) {
+            if (!connectionManager.prepareAuthServerConnection(player)) {
+                event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                return null;
+            }
             logger.debug("First connection {} -> {} - redirecting to auth server (forced host target saved)",
                     player.getUsername(), targetServerName);
             event.setResult(ServerPreConnectEvent.ServerResult.allowed(authServer.get()));
         } else {
             logger.error("Auth server '{}' not found! Player {} cannot connect.",
-                    authServerName, player.getUsername());
+                    connectionManager.getAuthServerName(), player.getUsername());
             event.setResult(ServerPreConnectEvent.ServerResult.denied());
         }
         return null;
@@ -860,8 +869,9 @@ public class AuthListener {
         }
     }
 
-    private boolean handleAuthServerConnection(ServerPreConnectEvent event, Player player, String targetServerName) {
-        if (targetServerName.equals(settings.getAuthServerName())) {
+    private boolean handleAuthServerConnection(
+            ServerPreConnectEvent event, Player player, RegisteredServer targetServer) {
+        if (connectionManager.isAuthServer(targetServer)) {
             // DODATKOWA WERYFIKACJA - sprawdź czy gracz nie jest już autoryzowany
             // Jeśli jest autoryzowany, nie powinien iść na auth server
             String playerIp = PlayerAddressUtils.getPlayerIp(player);
@@ -880,7 +890,11 @@ public class AuthListener {
                 event.setResult(ServerPreConnectEvent.ServerResult.denied());
                 connectionManager.autoTransferFromAuthServerToBackend(player);
             } else {
-                logger.debug("Auth server - allowing unauthenticated player");
+                if (!connectionManager.prepareAuthServerConnection(player)) {
+                    event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                } else {
+                    logger.debug("Auth server - allowing unauthenticated player");
+                }
             }
             return true;
         }
@@ -966,7 +980,7 @@ public class AuthListener {
             logger.debug("ServerConnectedEvent for player {} -> server {}",
                     player.getUsername(), serverName);
 
-            if (!serverName.equals(settings.getAuthServerName())) {
+            if (!connectionManager.isAuthServer(event.getServer())) {
                 handleBackendConnection(player, serverName);
             } else {
                 handleAuthServerConnection(player);

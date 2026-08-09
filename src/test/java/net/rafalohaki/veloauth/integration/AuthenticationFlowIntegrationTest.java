@@ -31,6 +31,7 @@ import java.net.InetSocketAddress;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
+import static net.rafalohaki.veloauth.testsupport.EventTaskTestSupport.await;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -629,7 +630,7 @@ class AuthenticationFlowIntegrationTest {
         dbPlayer.setUuid(playerUuid.toString());
         uuidLookup.complete(DatabaseManager.DbResult.success(dbPlayer));
 
-        awaitEventTask(task);
+        await(task);
 
         assertFalse(event.getResult().isAllowed(),
                 "Async UUID verification must re-check auth state before allowing backend access");
@@ -644,22 +645,7 @@ class AuthenticationFlowIntegrationTest {
     private void awaitPreLoginEvent(AuthListener authListener, PreLoginEvent event) {
         com.velocitypowered.api.event.EventTask task = authListener.onPreLogin(event);
         if (task != null) {
-            awaitEventTask(task);
-        }
-    }
-
-    private void awaitEventTask(com.velocitypowered.api.event.EventTask task) {
-        try {
-            java.lang.reflect.Field futureField = task.getClass().getDeclaredField("future");
-            futureField.setAccessible(true);
-            ((CompletableFuture<?>) futureField.get(task)).join();
-        } catch (ReflectiveOperationException e) {
-            // Velocity's EventTask impl doesn't expose its CompletableFuture by name on some
-            // builds. Park briefly so the async work submitted by the listener has time to
-            // run before the assertion. LockSupport.parkNanos is the Sonar-safe alternative
-            // to Thread.sleep — same wait semantics, not flagged by java:S2925.
-            java.util.concurrent.locks.LockSupport.parkNanos(
-                    java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(500));
+            await(task);
         }
     }
 }

@@ -36,9 +36,21 @@ class PremiumResolverAlertServiceTest {
             service.recordResolution("mojang", false);
             discordClient.secondAttempt().get(2, TimeUnit.SECONDS);
 
-            assertTrue(service.getMetrics().lastAlertTime() > 0,
+            assertTrue(awaitCooldownPublication(service, 2, TimeUnit.SECONDS),
                     "The next failure should retry and a successful delivery should start cooldown");
         }
+    }
+
+    private static boolean awaitCooldownPublication(
+            PremiumResolverAlertService service, long timeout, TimeUnit unit) throws InterruptedException {
+        long deadline = System.nanoTime() + unit.toNanos(timeout);
+        while (System.nanoTime() < deadline) {
+            if (service.getMetrics().lastAlertTime() > 0) {
+                return true;
+            }
+            TimeUnit.MILLISECONDS.sleep(5);
+        }
+        return service.getMetrics().lastAlertTime() > 0;
     }
 
     private static final class SequencedDiscordClient extends DiscordWebhookClient {

@@ -84,9 +84,18 @@ jobs:
     # Use Maven CLI on GitHub runners
     - name: Prepare Maven
       run: mvn -v
+
+    - name: Verify embedded protocol dependency checksums
+      run: ./scripts/verify-embedded-dependencies.sh
+
+    - name: Test latest protocol snapshot resolver with offline fixtures
+      run: ./scripts/test-protocol-build-resolver.sh
         
     - name: Build and verify with Maven
       run: mvn -B -V clean verify pmd:cpd-check -DskipTests=false
+
+    - name: Smoke test embedded limbo on a real Velocity proxy
+      run: ./scripts/test-velocity-embedded.sh
 
     - name: Verify AUTH and premium UUID behavior on PostgreSQL
       run: >-

@@ -4,6 +4,7 @@ import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.VeloAuth;
+import net.rafalohaki.veloauth.authserver.AuthServerProvider;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
@@ -71,6 +72,7 @@ public class ConnectionManager {
     private final Settings settings;
     private final Logger logger;
     private final Messages messages;
+    private final AuthServerProvider authServerProvider;
 
     /**
      * Tworzy nowy ConnectionManager.
@@ -82,15 +84,39 @@ public class ConnectionManager {
      */
     public ConnectionManager(VeloAuth plugin,
                              AuthCache authCache, Settings settings, Messages messages) {
+        this(plugin, authCache, settings, messages,
+                initializedExternalProvider(plugin, settings));
+    }
+
+    /**
+     * Creates a connection manager against the restart-scoped auth-server topology.
+     *
+     * @param plugin plugin instance
+     * @param authCache authorization cache
+     * @param settings validated settings
+     * @param messages i18n messages
+     * @param authServerProvider external or embedded auth-server owner
+     */
+    public ConnectionManager(VeloAuth plugin,
+                             AuthCache authCache, Settings settings, Messages messages,
+                             AuthServerProvider authServerProvider) {
         this.plugin = plugin;
         this.authCache = authCache;
         this.settings = settings;
         this.logger = plugin.getLogger();
         this.messages = messages;
+        this.authServerProvider = authServerProvider;
 
         if (logger.isDebugEnabled()) {
-            logger.debug(messages.get("connection.manager.initialized", settings.getAuthServerName()));
+            logger.debug(messages.get("connection.manager.initialized", authServerProvider.serverName()));
         }
+    }
+
+    private static AuthServerProvider initializedExternalProvider(VeloAuth plugin, Settings settings) {
+        AuthServerProvider provider = AuthServerProvider.forExternal(
+                plugin.getServer(), settings.getAuthServerName(), plugin.getLogger());
+        provider.start();
+        return provider;
     }
 
     public CompletableFuture<Boolean> transferToAuthServerAsync(Player player) {
@@ -112,12 +138,11 @@ public class ConnectionManager {
     }
     
     private RegisteredServer validateAndGetAuthServer(Player player) {
-        Optional<RegisteredServer> authServer = plugin.getServer()
-                .getServer(settings.getAuthServerName());
+        Optional<RegisteredServer> authServer = authServerProvider.resolve();
 
         if (authServer.isEmpty()) {
             logger.error("Auth server '{}' is not registered!",
-                    settings.getAuthServerName());
+                    authServerProvider.serverName());
 
             player.disconnect(messages.component("connection.error.auth_server", NamedTextColor.RED));
             return null;
@@ -658,7 +683,7 @@ public class ConnectionManager {
      * {@code connection.ping-timeout-ms} timeout regardless of how many servers are registered.
      */
     private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerAsync() {
-        String authServerName = settings.getAuthServerName();
+        String authServerName = authServerProvider.serverName();
         var tryServers = plugin.getServer().getConfiguration().getAttemptConnectionOrder();
         if (logger.isDebugEnabled()) {
             logger.debug("Velocity try servers: {}", tryServers);
@@ -679,7 +704,7 @@ public class ConnectionManager {
             // Fallback: parallel ping of every registered server (minus auth).
             logger.warn("No server from try list is available, attempting fallback...");
             java.util.List<RegisteredServer> fallbackCandidates = plugin.getServer().getAllServers().stream()
-                    .filter(server -> !server.getServerInfo().getName().equals(authServerName))
+                    .filter(server -> !authServerProvider.isAuthServer(server))
                     .toList();
             return pickFirstAvailable(fallbackCandidates);
         });
@@ -772,7 +797,7 @@ public class ConnectionManager {
             return Optional.empty();
         }
 
-        String authServerName = settings.getAuthServerName();
+        String authServerName = authServerProvider.serverName();
         if (targetName.equals(authServerName)) {
             logger.debug("Forced host target for {} is auth server '{}' - ignoring",
                     player.getUsername(), targetName);
@@ -853,9 +878,51 @@ public class ConnectionManager {
      */
     public boolean isPlayerOnAuthServer(Player player) {
         return player.getCurrentServer()
-                .map(serverConnection -> serverConnection.getServerInfo().getName())
-                .map(serverName -> serverName.equals(settings.getAuthServerName()))
+                .map(com.velocitypowered.api.proxy.ServerConnection::getServer)
+                .map(authServerProvider::isAuthServer)
                 .orElse(false);
+    }
+
+    /** Returns the restart-scoped auth-server name used by routing and forced-host exclusion. */
+    public String getAuthServerName() {
+        return authServerProvider.serverName();
+    }
+
+    /** Returns the usable auth-server registration, never a partially started embedded listener. */
+    public Optional<RegisteredServer> resolveAuthServer() {
+        return authServerProvider.resolve();
+    }
+
+    /** Checks the exact auth-server identity for the current topology. */
+    public boolean isAuthServer(RegisteredServer server) {
+        return authServerProvider.isAuthServer(server);
+    }
+
+    /**
+     * Creates the one-time UUID/name correlation for the loopback-only embedded redirect.
+     * External mode remains a no-op. Failures disconnect with a localized reason and fail closed.
+     */
+    public boolean prepareAuthServerConnection(Player player) {
+        AuthServerProvider.Preparation preparation = authServerProvider.prepare(player);
+        if (preparation == AuthServerProvider.Preparation.READY) {
+            return true;
+        }
+
+        String messageKey = switch (preparation) {
+            case CAPACITY_REACHED -> "embedded.disconnect.overloaded";
+            case UNSUPPORTED_PROTOCOL -> "embedded.disconnect.unsupported_protocol";
+            case UNAVAILABLE -> "embedded.disconnect.unavailable";
+            case READY -> throw new IllegalStateException("READY preparation handled above");
+        };
+        logger.warn("Auth-server preparation rejected player {} (reason={})",
+                player.getUsername(), preparation);
+        if (preparation == AuthServerProvider.Preparation.UNSUPPORTED_PROTOCOL) {
+            player.disconnect(messages.component(
+                    messageKey, NamedTextColor.RED, authServerProvider.compatibilityDescription()));
+        } else {
+            player.disconnect(messages.component(messageKey, NamedTextColor.RED));
+        }
+        return false;
     }
 
     /**
@@ -1052,22 +1119,21 @@ public class ConnectionManager {
                 logger.debug("  - {} ({})", name, address);
             });
             
-            logger.debug(messages.get("connection.picolimbo.server", settings.getAuthServerName()));
+            logger.debug(messages.get("connection.picolimbo.server", authServerProvider.serverName()));
         }
 
         // Sprawdź czy auth server istnieje
-        Optional<RegisteredServer> authServer = plugin.getServer()
-                .getServer(settings.getAuthServerName());
+        Optional<RegisteredServer> authServer = authServerProvider.resolve();
 
         if (authServer.isEmpty()) {
             if (logger.isErrorEnabled()) {
                 logger.error(messages.get("connection.picolimbo.error"),
-                    settings.getAuthServerName());
+                    authServerProvider.serverName());
             }
         } else {
             if (logger.isDebugEnabled()) {
                 logger.debug(messages.get("connection.picolimbo.found",
-                        settings.getAuthServerName(),
+                        authServerProvider.serverName(),
                         authServer.get().getServerInfo().getAddress()));
             }
         }

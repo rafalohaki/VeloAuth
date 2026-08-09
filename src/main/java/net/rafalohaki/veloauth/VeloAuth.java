@@ -26,6 +26,7 @@ import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.auth.totp.PendingTotpStore;
 import net.rafalohaki.veloauth.auth.totp.TotpReplayGuard;
 import net.rafalohaki.veloauth.auth.totp.TotpService;
+import net.rafalohaki.veloauth.authserver.AuthServerProvider;
 import net.rafalohaki.veloauth.premium.PremiumResolverService;
 import net.rafalohaki.veloauth.util.FloodgateDetector;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
@@ -71,6 +72,7 @@ public class VeloAuth {
     private AuthCache authCache;
     private CommandHandler commandHandler;
     private ConnectionManager connectionManager;
+    private AuthServerProvider authServerProvider;
     private AuthTimeoutScheduler authTimeoutScheduler;
     private AuthListener authListener;
     private PremiumResolverService premiumResolverService;
@@ -230,6 +232,17 @@ public class VeloAuth {
 
         initializeMetricsSafely();
         logStartupInfo(initializationDuration);
+        scheduleEmbeddedProtocolUpdate();
+    }
+
+    private void scheduleEmbeddedProtocolUpdate() {
+        AuthServerProvider provider = authServerProvider;
+        if (provider == null || provider.mode() != Settings.AuthServerMode.EMBEDDED) {
+            return;
+        }
+        if (!VirtualThreadExecutorProvider.submitTask(provider::stageProtocolRuntimeUpdate)) {
+            logger.debug("Embedded protocol snapshot check was skipped during shutdown");
+        }
     }
 
     private void initializeMetricsSafely() {
@@ -515,7 +528,10 @@ public class VeloAuth {
         }
         long startTime = System.currentTimeMillis();
 
-        connectionManager = new ConnectionManager(this, authCache, settings, messages);
+        authServerProvider = AuthServerProvider.create(server, settings, messages, logger, dataDirectory);
+        authServerProvider.start();
+        connectionManager = new ConnectionManager(
+                this, authCache, settings, messages, authServerProvider);
         authTimeoutScheduler = new AuthTimeoutScheduler(this, settings, messages, authCache, connectionManager);
 
         logger.debug("✅ Connection manager initialized in {} ms (auth timeout: {}s)",
@@ -666,6 +682,10 @@ public class VeloAuth {
                 logger.debug("ConnectionManager shut down");
             }
 
+            if (authServerProvider != null) {
+                closeAuthServerProviderSafely();
+            }
+
             shutdownCleanupScheduler(premiumCacheCleanupScheduler, "Premium cache cleanup scheduler");
             shutdownCleanupScheduler(premiumDbCleanupScheduler, "Premium DB cleanup scheduler");
             shutdownCleanupScheduler(auditLogCleanupScheduler, "Audit log cleanup scheduler");
@@ -701,6 +721,7 @@ public class VeloAuth {
             // A failing component must not abort the sequence before Hikari, the cleanup
             // schedulers and the VT executor get closed — close them here as a last resort.
             logger.error("Error during graceful shutdown - forcing remaining components closed", e);
+            closeAuthServerProviderSafely();
             if (databaseManager != null) {
                 try {
                     databaseManager.shutdown();
@@ -709,6 +730,18 @@ public class VeloAuth {
                 }
             }
             VirtualThreadExecutorProvider.shutdown();
+        }
+    }
+
+    private void closeAuthServerProviderSafely() {
+        if (authServerProvider == null) {
+            return;
+        }
+        try {
+            authServerProvider.close();
+            logger.debug("AuthServerProvider shut down");
+        } catch (RuntimeException exception) {
+            logger.error("AuthServerProvider shutdown failed", exception);
         }
     }
 
@@ -737,7 +770,14 @@ public class VeloAuth {
 
     private void logStartupInfo(long initializationDuration) {
         if (logger.isInfoEnabled()) {
-            logger.info("Auth server '{}' configured", settings.getAuthServerName());
+            if (authServerProvider != null) {
+                logger.info("Auth server '{}' configured (mode={}, client compatibility={})",
+                        authServerProvider.serverName(),
+                        authServerProvider.mode().getConfigValue(),
+                        authServerProvider.compatibilityDescription());
+            } else {
+                logger.info("Auth server '{}' configured", settings.getAuthServerName());
+            }
             String effectiveFloodgatePrefix = FloodgateDetector.getPlayerPrefix()
                     .orElse(settings.getFloodgateUsernamePrefix());
             logger.info("Floodgate support: {} (effective prefix='{}', auth bypass={})",
@@ -881,6 +921,11 @@ public class VeloAuth {
      */
     public ConnectionManager getConnectionManager() {
         return connectionManager;
+    }
+
+    /** Returns the restart-scoped owner of the external or embedded auth-server topology. */
+    public AuthServerProvider getAuthServerProvider() {
+        return authServerProvider;
     }
 
     /**
