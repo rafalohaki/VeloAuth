@@ -139,6 +139,11 @@ matches never grant this bypass.
 
 With the default embedded mode, configure only real backend servers in `velocity.toml`. Do not add
 the reserved `veloauth-embedded-limbo` name; VeloAuth registers and removes it atomically at runtime.
+When Velocity or Velocity-CTD uses `player-info-forwarding-mode = "modern"`, clients on 1.13 or
+newer complete the standard `velocity:player_info` login query automatically. Velocity reads
+`forwarding-secret-file` and signs its response; VeloAuth never copies, logs or adds that secret to
+`config.yml`. Modern forwarding itself does not support 1.8-1.12 clients, independently of the
+embedded limbo's wider protocol matrix.
 
 ```toml
 [servers]
@@ -217,10 +222,12 @@ Corrupt or off-repository manifests are removed automatically, and concurrent ru
 is serialized so one proxy process cannot download/publish the same artifact twice.
 
 External mode performs no snapshot check, download, directory creation, or ViaVersion classloading.
-No Velocity forwarding secret is read or generated, and installing the ViaVersion proxy plugin is
-not required. Snapshot availability cannot precede upstream ViaVersion support; “latest” means the
-newest snapshot that actually publishes and initializes a complete 1.8 translation path. ViaVersion
-is separately licensed under GPL-3.0; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Neither auth-server mode reads or generates a Velocity forwarding secret, and installing the
+ViaVersion proxy plugin is not required. In embedded mode the proxy-owned modern-forwarding
+handshake uses Velocity's configured secret without exposing it to VeloAuth. Snapshot availability
+cannot precede upstream ViaVersion support; “latest” means the newest snapshot that actually
+publishes and initializes a complete 1.8 translation path. ViaVersion is separately licensed under
+GPL-3.0; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 Protocol updates can therefore arrive without a VeloAuth release, but an incompatible future
 ViaVersion API/dependency change or a Velocity/Netty transport change still requires a tested plugin
 release; such a candidate is rejected rather than activated.

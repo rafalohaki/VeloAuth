@@ -3,8 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-VELOCITY_URL="https://fill-data.papermc.io/v1/objects/0c3d16b70ed757638b696a9a87d670b4301f23a6fef30c3acbbd9b0e0d7b29bb/velocity-3.5.0-SNAPSHOT-609.jar"
-VELOCITY_SHA256="0c3d16b70ed757638b696a9a87d670b4301f23a6fef30c3acbbd9b0e0d7b29bb"
+VELOCITY_URL="${VELOAUTH_VELOCITY_URL:-https://fill-data.papermc.io/v1/objects/0c3d16b70ed757638b696a9a87d670b4301f23a6fef30c3acbbd9b0e0d7b29bb/velocity-3.5.0-SNAPSHOT-609.jar}"
+VELOCITY_SHA256="${VELOAUTH_VELOCITY_SHA256:-0c3d16b70ed757638b696a9a87d670b4301f23a6fef30c3acbbd9b0e0d7b29bb}"
+VELOCITY_LABEL="${VELOAUTH_VELOCITY_LABEL:-Velocity 3.5}"
+FORWARDING_MODE="${VELOAUTH_TEST_FORWARDING_MODE:-none}"
 SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/veloauth-velocity-smoke.XXXXXX")"
 CONSOLE_PIPE="${SMOKE_DIR}/console.pipe"
 VELOCITY_LOG="${SMOKE_DIR}/velocity-first.log"
@@ -46,6 +48,14 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required to reserve a free local smoke-test port" >&2
   exit 1
 fi
+
+case "${FORWARDING_MODE}" in
+  none|modern) ;;
+  *)
+    echo "Unsupported smoke-test forwarding mode: ${FORWARDING_MODE}" >&2
+    exit 1
+    ;;
+esac
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -103,6 +113,23 @@ with socket.socket() as sock:
     print(sock.getsockname()[1])
 PY
 )"
+
+if [[ "${FORWARDING_MODE}" == modern ]]; then
+  cat >"${SMOKE_DIR}/velocity.toml" <<TOML
+config-version = "2.9"
+bind = "127.0.0.1:${PROXY_PORT}"
+online-mode = false
+player-info-forwarding-mode = "modern"
+forwarding-secret-file = "forwarding.secret"
+
+[servers]
+lobby = "127.0.0.1:30066"
+try = ["lobby"]
+TOML
+  umask 077
+  printf '%s\n' 'veloauth-embedded-modern-forwarding-smoke-secret' \
+    >"${SMOKE_DIR}/forwarding.secret"
+fi
 
 mkfifo "${CONSOLE_PIPE}"
 exec 3<>"${CONSOLE_PIPE}"
@@ -212,7 +239,7 @@ PROPERTIES
 fi
 
 stop_velocity
-echo "Velocity 3.5 embedded limbo smoke passed with a Minecraft 26.2 client"
+echo "${VELOCITY_LABEL} embedded limbo smoke passed with a Minecraft 26.2 client (${FORWARDING_MODE} forwarding)"
 if [[ "${TEST_RUNTIME_UPDATE}" == true ]]; then
   echo "Embedded ViaVersion staging, restart activation and tampered-pending rollback passed"
 fi

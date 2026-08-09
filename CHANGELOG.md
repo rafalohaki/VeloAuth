@@ -25,6 +25,9 @@ All notable user-visible changes to VeloAuth are documented in this file.
 
 ### Fixed
 
+- Embedded limbo completes Velocity/Velocity-CTD modern forwarding automatically by sending the
+  standard login query before login success. Velocity keeps exclusive ownership of the forwarding
+  secret; no additional VeloAuth configuration is required.
 - Removing premium security opt-ins from a valid reload restores their safe `false` defaults.
 - Concurrent runtime preparation in one proxy process no longer downloads or publishes the same
   artifact twice.

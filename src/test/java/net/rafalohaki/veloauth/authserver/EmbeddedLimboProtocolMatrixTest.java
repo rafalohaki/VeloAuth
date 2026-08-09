@@ -1,6 +1,7 @@
 package net.rafalohaki.veloauth.authserver;
 
 import com.viaversion.viaversion.ViaManagerImpl;
+import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import org.geysermc.mcprotocollib.auth.GameProfile;
 import org.geysermc.mcprotocollib.network.ClientSession;
@@ -10,6 +11,7 @@ import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
+import org.geysermc.mcprotocollib.protocol.packet.login.clientbound.ClientboundCustomQueryPacket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -22,7 +24,9 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static net.rafalohaki.veloauth.authserver.MinecraftWireTestSupport.connect;
@@ -56,13 +60,15 @@ class EmbeddedLimboProtocolMatrixTest {
     }
 
     @Test
-    void login_Minecraft262Client_ShouldTranslateTo18BaseAndEnterGame() throws Exception {
+    void login_Minecraft262Client_ShouldRequestVelocityForwardingAndEnterGame() throws Exception {
         startServer();
 
         UUID playerId = UUID.randomUUID();
         String username = "LatestClient";
         server.expectPlayer(playerId, username);
+        CountDownLatch forwardingRequested = new CountDownLatch(1);
         CountDownLatch joined = new CountDownLatch(1);
+        AtomicReference<byte[]> forwardingRequestData = new AtomicReference<>();
         MinecraftProtocol protocol = new MinecraftProtocol(new GameProfile(playerId, username), null);
         assertEquals(runtime.maximumProtocol(), protocol.getCodec().getProtocolVersion());
         client = ClientNetworkSessionFactory.factory()
@@ -73,7 +79,11 @@ class EmbeddedLimboProtocolMatrixTest {
         client.addListener(new SessionAdapter() {
             @Override
             public void packetReceived(Session session, Packet packet) {
-                if (packet instanceof ClientboundLoginPacket) {
+                if (packet instanceof ClientboundCustomQueryPacket query
+                        && Key.key("velocity", "player_info").equals(query.getChannel())) {
+                    forwardingRequestData.set(query.getData());
+                    forwardingRequested.countDown();
+                } else if (packet instanceof ClientboundLoginPacket) {
                     joined.countDown();
                 }
             }
@@ -81,6 +91,10 @@ class EmbeddedLimboProtocolMatrixTest {
 
         client.connect(true);
 
+        assertTrue(forwardingRequested.await(10, TimeUnit.SECONDS),
+                "Minecraft 1.13+ clients should receive the standard Velocity forwarding request");
+        assertArrayEquals(new byte[0], forwardingRequestData.get(),
+                "An empty request asks Velocity to use its compatible default forwarding version");
         assertTrue(joined.await(10, TimeUnit.SECONDS),
                 "Minecraft 26.2 client should receive its translated Join Game packet");
         assertEquals(1, server.playersInGame());

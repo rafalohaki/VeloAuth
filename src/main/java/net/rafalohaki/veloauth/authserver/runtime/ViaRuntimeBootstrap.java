@@ -4,10 +4,12 @@ import com.viaversion.viaversion.ViaManagerImpl;
 import com.viaversion.viaversion.api.Via;
 import com.viaversion.viaversion.api.connection.UserConnection;
 import com.viaversion.viaversion.api.platform.ViaPlatformLoader;
+import com.viaversion.viaversion.api.protocol.packet.PacketWrapper;
 import com.viaversion.viaversion.api.protocol.ProtocolManager;
 import com.viaversion.viaversion.api.protocol.version.ProtocolVersion;
 import com.viaversion.viaversion.api.protocol.version.VersionProvider;
 import com.viaversion.viaversion.api.protocol.version.VersionType;
+import com.viaversion.viaversion.api.type.Types;
 import com.viaversion.viaversion.commands.ViaCommandHandler;
 import com.viaversion.viaversion.configuration.AbstractViaConfig;
 import com.viaversion.viaversion.platform.NoopInjector;
@@ -16,6 +18,7 @@ import com.viaversion.viaversion.platform.ViaChannelInitializer;
 import com.viaversion.viaversion.platform.ViaDecodeHandler;
 import com.viaversion.viaversion.platform.ViaEncodeHandler;
 import com.viaversion.viaversion.protocol.version.BaseVersionProvider;
+import com.viaversion.viaversion.protocols.base.ClientboundLoginPackets;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPipeline;
 import org.slf4j.LoggerFactory;
@@ -27,9 +30,11 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
@@ -48,6 +53,7 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
     private static final String MC_PROTOCOL_CODEC = "codec";
     private static final String ENCODER_NAME = "veloauth-via-encoder";
     private static final String DECODER_NAME = "veloauth-via-decoder";
+    private static final String VELOCITY_FORWARDING_CHANNEL = "velocity:player_info";
     private static final Duration MAPPING_TIMEOUT = Duration.ofSeconds(30);
     private static final ReentrantLock SYSTEM_PROPERTY_LOCK = new ReentrantLock();
 
@@ -55,6 +61,7 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
     private final int maximumProtocol;
     private final String maximumVersionName;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final Map<Channel, UserConnection> connections = new ConcurrentHashMap<>();
 
     /** Initializes the private ViaVersion manager and waits for every required mapping. */
     public ViaRuntimeBootstrap(Path configDirectory, org.slf4j.Logger logger, String pluginVersion) {
@@ -120,8 +127,37 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
         }
 
         UserConnection connection = ViaChannelInitializer.createUserConnection(channel, false);
+        connections.put(channel, connection);
+        channel.closeFuture().addListener(ignored -> connections.remove(channel, connection));
         pipeline.addBefore(MC_PROTOCOL_CODEC, DECODER_NAME, new ViaDecodeHandler(connection));
         pipeline.addBefore(MC_PROTOCOL_CODEC, ENCODER_NAME, new ViaEncodeHandler(connection));
+    }
+
+    /** Sends a login query directly in the negotiated client protocol without exposing the secret. */
+    public void sendVelocityForwardingRequest(
+            Channel channel, int transactionId, Runnable loginContinuation) {
+        java.util.Objects.requireNonNull(channel, "channel");
+        java.util.Objects.requireNonNull(loginContinuation, "loginContinuation");
+        UserConnection connection = connections.get(channel);
+        if (connection == null) {
+            throw new IllegalStateException("Embedded protocol connection is not registered");
+        }
+        if (connection.getProtocolInfo().protocolVersion().olderThan(ProtocolVersion.v1_13)) {
+            loginContinuation.run();
+            return;
+        }
+
+        PacketWrapper request = PacketWrapper.create(ClientboundLoginPackets.CUSTOM_QUERY, connection);
+        request.write(Types.VAR_INT, transactionId);
+        request.write(Types.STRING, VELOCITY_FORWARDING_CHANNEL);
+        request.write(Types.REMAINING_BYTES, new byte[0]);
+        request.sendFutureRaw().addListener(result -> {
+            if (result.isSuccess()) {
+                loginContinuation.run();
+            } else {
+                channel.close();
+            }
+        });
     }
 
     @Override
@@ -129,6 +165,7 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        connections.clear();
         destroyManager();
     }
 

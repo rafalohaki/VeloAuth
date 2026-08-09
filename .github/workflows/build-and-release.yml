@@ -97,6 +97,9 @@ jobs:
     - name: Smoke test embedded limbo on a real Velocity proxy
       run: ./scripts/test-velocity-embedded.sh
 
+    - name: Smoke test embedded limbo with Velocity-CTD modern forwarding
+      run: ./scripts/test-velocity-ctd-embedded.sh
+
     - name: Verify AUTH and premium UUID behavior on PostgreSQL
       run: >-
         mvn -B test

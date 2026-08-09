@@ -43,6 +43,7 @@ final class EmbeddedLimboServer implements AutoCloseable {
     private static final int READ_TIMEOUT_SECONDS = 30;
     private static final int WRITE_TIMEOUT_SECONDS = 10;
     private static final int KEEP_ALIVE_INTERVAL_SECONDS = 15;
+    private static final int VELOCITY_FORWARDING_TRANSACTION_ID = 0;
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(8);
     private static final Duration BIND_ADDRESS_TIMEOUT = Duration.ofSeconds(2);
     private static final LegacyProtocolCodec.JoinGame JOIN_GAME = new LegacyProtocolCodec.JoinGame(1);
@@ -315,6 +316,17 @@ final class EmbeddedLimboServer implements AutoCloseable {
 
             GameProfile profile = new GameProfile(expected.uniqueId(), expected.username());
             session.setFlag(MinecraftConstants.PROFILE_KEY, profile);
+            protocolRuntime.sendVelocityForwardingRequest(
+                    session.getChannel(),
+                    VELOCITY_FORWARDING_TRANSACTION_ID,
+                    () -> sendLoginSuccess(session, expected));
+        }
+
+        private void sendLoginSuccess(
+                Session session, ExpectedRedirectRegistry.ExpectedPlayer expected) {
+            if (!session.isConnected()) {
+                return;
+            }
             session.send(new LegacyProtocolCodec.LoginSuccess(expected.uniqueId(), expected.username()),
                     () -> enterGame(session));
         }
