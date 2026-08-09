@@ -147,7 +147,10 @@ public record ValidationResult(boolean valid, String message) {
 
 ## DbResult\<T\> — Discriminated Union for Fail-Secure DB Operations
 
-All database operations return `DbResult<T>` — never throw from the DB layer. This distinguishes "not found" (`value == null`) from "database error" (`isDatabaseError == true`).
+Public `DatabaseManager` operations return `DbResult<T>` and do not leak `SQLException` to
+callers. DAO methods may throw `SQLException`; the manager converts it to the fail-secure result.
+This distinguishes "not found" (`value == null`) from "database error"
+(`isDatabaseError == true`).
 
 ```java
 // ✅ DbResult definition (inner class of DatabaseManager)
@@ -408,23 +411,31 @@ Key rules:
 Use builders for objects with many configuration parameters.
 
 ```java
-// ✅ Builder with fluent API
-public final class HikariConfigParams {
-    private final String storageType;
-    private final String hostname;
-    // ... many fields
-
-    private HikariConfigParams(Builder builder) {
-        this.storageType = builder.storageType;
-        // ...
-    }
+// ✅ Immutable record with a fluent construction helper
+public record HikariConfigParams(
+        String storageType,
+        String hostname,
+        int port,
+        String database,
+        String user,
+        String password,
+        int connectionPoolSize,
+        int maxLifetime,
+        String connectionParameters,
+        Settings.PostgreSQLSettings postgreSQLSettings,
+        boolean debugEnabled) {
 
     public static Builder builder() { return new Builder(); }
 
-    public static class Builder {
+    public static final class Builder {
+        // fields and fluent setters omitted
         public Builder storageType(String v) { this.storageType = v; return this; }
         public Builder hostname(String v)    { this.hostname = v;    return this; }
-        public HikariConfigParams build()    { return new HikariConfigParams(this); }
+        public HikariConfigParams build() {
+            return new HikariConfigParams(storageType, hostname, port, database, user, password,
+                    connectionPoolSize, maxLifetime, connectionParameters,
+                    postgreSQLSettings, debugEnabled);
+        }
     }
 }
 
@@ -460,14 +471,17 @@ src/main/java/net/rafalohaki/veloauth/
 ├── config/                    → Settings, YAML parsing
 ├── database/                  → DatabaseManager, DAOs, migrations
 ├── cache/                     → AuthCache, BruteForceTracker, SessionManager
+├── auth/totp/                 → RFC 6238 TOTP service and replay protection
 ├── premium/                   → Premium resolver (3-layer cache)
 ├── model/                     → RegisteredPlayer, data models
 ├── i18n/                      → Messages, SimpleMessages, LanguageFileManager
+├── report/                    → Redacted diagnostic report generation
 ├── alert/                     → Discord webhooks, alerts
 └── util/                      → VirtualThreadExecutorProvider, ValidationUtils
 src/main/resources/
-├── config.yml
+├── velocity-plugin.json
 └── lang/messages_XX.properties  → 17 languages
+config.yml                        → Generated in the plugin data directory on first startup
 src/test/java/...                → Mirrors main structure
 ```
 
@@ -538,6 +552,8 @@ Premium detection uses multiple complementary fields in the AUTH table. All prem
 - When modifying any premium detection logic, first read ALL existing premium-checking methods and their SQL equivalents
 - Premium state can come from multiple sources (Mojang API, migration, admin action) — never assume only one path sets premium fields
 - The PREMIUM_UUIDS table is a **cache**, not the source of truth — AUTH table is authoritative
+- Resolver, AUTH and cache state identify a premium account but do not prove that the current connection completed Mojang authentication
+- Only the final Velocity `Player#isOnlineMode()` is a valid trust boundary for `premium.bypass-auth-server`; never authorize passthrough from a nickname, UUID or resolver result alone
 - Before changing premium logic, verify behavior for: new premium players, migrated players, offline→premium transitions, and players with partial data
 
 ## ⛔ Change Safety Rules
@@ -547,21 +563,23 @@ Premium detection uses multiple complementary fields in the AUTH table. All prem
 1. **Find ALL callers** — understand every call site before changing behavior
 2. **Preserve semantics** — if a method returns X for input Y, your change MUST return X for Y unless the bug IS that wrong value
 3. **Never change a method's contract silently** — if you must change semantics, rename the method or add a new one
-4. **Verify on production DB type** — H2 tests passing ≠ PostgreSQL working. Check ORMLite API contracts manually
+4. **Verify on production DB type** — H2 tests passing ≠ PostgreSQL working. Check ORMLite API contracts and run `./scripts/test-postgresql.sh` for persistence changes
 5. **One concern per change** — don't mix "improve logging" with "change query logic" in the same method edit
 6. **Async I/O must use virtual threads** — every `CompletableFuture.supplyAsync()` with I/O needs an explicit executor, never default ForkJoinPool
 
 ## Build & Static Analysis
 
 ```bash
-mvnd test                       # Run 190+ tests
+mvnd test                       # Run the full JUnit/Mockito suite against H2
 mvnd clean package              # Build shaded JAR
-mvnd clean verify               # Full pipeline (compile + test + PMD/CPD)
-mvnd pmd:check pmd:cpd-check   # Static analysis only
+mvnd clean verify               # Compile + test + PMD + JaCoCo gate/report + shaded JAR
+mvnd pmd:check pmd:cpd-check   # Explicit PMD and CPD quality gates
+./scripts/test-postgresql.sh    # Real PostgreSQL integration gate (Docker required)
 ```
 
 - PMD custom ruleset: `pmd-ruleset.xml` (security rules all enabled)
 - CPD: 50-token minimum duplicate detection
+- CPD is deliberately invoked as a separate command; it is expected to pass before release
 - Compiler flags: `-Xlint:deprecation -Xlint:unchecked`
 - Shade relocations: `com.j256.ormlite` → `libs.ormlite`, `at.favre.lib.crypto` → `libs.bcrypt`, `com.fasterxml.jackson` → `libs.jackson`
 

@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Zarządza przepuszczaniem graczy między Velocity, serwerem auth (limbo) i serwerami backend.
  * <p>
  * Flow autoryzacji:
- * 1. Gracz dołącza -> sprawdź cache -> zawsze przez auth server dla spójności ViaVersion
+ * 1. Gracz dołącza -> domyślnie przez auth server; jawny opt-in może przepuścić premium
  * 2. Gracz na auth server -> jeśli zweryfikowany w cache: auto-transfer na backend
  * 3. Gracz na auth server -> /login lub /register -> transfer na backend
  * 4. Gracz na backend -> już autoryzowany, brak dodatkowych sprawdzeń
@@ -455,31 +455,37 @@ public class ConnectionManager {
                 return;
             }
 
-            // Honor forced-host preference on retry too — a temporarily offline target stays
-            // in the map and gets a fresh attempt every retry tick before we fall back to try-list.
-            Optional<RegisteredServer> server = resolveForcedHostTarget(player);
-            if (server.isEmpty()) {
-                server = findAvailableBackendServer();
-            }
-            if (server.isPresent()) {
-                RegisteredServer target = server.get();
-                String targetName = target.getServerInfo().getName();
-                logger.info("Backend server available for {} after waiting - transferring to {}",
-                        player.getUsername(), targetName);
-                sendIfNotEmpty(player, "connection.connecting", NamedTextColor.GREEN);
-                // Transfer blokuje na join() — wykonaj na virtual thread, nie na wątku schedulera
-                VirtualThreadExecutorProvider.submitTask(() ->
-                        executeBackendTransfer(player, target, targetName));
-            } else {
-                if (attempt % BACKEND_WAIT_REMINDER_INTERVAL == BACKEND_WAIT_REMINDER_INTERVAL - 1) {
-                    // Remind every 30 seconds (suppressed if message key resolves to empty)
-                    sendIfNotEmpty(player, "connection.waiting_for_server", NamedTextColor.YELLOW);
-                }
-                scheduleBackendWaitRetry(player, attempt + 1);
-            }
+            findAvailableBackendServerForRetryAsync(player)
+                    .whenComplete((server, throwable) ->
+                            handleBackendWaitSelection(player, attempt, server, throwable));
         }).delay(BACKEND_WAIT_INTERVAL_SECONDS, TimeUnit.SECONDS).schedule();
 
         backendWaitTasks.put(playerUuid, task);
+    }
+
+    private void handleBackendWaitSelection(Player player, int attempt,
+                                            Optional<RegisteredServer> server, Throwable throwable) {
+        if (!player.isActive() || !isPlayerOnAuthServer(player)) {
+            return;
+        }
+        if (throwable != null) {
+            logger.warn("Backend selection failed while {} was waiting; retrying",
+                    player.getUsername(), throwable);
+        }
+        if (throwable == null && server != null && server.isPresent()) {
+            RegisteredServer target = server.get();
+            String targetName = target.getServerInfo().getName();
+            logger.info("Backend server available for {} after waiting - transferring to {}",
+                    player.getUsername(), targetName);
+            sendIfNotEmpty(player, "connection.connecting", NamedTextColor.GREEN);
+            VirtualThreadExecutorProvider.submitTask(() ->
+                    executeBackendTransfer(player, target, targetName));
+            return;
+        }
+        if (attempt % BACKEND_WAIT_REMINDER_INTERVAL == BACKEND_WAIT_REMINDER_INTERVAL - 1) {
+            sendIfNotEmpty(player, "connection.waiting_for_server", NamedTextColor.YELLOW);
+        }
+        scheduleBackendWaitRetry(player, attempt + 1);
     }
 
     /**
@@ -632,6 +638,17 @@ public class ConnectionManager {
     }
 
     /**
+     * Selects an available non-auth backend for an initial connection whose Velocity target
+     * is the auth server. The returned future preserves the configured {@code try} order and
+     * never blocks the caller's event thread.
+     *
+     * @return future containing the first available backend, or empty when none is reachable
+     */
+    public CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerForInitialConnectionAsync() {
+        return findAvailableBackendServerAsync();
+    }
+
+    /**
      * Fully-async variant: pings every candidate (try list, then full fallback) in parallel.
      * <p>
      * Previous behavior: the try-list phase pinged in parallel but the fallback (line 690 in
@@ -665,6 +682,15 @@ public class ConnectionManager {
                     .filter(server -> !server.getServerInfo().getName().equals(authServerName))
                     .toList();
             return pickFirstAvailable(fallbackCandidates);
+        });
+    }
+
+    private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerForRetryAsync(Player player) {
+        return resolveForcedHostTargetAsync(player).thenCompose(forcedTarget -> {
+            if (forcedTarget.isPresent()) {
+                return CompletableFuture.completedFuture(forcedTarget);
+            }
+            return findAvailableBackendServerAsync();
         });
     }
 
@@ -711,6 +737,36 @@ public class ConnectionManager {
      * @return Optional with the target server if available and online
      */
     private Optional<RegisteredServer> resolveForcedHostTarget(Player player) {
+        Optional<ForcedHostTarget> resolvedTarget = findStoredForcedHostTarget(player);
+        if (resolvedTarget.isEmpty()) {
+            return Optional.empty();
+        }
+        ForcedHostTarget target = resolvedTarget.get();
+        if (isServerAvailable(target.server(), target.name())) {
+            logger.debug("Forced host target '{}' for {} is available - using it",
+                    target.name(), player.getUsername());
+            return Optional.of(target.server());
+        }
+
+        // Server is registered but currently offline — keep the entry so the next retry
+        // (scheduleBackendWaitRetry or transferToBackend) can try it again once it comes back up.
+        logger.warn("Forced host target '{}' for {} is offline - falling back to try list (will retry forced host on next attempt)",
+                target.name(), player.getUsername());
+        return Optional.empty();
+    }
+
+    private CompletableFuture<Optional<RegisteredServer>> resolveForcedHostTargetAsync(Player player) {
+        Optional<ForcedHostTarget> resolvedTarget = findStoredForcedHostTarget(player);
+        if (resolvedTarget.isEmpty()) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        ForcedHostTarget target = resolvedTarget.get();
+        return target.server().ping()
+                .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
+                .handle((ignored, throwable) -> handleForcedHostPingResult(player, target, throwable));
+    }
+
+    private Optional<ForcedHostTarget> findStoredForcedHostTarget(Player player) {
         String targetName = forcedHostTargets.get(player.getUniqueId());
         if (targetName == null) {
             return Optional.empty();
@@ -720,8 +776,7 @@ public class ConnectionManager {
         if (targetName.equals(authServerName)) {
             logger.debug("Forced host target for {} is auth server '{}' - ignoring",
                     player.getUsername(), targetName);
-            // The auth-server target is a configuration error (the player would loop). Drop it so
-            // we never reconsult it; subsequent retries go straight to the try-list.
+            // The auth-server target would loop. Drop it so retries use the try-list directly.
             forcedHostTargets.remove(player.getUniqueId());
             return Optional.empty();
         }
@@ -730,22 +785,27 @@ public class ConnectionManager {
         if (server.isEmpty()) {
             logger.warn("Forced host target '{}' for {} is not registered - falling back to try list",
                     targetName, player.getUsername());
-            // Unknown server name will never resolve — drop it permanently to avoid log spam.
+            // An unknown server cannot recover without a new captured target; avoid repeat log spam.
             forcedHostTargets.remove(player.getUniqueId());
             return Optional.empty();
         }
+        return Optional.of(new ForcedHostTarget(targetName, server.get()));
+    }
 
-        if (isServerAvailable(server.get(), targetName)) {
+    private Optional<RegisteredServer> handleForcedHostPingResult(Player player, ForcedHostTarget target,
+                                                                  Throwable throwable) {
+        if (throwable == null) {
             logger.debug("Forced host target '{}' for {} is available - using it",
-                    targetName, player.getUsername());
-            return server;
+                    target.name(), player.getUsername());
+            return Optional.of(target.server());
         }
-
-        // Server is registered but currently offline — keep the entry so the next retry
-        // (scheduleBackendWaitRetry or transferToBackend) can try it again once it comes back up.
-        logger.warn("Forced host target '{}' for {} is offline - falling back to try list (will retry forced host on next attempt)",
-                targetName, player.getUsername());
+        logger.warn("Forced host target '{}' for {} is offline - falling back to try list "
+                        + "(will retry forced host on next attempt)",
+                target.name(), player.getUsername());
         return Optional.empty();
+    }
+
+    private record ForcedHostTarget(String name, RegisteredServer server) {
     }
 
     /**

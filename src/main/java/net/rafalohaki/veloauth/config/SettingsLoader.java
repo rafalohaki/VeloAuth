@@ -224,6 +224,10 @@ final class SettingsLoader {
 
     @SuppressWarnings("unchecked")
     private static void loadPremiumSettings(Map<String, Object> config, LoadedState state, Logger logger) {
+        // Security-sensitive opt-in: removing the key or section on reload must restore
+        // the conservative behavior instead of inheriting a previous live true value.
+        state.premiumSettings.setAllowCrackedOnPremiumNicks(false);
+        state.premiumSettings.setBypassAuthServer(false);
         Object premiumSection = config.get("premium");
         if (premiumSection instanceof Map<?, ?>) {
             Map<String, Object> premium = (Map<String, Object>) premiumSection;
@@ -242,6 +246,8 @@ final class SettingsLoader {
         target.setCheckEnabled(YamlParserUtils.getBoolean(premium, "check-enabled", target.isCheckEnabled()));
         target.setAllowCrackedOnPremiumNicks(YamlParserUtils.getBoolean(premium,
                 "allow-cracked-on-premium-nicks", target.isAllowCrackedOnPremiumNicks()));
+        target.setBypassAuthServer(YamlParserUtils.getBoolean(premium,
+                "bypass-auth-server", target.isBypassAuthServer()));
     }
 
     private static void warnAboutLegacyPremiumKeys(Map<String, Object> premium, Logger logger) {
@@ -337,9 +343,9 @@ final class SettingsLoader {
             logger.info("Parsed connection URL: {}@{}:{}/{}",
                     state.databaseUser, state.databaseHostname, state.databasePort, state.databaseName);
         } catch (StringIndexOutOfBoundsException e) {
-            logger.error("Invalid database connection URL format: {}", connectionUrl.replaceAll("://[^@]+@", "://[REDACTED]@"), e);
+            logger.error("Invalid database connection URL format; value omitted for security", e);
         } catch (IllegalArgumentException e) {
-            logger.error("Invalid connection URL parameters: {}", connectionUrl.replaceAll("://[^@]+@", "://[REDACTED]@"), e);
+            logger.error("Invalid database connection URL parameters; value omitted for security", e);
         }
     }
 
@@ -525,6 +531,7 @@ final class SettingsLoader {
                                                 Settings.PremiumSettings target) {
             target.setCheckEnabled(source.isCheckEnabled());
             target.setAllowCrackedOnPremiumNicks(source.isAllowCrackedOnPremiumNicks());
+            target.setBypassAuthServer(source.isBypassAuthServer());
             target.getResolver().copyFrom(source.getResolver());
         }
 

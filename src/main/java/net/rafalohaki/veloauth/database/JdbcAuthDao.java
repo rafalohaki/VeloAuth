@@ -51,7 +51,13 @@ final class JdbcAuthDao {
     // SQL fragment constants
     private static final String WHERE_CLAUSE = " WHERE ";
     private static final String COMMA_SPACE_EQUALS_QUESTION = " = ?, ";
-    private static final String INTEGRITY_CONSTRAINT_SQLSTATE_PREFIX = "23";
+    private static final String UNIQUE_VIOLATION_SQLSTATE = "23505";
+    private static final String SERIALIZATION_FAILURE_SQLSTATE = "40001";
+    private static final String POSTGRES_DEADLOCK_SQLSTATE = "40P01";
+    private static final int MYSQL_DUPLICATE_KEY_ERROR_CODE = 1062;
+    private static final int MYSQL_LOCK_WAIT_TIMEOUT_ERROR_CODE = 1205;
+    private static final int MYSQL_DEADLOCK_ERROR_CODE = 1213;
+    private static final int MAX_UPSERT_ATTEMPTS = 3;
 
     private final DatabaseConfig config;
     private final boolean postgres;
@@ -150,29 +156,66 @@ final class JdbcAuthDao {
         }
     }
 
+    /**
+     * Creates a new AUTH row without ever mutating an existing nickname owner.
+     * <p>
+     * Registration deliberately uses this insert-only operation instead of the general
+     * {@link #upsertPlayer(RegisteredPlayer)} path. The database uniqueness constraint is the
+     * final concurrency boundary when multiple proxies register the same nickname at once.
+     *
+     * @return {@code true} when the row was created; {@code false} when it already existed
+     */
+    public boolean insertPlayerIfAbsent(RegisteredPlayer player) throws SQLException {
+        Objects.requireNonNull(player, "player must not be null");
+
+        try (Connection connection = openConnection()) {
+            try {
+                executeInsert(connection, player);
+                return true;
+            } catch (SQLException e) {
+                if (isDuplicateKeyViolation(e)) {
+                    return false;
+                }
+                throw e;
+            }
+        }
+    }
+
     public boolean upsertPlayer(RegisteredPlayer player) throws SQLException {
         Objects.requireNonNull(player, "player must not be null");
 
+        for (int attempt = 1; attempt <= MAX_UPSERT_ATTEMPTS; attempt++) {
+            try {
+                return upsertPlayerOnce(player);
+            } catch (SQLException e) {
+                if (!isRetryableTransactionFailure(e) || attempt == MAX_UPSERT_ATTEMPTS) {
+                    throw e;
+                }
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Retrying AUTH upsert after transaction conflict for {} (attempt {}/{})",
+                            player.getLowercaseNickname(), attempt + 1, MAX_UPSERT_ATTEMPTS);
+                }
+            }
+        }
+        throw new SQLException("AUTH upsert retry loop ended unexpectedly");
+    }
+
+    private boolean upsertPlayerOnce(RegisteredPlayer player) throws SQLException {
+        boolean duplicateRace;
         try (Connection connection = openConnection()) {
             boolean previousAutoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
             try {
-                int updated = executeUpdate(connection, player);
-                if (updated > 1) {
-                    throw new SQLException("AUTH upsert updated multiple rows for " + player.getLowercaseNickname());
-                }
-                if (updated == 0) {
-                    executeInsertWithDuplicateRecovery(connection, player);
-                }
-                connection.commit();
-                return true;
-            } catch (SQLException e) {
-                connection.rollback();
-                throw e;
+                duplicateRace = executeUpsertTransaction(connection, player);
             } finally {
                 connection.setAutoCommit(previousAutoCommit);
             }
         }
+
+        if (duplicateRace) {
+            return recoverDuplicateUpsert(player);
+        }
+        return true;
     }
 
     public boolean deletePlayer(String lowercaseNickname) throws SQLException {
@@ -219,9 +262,10 @@ final class JdbcAuthDao {
                     return resultSet.next(); // Zwróci true jeśli zapytanie się powiodło
                 }
             }
-        } catch (SQLException e) {
+        } catch (SQLException ignored) {
             if (logger.isDebugEnabled()) {
-                logger.debug("Health check failed: {}", e.getMessage());
+                // Driver messages can echo connection properties or account names.
+                logger.debug("Database health check failed");
             }
             return false;
         }
@@ -241,22 +285,61 @@ final class JdbcAuthDao {
         }
     }
 
-    private void executeInsertWithDuplicateRecovery(Connection connection, RegisteredPlayer player) throws SQLException {
+    /**
+     * Executes the update-then-insert transaction.
+     *
+     * @return {@code true} when another writer inserted the same key after our update check
+     */
+    private boolean executeUpsertTransaction(Connection connection, RegisteredPlayer player) throws SQLException {
         try {
-            executeInsert(connection, player);
+            int updated = executeUpdate(connection, player);
+            if (updated > 1) {
+                throw new SQLException("AUTH upsert updated multiple rows for " + player.getLowercaseNickname());
+            }
+            if (updated == 0) {
+                try {
+                    executeInsert(connection, player);
+                } catch (SQLException e) {
+                    if (!isDuplicateKeyViolation(e)) {
+                        throw e;
+                    }
+                    // PostgreSQL marks the whole transaction as failed after a unique violation.
+                    // Roll it back and recover on a fresh connection instead of issuing UPDATE here.
+                    connection.rollback();
+                    return true;
+                }
+            }
+            connection.commit();
+            return false;
         } catch (SQLException e) {
-            if (!isDuplicateKeyViolation(e)) {
+            connection.rollback();
+            throw e;
+        }
+    }
+
+    private boolean recoverDuplicateUpsert(RegisteredPlayer player) throws SQLException {
+        try (Connection connection = openConnection()) {
+            boolean previousAutoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try {
+                int recoveredUpdateCount = executeUpdate(connection, player);
+                if (recoveredUpdateCount != 1) {
+                    throw new SQLException("Failed to recover duplicate-key upsert for "
+                            + player.getLowercaseNickname());
+                }
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
                 throw e;
+            } finally {
+                connection.setAutoCommit(previousAutoCommit);
             }
-            int recoveredUpdateCount = executeUpdate(connection, player);
-            if (recoveredUpdateCount != 1) {
-                throw new SQLException("Failed to recover duplicate-key upsert for "
-                        + player.getLowercaseNickname(), e);
-            }
+
             if (logger.isDebugEnabled()) {
                 logger.debug("Recovered duplicate-key race during AUTH upsert for {}",
                         player.getLowercaseNickname());
             }
+            return true;
         }
     }
 
@@ -434,7 +517,8 @@ final class JdbcAuthDao {
 
     private boolean isDuplicateKeyViolation(SQLException exception) {
         String sqlState = exception.getSQLState();
-        if (sqlState != null && sqlState.startsWith(INTEGRITY_CONSTRAINT_SQLSTATE_PREFIX)) {
+        if (UNIQUE_VIOLATION_SQLSTATE.equals(sqlState)
+                || exception.getErrorCode() == MYSQL_DUPLICATE_KEY_ERROR_CODE) {
             return true;
         }
         String message = exception.getMessage();
@@ -446,6 +530,22 @@ final class JdbcAuthDao {
                 || normalizedMessage.contains("unique constraint")
                 || normalizedMessage.contains("unique index")
                 || normalizedMessage.contains("primary key");
+    }
+
+    private boolean isRetryableTransactionFailure(SQLException exception) {
+        SQLException current = exception;
+        while (current != null) {
+            String sqlState = current.getSQLState();
+            int errorCode = current.getErrorCode();
+            if (SERIALIZATION_FAILURE_SQLSTATE.equals(sqlState)
+                    || POSTGRES_DEADLOCK_SQLSTATE.equals(sqlState)
+                    || errorCode == MYSQL_LOCK_WAIT_TIMEOUT_ERROR_CODE
+                    || errorCode == MYSQL_DEADLOCK_ERROR_CODE) {
+                return true;
+            }
+            current = current.getNextException();
+        }
+        return false;
     }
 
     private boolean isMissingConflictColumnsError(SQLException exception) {

@@ -32,7 +32,7 @@ class LoginCommand implements SimpleCommand {
 
     @Override
     public boolean hasPermission(Invocation invocation) {
-        return CommandHelper.isPlayerOnAuthServer(invocation, ctx);
+        return CommandHelper.isPlayerOnAuthServerAndNeedsAuthentication(invocation, ctx);
     }
 
     @Override

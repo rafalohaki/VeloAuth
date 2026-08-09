@@ -512,10 +512,112 @@ class SettingsValidationTest {
                 security:
                   conflict-mode-ttl-hours: -1
                 """);
-        // NOTE: Settings.load() applies the parsed state to the live fields BEFORE validating.
-        // A failed reload therefore returns false but leaves the rejected value on the field.
-        // This is a pre-existing characteristic of the loader, not specific to this setting.
         assertFalse(settings.load(), "conflict-mode-ttl-hours: -1 should fail validation");
+        assertEquals(24, settings.getConflictModeTtlHours(),
+                "Rejected reload should preserve the previously active TTL");
+    }
+
+    @Test
+    void failedReloadShouldPreservePreviouslyActiveSettings() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                debug-enabled: true
+                security:
+                  bcrypt-cost: 12
+                  conflict-mode-ttl-hours: 24
+                premium:
+                  allow-cracked-on-premium-nicks: true
+                """);
+        assertTrue(settings.load(), "Initial valid configuration should load");
+
+        writeConfigFile(configFile, """
+                debug-enabled: false
+                security:
+                  bcrypt-cost: 11
+                  conflict-mode-ttl-hours: -1
+                premium:
+                  allow-cracked-on-premium-nicks: false
+                """);
+
+        assertFalse(settings.load(), "Invalid reload should be rejected");
+        assertTrue(settings.isDebugEnabled(), "Rejected reload must preserve the active debug setting");
+        assertEquals(12, settings.getBcryptCost(), "Rejected reload must preserve the active BCrypt cost");
+        assertEquals(24, settings.getConflictModeTtlHours(),
+                "Rejected reload must preserve the active conflict-mode TTL");
+        assertTrue(settings.isAllowCrackedOnPremiumNicks(),
+                "Rejected reload must preserve the active premium routing policy");
+    }
+
+    @Test
+    void removingPremiumSecurityOptInShouldRestoreSafeDefaultOnReload() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                premium:
+                  allow-cracked-on-premium-nicks: true
+                """);
+        assertTrue(settings.load(), "Explicit opt-in should load");
+        assertTrue(settings.isAllowCrackedOnPremiumNicks());
+
+        writeConfigFile(configFile, "language: en\n");
+
+        assertTrue(settings.load(), "Configuration without the optional premium key should load");
+        assertFalse(settings.isAllowCrackedOnPremiumNicks(),
+                "Removing a security-sensitive opt-in must restore its safe false default");
+    }
+
+    @Test
+    void premiumAuthServerBypassShouldBeBackwardCompatibleAndOptIn() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, "language: en\n");
+
+        assertTrue(settings.load(), "Legacy configuration without the new key should load");
+        assertFalse(settings.isPremiumBypassAuthServerEnabled(),
+                "Existing installations must retain the current auth-server routing by default");
+
+        writeConfigFile(configFile, """
+                premium:
+                  bypass-auth-server: true
+                """);
+        assertTrue(settings.load(), "Explicit premium bypass should load");
+        assertTrue(settings.isPremiumBypassAuthServerEnabled());
+
+        writeConfigFile(configFile, "language: en\n");
+        assertTrue(settings.load(), "Removing the optional key should remain a valid reload");
+        assertFalse(settings.isPremiumBypassAuthServerEnabled(),
+                "Removing premium bypass must restore the safe false default");
+    }
+
+    @Test
+    void invalidPremiumAuthServerBypassShouldUseSafeDefault() {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                premium:
+                  bypass-auth-server: definitely-not-a-boolean
+                """);
+
+        assertTrue(settings.load(), "Invalid optional boolean should fall back without breaking upgrades");
+        assertFalse(settings.isPremiumBypassAuthServerEnabled());
+    }
+
+    @Test
+    void generatedConfigShouldDocumentPremiumAuthServerBypassAsDisabled() throws IOException {
+        assertTrue(settings.load());
+
+        String generatedConfig = Files.readString(tempDir.resolve("config.yml"));
+
+        assertTrue(generatedConfig.contains("bypass-auth-server: false"),
+                "Generated config must expose the conservative premium bypass default");
+    }
+
+    @Test
+    void hotReloadablePremiumCoreFieldsShouldBeVolatile() throws ReflectiveOperationException {
+        Set<String> hotReloadable = Set.of(
+                "checkEnabled", "allowCrackedOnPremiumNicks", "bypassAuthServer");
+
+        for (String fieldName : hotReloadable) {
+            Field field = Settings.PremiumSettings.class.getDeclaredField(fieldName);
+            assertTrue(java.lang.reflect.Modifier.isVolatile(field.getModifiers()),
+                    "Settings.PremiumSettings." + fieldName + " must be volatile — it is read by login events");
+        }
     }
 
     /**

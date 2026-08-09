@@ -8,7 +8,11 @@ on:
     branches: [ main, master ]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # Check if there are actual source code changes (excluding docs, workflows, etc.)
@@ -19,7 +23,7 @@ jobs:
       should-release: ${{ steps.changes.outputs.source-changed }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       with:
         fetch-depth: 2
         
@@ -28,22 +32,50 @@ jobs:
       run: |
         # Check if there are changes in source files (excluding docs, workflows, etc.)
         if git diff --name-only HEAD~1 HEAD | grep -E '\.(java|xml|yml|yaml|json|properties)$' | grep -v -E '\.github/|README\.md|\.gitignore'; then
-          echo "source-changed=true" >> $GITHUB_OUTPUT
+          echo "source-changed=true" >> "$GITHUB_OUTPUT"
           echo "Source code changes detected - will create release"
         else
-          echo "source-changed=false" >> $GITHUB_OUTPUT
+          echo "source-changed=false" >> "$GITHUB_OUTPUT"
           echo "No source code changes - skipping release"
         fi
 
   build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: veloauth_it
+          POSTGRES_USER: veloauth_it
+          POSTGRES_PASSWORD: veloauth_it_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U veloauth_it -d veloauth_it"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: veloauth_it
+          MYSQL_USER: veloauth_it
+          MYSQL_PASSWORD: veloauth_it_password
+          MYSQL_ROOT_PASSWORD: veloauth_it_root_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uveloauth_it -pveloauth_it_password --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       
     - name: Set up JDK 21
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
       with:
         java-version: '21'
         distribution: 'temurin'
@@ -54,10 +86,31 @@ jobs:
       run: mvn -v
         
     - name: Build and verify with Maven
-      run: mvn -B -V clean verify -DskipTests=false
+      run: mvn -B -V clean verify pmd:cpd-check -DskipTests=false
+
+    - name: Verify AUTH and premium UUID behavior on PostgreSQL
+      run: >-
+        mvn -B test
+        -Dtest=PremiumUuidDaoPostgreSqlIT,JdbcAuthDaoDatabaseIT
+        -Dveloauth.postgres.url=jdbc:postgresql://127.0.0.1:5432/veloauth_it
+        -Dveloauth.postgres.user=veloauth_it
+        -Dveloauth.postgres.password=veloauth_it_password
+        -Dveloauth.database.type=POSTGRESQL
+        -Dveloauth.database.url=jdbc:postgresql://127.0.0.1:5432/veloauth_it?sslmode=disable
+        -Dveloauth.database.user=veloauth_it
+        -Dveloauth.database.password=veloauth_it_password
+
+    - name: Verify AUTH behavior on MySQL
+      run: >-
+        mvn -B test
+        -Dtest=JdbcAuthDaoDatabaseIT
+        -Dveloauth.database.type=MYSQL
+        -Dveloauth.database.url='jdbc:mysql://127.0.0.1:3306/veloauth_it?useSSL=false&serverTimezone=UTC'
+        -Dveloauth.database.user=veloauth_it
+        -Dveloauth.database.password=veloauth_it_password
       
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: veloauth-jar
         path: target/veloauth-*.jar
@@ -80,16 +133,18 @@ jobs:
       RELEASE_PRERELEASE: "false"
       RELEASE_MAKE_LATEST: "false"
       RELEASE_NOTES: ""
+    permissions:
+      contents: write
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       with:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Download build artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
       with:
         name: veloauth-jar
         path: ./
@@ -108,7 +163,7 @@ jobs:
       if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
       run: |
         VERSION="latest"
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        printf 'VERSION=%s\n' "$VERSION" >> "$GITHUB_ENV"
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         
@@ -122,36 +177,43 @@ jobs:
         
     - name: Set version from tag
       if: startsWith(github.ref, 'refs/tags/')
+      env:
+        RELEASE_TAG_NAME: ${{ github.ref_name }}
       run: |
-        echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+        printf 'VERSION=%s\n' "$RELEASE_TAG_NAME" >> "$GITHUB_ENV"
         
     - name: Rename JAR for release
       run: |
-        mv veloauth-*.jar "veloauth-$VERSION.jar"
+        set -- veloauth-*.jar
+        if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+          echo "Expected exactly one VeloAuth JAR, found $#" >&2
+          exit 1
+        fi
+        mv -- "$1" "veloauth-$VERSION.jar"
         
     - name: Prepare release metadata
       run: |
         recent_notes="$(cat release_notes.txt)"
         if [ "$VERSION" = "latest" ]; then
-          echo "RELEASE_NAME=Rolling Latest Build" >> $GITHUB_ENV
+          echo "RELEASE_NAME=Rolling Latest Build" >> "$GITHUB_ENV"
           {
             echo "Rolling release updated on $(date -u '+%Y-%m-%d %H:%M UTC')."
             echo
             echo "Recent changes:"
             echo "$recent_notes"
           } > release_body.txt
-          echo "RELEASE_PRERELEASE=false" >> $GITHUB_ENV
-          echo "RELEASE_MAKE_LATEST=true" >> $GITHUB_ENV
+          echo "RELEASE_PRERELEASE=false" >> "$GITHUB_ENV"
+          echo "RELEASE_MAKE_LATEST=true" >> "$GITHUB_ENV"
         else
-          echo "RELEASE_NAME=${VERSION}" >> $GITHUB_ENV
+          printf 'RELEASE_NAME=%s\n' "$VERSION" >> "$GITHUB_ENV"
           {
             echo "Release for tag ${VERSION}."
             echo
             echo "Recent changes:"
             echo "$recent_notes"
           } > release_body.txt
-          echo "RELEASE_PRERELEASE=false" >> $GITHUB_ENV
-          echo "RELEASE_MAKE_LATEST=true" >> $GITHUB_ENV
+          echo "RELEASE_PRERELEASE=false" >> "$GITHUB_ENV"
+          echo "RELEASE_MAKE_LATEST=true" >> "$GITHUB_ENV"
         fi
 
     - name: Publish (update) release

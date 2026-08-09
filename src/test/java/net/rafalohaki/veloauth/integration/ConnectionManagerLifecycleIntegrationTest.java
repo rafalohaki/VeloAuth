@@ -3,9 +3,13 @@ package net.rafalohaki.veloauth.integration;
 import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.ServerConnection;
+import com.velocitypowered.api.proxy.config.ProxyConfig;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
+import com.velocitypowered.api.proxy.server.ServerPing;
 import com.velocitypowered.api.scheduler.ScheduledTask;
+import com.velocitypowered.api.scheduler.Scheduler;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
@@ -22,14 +26,23 @@ import org.mockito.quality.Strictness;
 import org.slf4j.Logger;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -136,6 +149,81 @@ class ConnectionManagerLifecycleIntegrationTest {
         assertTrue(getMap("timeoutRetryTasks").isEmpty(), "Timeout retry tasks should be cleared after success");
         assertTrue(getMap("timeoutRetryScheduled").isEmpty(), "Timeout retry flags should be cleared after success");
         assertTrue(getMap("forcedHostTargets").isEmpty(), "Forced-host targets should be consumed after success");
+    }
+
+    @Test
+    void findAvailableBackendForInitialConnectionShouldPreserveTryOrderAndExcludeAuthServer() {
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        RegisteredServer firstBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer secondBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerPing firstPing = org.mockito.Mockito.mock(ServerPing.class);
+        ServerPing secondPing = org.mockito.Mockito.mock(ServerPing.class);
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of("auth", "first", "second"));
+        when(proxyServer.getServer("first")).thenReturn(Optional.of(firstBackend));
+        when(proxyServer.getServer("second")).thenReturn(Optional.of(secondBackend));
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(firstBackend.getServerInfo()).thenReturn(
+                new ServerInfo("first", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(secondBackend.getServerInfo()).thenReturn(
+                new ServerInfo("second", InetSocketAddress.createUnresolved("127.0.0.1", 25567)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(firstBackend.ping()).thenReturn(CompletableFuture.completedFuture(firstPing));
+        when(secondBackend.ping()).thenReturn(CompletableFuture.completedFuture(secondPing));
+
+        Optional<RegisteredServer> selected = connectionManager
+                .findAvailableBackendServerForInitialConnectionAsync().join();
+
+        assertSame(firstBackend, selected.orElse(null), "The first reachable try-list backend should win");
+        verify(authServer, never()).ping();
+    }
+
+    @Test
+    void backendWaitSchedulerCallback_shouldNotBlockWhileForcedHostPingIsPending() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer forcedBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerConnection authConnection = org.mockito.Mockito.mock(ServerConnection.class);
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask scheduledTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        CompletableFuture<ServerPing> pendingPing = new CompletableFuture<>();
+        org.mockito.ArgumentCaptor<Runnable> callbackCaptor =
+                org.mockito.ArgumentCaptor.forClass(Runnable.class);
+
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("AsyncRetryPlayer");
+        when(player.isActive()).thenReturn(true);
+        when(player.getCurrentServer()).thenReturn(Optional.of(authConnection));
+        when(authConnection.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(forcedBackend.getServerInfo()).thenReturn(
+                new ServerInfo("forced", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(forcedBackend.ping()).thenReturn(pendingPing);
+        when(proxyServer.getServer("forced")).thenReturn(Optional.of(forcedBackend));
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(5L), eq(TimeUnit.SECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(scheduledTask);
+
+        connectionManager.setForcedHostTarget(playerUuid, "forced");
+        Method scheduleRetry = ConnectionManager.class
+                .getDeclaredMethod("scheduleBackendWaitRetry", Player.class, int.class);
+        scheduleRetry.setAccessible(true);
+        scheduleRetry.invoke(connectionManager, player, 1);
+
+        CompletableFuture<Void> callback = CompletableFuture.runAsync(callbackCaptor.getValue());
+        try {
+            assertDoesNotThrow(() -> callback.get(500, TimeUnit.MILLISECONDS),
+                    "Velocity scheduler callback must return before an unresolved ping completes");
+            assertFalse(pendingPing.isDone());
+        } finally {
+            when(player.isActive()).thenReturn(false);
+            pendingPing.complete(org.mockito.Mockito.mock(ServerPing.class));
+            callback.get(2, TimeUnit.SECONDS);
+        }
     }
 
     @SuppressWarnings("unchecked")

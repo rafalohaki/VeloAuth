@@ -6,6 +6,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.sql.DataSource;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.Objects;
 
 /**
@@ -93,13 +97,17 @@ public final class DatabaseConfig {
      */
     private final String jdbcUrl;
 
+    /** Parent directory for file-backed local databases; null for remote databases. */
+    private final Path localDataDirectory;
+
     /**
      * Internal parameter carrier used to reduce constructor parameter count and
      * satisfy complexity rules. This record is private and only used by factory methods.
      */
     private static final record InternalParams(String storageType, String hostname, int port,
                                                String database, String user, String password,
-                                               int connectionPoolSize, DataSource dataSource, String jdbcUrl) {
+                                               int connectionPoolSize, DataSource dataSource, String jdbcUrl,
+                                               Path localDataDirectory) {
     }
 
     private DatabaseConfig(InternalParams p) {
@@ -112,6 +120,7 @@ public final class DatabaseConfig {
         this.connectionPoolSize = p.connectionPoolSize();
         this.dataSource = p.dataSource();
         this.jdbcUrl = p.jdbcUrl();
+        this.localDataDirectory = p.localDataDirectory();
     }
 
 
@@ -128,7 +137,33 @@ public final class DatabaseConfig {
             throw new IllegalArgumentException("Invalid local database type: " + storageType);
         }
         String jdbcUrl = buildJdbcUrl(dbType, null, 0, database, null, null);
-        return new DatabaseConfig(new InternalParams(dbType.getName(), null, 0, database, null, null, 1, null, jdbcUrl));
+        return new DatabaseConfig(new InternalParams(
+                dbType.getName(), null, 0, database, null, null, 1, null, jdbcUrl, Path.of("data")));
+    }
+
+    /** Test seam for verifying fresh local installations without changing the legacy path. */
+    static DatabaseConfig forLocalDatabase(String storageType, String database, Path localDataDirectory) {
+        DatabaseType dbType = DatabaseType.fromName(storageType);
+        if (dbType == null || !dbType.isLocalDatabase()) {
+            throw new IllegalArgumentException("Invalid local database type: " + storageType);
+        }
+        Path directory = Objects.requireNonNull(localDataDirectory, "localDataDirectory must not be null");
+        String jdbcUrl = buildLocalJdbcUrl(dbType, database, directory);
+        return new DatabaseConfig(new InternalParams(
+                dbType.getName(), null, 0, database, null, null, 1, null, jdbcUrl, directory));
+    }
+
+    /** Test seam for exercising real remote dialects with an isolated JDBC URL. */
+    static DatabaseConfig forRemoteJdbcUrl(String storageType, String jdbcUrl,
+                                           String user, String password) {
+        DatabaseType dbType = DatabaseType.fromName(storageType);
+        if (dbType == null || dbType.isLocalDatabase()) {
+            throw new IllegalArgumentException("Invalid remote database type: " + storageType);
+        }
+        String validatedJdbcUrl = Objects.requireNonNull(jdbcUrl, "jdbcUrl must not be null");
+        return new DatabaseConfig(new InternalParams(
+                dbType.getName(), null, 0, null, user, password, 1, null,
+                validatedJdbcUrl, null));
     }
 
     /**
@@ -158,9 +193,8 @@ public final class DatabaseConfig {
                                       params.postgreSQLSettings());
         String driverClass = resolveDriverClass(dbType);
 
-        // Debug logging for connection URL (only if debug enabled)
+        // Never log the JDBC URL: connection-parameters may contain credentials.
         if (params.debugEnabled()) {
-            logger.debug("[VeloAuth DEBUG] JDBC URL: {}", jdbcUrl);
             logger.debug("[VeloAuth DEBUG] Database Type: {}", dbType);
             logger.debug("[VeloAuth DEBUG] Hostname: {}:{}", params.hostname(), params.port());
             logger.debug("[VeloAuth DEBUG] SSL Settings: {}", (params.postgreSQLSettings() != null ? "enabled" : "using defaults"));
@@ -186,7 +220,9 @@ public final class DatabaseConfig {
 
         HikariDataSource dataSource = new HikariDataSource(hikariConfig);
 
-        return new DatabaseConfig(new InternalParams(params.storageType(), null, 0, null, null, null, params.connectionPoolSize(), dataSource, jdbcUrl));
+        return new DatabaseConfig(new InternalParams(
+                params.storageType(), null, 0, null, null, null,
+                params.connectionPoolSize(), dataSource, jdbcUrl, null));
     }
 
 
@@ -326,6 +362,15 @@ public final class DatabaseConfig {
         return String.format("jdbc:sqlite:./data/%s.db", database);
     }
 
+    private static String buildLocalJdbcUrl(DatabaseType dbType, String database, Path directory) {
+        String databasePath = directory.resolve(database).toAbsolutePath().normalize().toString();
+        return switch (dbType) {
+            case H2 -> "jdbc:h2:file:" + databasePath + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE";
+            case SQLITE -> "jdbc:sqlite:" + databasePath + ".db";
+            default -> throw new IllegalArgumentException("Database type is not local: " + dbType);
+        };
+    }
+
     private static String resolveDriverClass(DatabaseType dbType) {
         return dbType.getDriverClass();
     }
@@ -351,7 +396,9 @@ public final class DatabaseConfig {
             throw new IllegalArgumentException("Unsupported database type: " + storageType);
         }
         String jdbcUrl = buildJdbcUrl(dbType, hostname, port, database, null, null);
-        return new DatabaseConfig(new InternalParams(dbType.getName(), hostname, port, database, user, password, connectionPoolSize, null, jdbcUrl));
+        return new DatabaseConfig(new InternalParams(
+                dbType.getName(), hostname, port, database, user, password,
+                connectionPoolSize, null, jdbcUrl, null));
     }
 
     /**
@@ -558,6 +605,17 @@ public final class DatabaseConfig {
         return jdbcUrl;
     }
 
+    void prepareLocalStorage() throws SQLException {
+        if (localDataDirectory == null) {
+            return;
+        }
+        try {
+            Files.createDirectories(localDataDirectory);
+        } catch (IOException | SecurityException e) {
+            throw new SQLException("Failed to create local database directory", e);
+        }
+    }
+
     /**
      * Sprawdza czy używa HikariCP.
      *
@@ -611,13 +669,14 @@ public final class DatabaseConfig {
                 Objects.equals(database, that.database) &&
                 Objects.equals(user, that.user) &&
                 Objects.equals(password, that.password) &&
-                Objects.equals(jdbcUrl, that.jdbcUrl);
+                Objects.equals(jdbcUrl, that.jdbcUrl) &&
+                Objects.equals(localDataDirectory, that.localDataDirectory);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(storageType, hostname, port, database,
-                user, password, connectionPoolSize, jdbcUrl);
+                user, password, connectionPoolSize, jdbcUrl, localDataDirectory);
     }
 
     @Override
@@ -627,11 +686,11 @@ public final class DatabaseConfig {
                 "storageType='" + storageType + '\'' +
                 ", hostname='" + hostname + '\'' +
                 ", port=" + port +
-                ", database='" + database + '\'' +
+                ", database='<configured>'" +
                 ", user='" + user + '\'' +
                 ", password='***'" + // NOSONAR - Masked password, not real credential
                 ", connectionPoolSize=" + connectionPoolSize +
-                ", jdbcUrl='" + jdbcUrl + '\'' +
+                ", jdbcUrl='<redacted>'" +
                 ", isLocal=" + isLocalDatabase() +
                 '}';
     }

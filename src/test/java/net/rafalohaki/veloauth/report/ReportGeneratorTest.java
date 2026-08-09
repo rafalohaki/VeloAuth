@@ -48,6 +48,26 @@ class ReportGeneratorTest {
         assertTrue(report.contains("Bearer <redacted>"));
     }
 
+    @Test
+    void generate_premiumBypassEnabled_exposesEffectiveRoutingPolicyInMetadata() throws Exception {
+        Path dataDirectory = createProxyLayout("normal log line");
+        Files.writeString(dataDirectory.resolve("config.yml"), """
+                premium:
+                  bypass-auth-server: true
+                """);
+        Settings settings = new Settings(dataDirectory);
+        assertTrue(settings.load());
+        VeloAuth plugin = pluginMock(dataDirectory);
+
+        ReportGenerator.ReportContent report = new ReportGenerator(plugin, settings).generate();
+
+        assertTrue(report.metadata().stream().anyMatch(entry ->
+                        entry.key().equals("premium_bypass_auth_server")
+                                && Boolean.TRUE.equals(entry.value())
+                                && entry.visible()),
+                "Support metadata should show the effective premium routing policy");
+    }
+
     private Path createProxyLayout(String logLine) throws Exception {
         Path dataDirectory = tempDir.resolve("plugins").resolve("veloauth");
         Files.createDirectories(dataDirectory);

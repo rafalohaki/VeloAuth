@@ -106,7 +106,7 @@ public final class CommandHelper {
 
         @Override
         public String toString() {
-            return "CommandInputs[player=" + player + ", args=" + Arrays.toString(args) + "]";
+            return "CommandInputs[player=" + player + ", args=<redacted>, argCount=" + args.length + "]";
         }
     }
 
@@ -119,6 +119,27 @@ public final class CommandHelper {
             return true;
         }
         return ctx.plugin().getConnectionManager().isPlayerOnAuthServer(player);
+    }
+
+    /**
+     * Permission gate for authentication commands. An authorized player with a matching active
+     * session no longer needs password commands even if a delayed transfer still leaves them on
+     * limbo. An authorized player whose session expired keeps the commands visible so recovery
+     * remains possible.
+     */
+    public static boolean isPlayerOnAuthServerAndNeedsAuthentication(
+            SimpleCommand.Invocation invocation, CommandContext ctx) {
+        if (!(invocation.source() instanceof Player player)) {
+            return true;
+        }
+        if (!isPlayerOnAuthServer(invocation, ctx)) {
+            return false;
+        }
+        String playerIp = PlayerAddressUtils.getPlayerIp(player);
+        boolean authorized = ctx.authCache().isPlayerAuthorized(player.getUniqueId(), playerIp);
+        boolean activeSession = ctx.authCache().hasActiveSession(
+                player.getUniqueId(), player.getUsername(), playerIp);
+        return !authorized || !activeSession;
     }
 
     /**
@@ -201,7 +222,7 @@ public final class CommandHelper {
 
         @Override
         public String toString() {
-            return "AdminCommandInputs[source=" + source + ", args=" + Arrays.toString(args) + "]";
+            return "AdminCommandInputs[source=" + source + ", args=<redacted>, argCount=" + args.length + "]";
         }
     }
 

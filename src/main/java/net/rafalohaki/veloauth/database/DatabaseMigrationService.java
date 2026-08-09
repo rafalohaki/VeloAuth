@@ -255,8 +255,14 @@ class DatabaseMigrationService {
 
     private boolean columnExists(java.sql.Connection connection, String tableName, String columnName) throws SQLException {
         java.sql.DatabaseMetaData metaData = connection.getMetaData();
+        MetadataScope scope = metadataScope(connection);
+        String resolvedTableName = findTableName(metaData, scope, tableName);
+        if (resolvedTableName == null) {
+            return false;
+        }
 
-        try (java.sql.ResultSet columns = metaData.getColumns(null, null, tableName, null)) {
+        try (java.sql.ResultSet columns = metaData.getColumns(
+                scope.catalog(), scope.schema(), resolvedTableName, null)) {
             while (columns.next()) {
                 String existingColumn = columns.getString("COLUMN_NAME");
                 if (existingColumn != null && existingColumn.equalsIgnoreCase(columnName)) {
@@ -276,15 +282,25 @@ class DatabaseMigrationService {
     }
 
     private boolean tableExists(java.sql.Connection connection, String tableName) throws SQLException {
-        try (java.sql.ResultSet tables = connection.getMetaData().getTables(null, null, null, null)) {
+        return findTableName(connection.getMetaData(), metadataScope(connection), tableName) != null;
+    }
+
+    private String findTableName(java.sql.DatabaseMetaData metaData, MetadataScope scope,
+                                 String tableName) throws SQLException {
+        try (java.sql.ResultSet tables = metaData.getTables(
+                scope.catalog(), scope.schema(), null, null)) {
             while (tables.next()) {
                 String existingTable = tables.getString("TABLE_NAME");
                 if (existingTable != null && existingTable.equalsIgnoreCase(tableName)) {
-                    return true;
+                    return existingTable;
                 }
             }
         }
-        return false;
+        return null;
+    }
+
+    private MetadataScope metadataScope(java.sql.Connection connection) throws SQLException {
+        return new MetadataScope(connection.getCatalog(), connection.getSchema());
     }
 
     private void createIndexesIfNotExists(ConnectionSource connectionSource) {
@@ -353,13 +369,17 @@ class DatabaseMigrationService {
     }
 
     private boolean indexExists(java.sql.Connection connection, String tableName, String indexName) throws SQLException {
-        return indexExists(connection.getMetaData(), tableName, indexName)
-                || indexExists(connection.getMetaData(), tableName.toUpperCase(Locale.ROOT), indexName)
-                || indexExists(connection.getMetaData(), tableName.toLowerCase(Locale.ROOT), indexName);
+        java.sql.DatabaseMetaData metaData = connection.getMetaData();
+        MetadataScope scope = metadataScope(connection);
+        String resolvedTableName = findTableName(metaData, scope, tableName);
+        return resolvedTableName != null
+                && indexExists(metaData, scope, resolvedTableName, indexName);
     }
 
-    private boolean indexExists(java.sql.DatabaseMetaData metaData, String tableName, String indexName) throws SQLException {
-        try (java.sql.ResultSet indexes = metaData.getIndexInfo(null, null, tableName, false, false)) {
+    private boolean indexExists(java.sql.DatabaseMetaData metaData, MetadataScope scope,
+                                String tableName, String indexName) throws SQLException {
+        try (java.sql.ResultSet indexes = metaData.getIndexInfo(
+                scope.catalog(), scope.schema(), tableName, false, false)) {
             while (indexes.next()) {
                 String existingIndex = indexes.getString("INDEX_NAME");
                 if (existingIndex != null && existingIndex.equalsIgnoreCase(indexName)) {
@@ -382,5 +402,8 @@ class DatabaseMigrationService {
     private record ColumnMigrationResult(boolean hasPremiumUuid, boolean hasTotpToken, boolean hasIssuedTime,
                                          boolean hasConflictMode, boolean hasConflictTimestamp,
                                          boolean hasOriginalNickname, boolean hasPreserveUuid) {
+    }
+
+    private record MetadataScope(String catalog, String schema) {
     }
 }

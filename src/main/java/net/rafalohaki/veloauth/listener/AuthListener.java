@@ -43,6 +43,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 /**
  * Listener eventów autoryzacji VeloAuth.
@@ -52,8 +53,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <ol>
  *   <li>PreLoginEvent → sprawdź premium i force online mode</li>
  *   <li>LoginEvent → sprawdź brute force</li>
- *   <li>PostLoginEvent → kieruj na auth server lub backend</li>
- *   <li>ServerPreConnectEvent → blokuj nieautoryzowane połączenia z backend</li>
+ *   <li>PostLoginEvent → ustanów autoryzację premium lub stan offline</li>
+ *   <li>ServerPreConnectEvent → zastosuj routing auth/backend i blokuj nieautoryzowany backend</li>
  *   <li>ServerConnectedEvent → loguj transfery</li>
  * </ol>
  * 
@@ -227,17 +228,10 @@ public class AuthListener {
             return null;
         }
 
-        // Floodgate has already authenticated the Bedrock connection and registered it in its
-        // live API during the encrypted handshake. Force offline mode before premium resolution,
-        // especially for linked accounts whose Java username may exist in Mojang. This check does
-        // not grant backend access; routing still requires UUID confirmation from Floodgate.
-        if (isFloodgatePreLogin(username)) {
-            logger.info(AUTH_MARKER,
-                    "Floodgate player {} detected during pre-login - skipping Mojang resolution",
-                    username);
-            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-            releasePendingLogin(pendingLoginKey, pendingLoginAttempt);
-            return null;
+        if (settings.isFloodgateIntegrationEnabled()) {
+            return EventTask.resumeWhenComplete(handleFloodgateAwarePreLoginAsync(event, username)
+                    .whenComplete((result, throwable) ->
+                            releasePendingLogin(pendingLoginKey, pendingLoginAttempt)));
         }
 
         if (!settings.isPremiumCheckEnabled()) {
@@ -249,6 +243,38 @@ public class AuthListener {
 
         return EventTask.resumeWhenComplete(handlePremiumDetectionAsync(event, username)
                 .whenComplete((result, throwable) -> releasePendingLogin(pendingLoginKey, pendingLoginAttempt)));
+    }
+
+    private CompletableFuture<Void> handleFloodgateAwarePreLoginAsync(
+            PreLoginEvent event, String username) {
+        return isFloodgatePreLoginAsync(username)
+                .thenCompose(floodgatePlayer -> {
+                    // Floodgate has already authenticated the Bedrock connection and registered
+                    // it during the encrypted handshake. This scan can be O(n), so it stays off
+                    // the Velocity event thread. Backend bypass still requires UUID confirmation.
+                    if (Boolean.TRUE.equals(floodgatePlayer)) {
+                        logger.info(AUTH_MARKER,
+                                "Floodgate player {} detected during pre-login - skipping Mojang resolution",
+                                username);
+                        event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    if (!settings.isPremiumCheckEnabled()) {
+                        logger.debug("Premium check disabled in config - forcing offline mode for {}", username);
+                        event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    return handlePremiumDetectionAsync(event, username);
+                });
+    }
+
+    private CompletableFuture<Boolean> isFloodgatePreLoginAsync(String username) {
+        if (!settings.isFloodgateIntegrationEnabled()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        return CompletableFuture.supplyAsync(
+                () -> isFloodgatePreLogin(username),
+                VirtualThreadExecutorProvider.getVirtualExecutor());
     }
 
     private PendingLoginAttempt acquirePendingLogin(String key, InboundConnection connection) {
@@ -463,14 +489,21 @@ public class AuthListener {
         }
 
         UUID verifiedPremiumUuid = event.getOriginalProfile().getId();
-        if (verifiedPremiumUuid == null || isFloodgatePreLogin(event.getUsername())
-                || isBedrockProfile(verifiedPremiumUuid)) {
+        if (verifiedPremiumUuid == null || isBedrockProfile(verifiedPremiumUuid)) {
             return null;
         }
 
         String bindingKey = profileBindingKey(event.getUsername(), event.getConnection());
-        CompletableFuture<Void> reconciliation = databaseManager
-                .reconcileVerifiedPremiumProfile(event.getUsername(), verifiedPremiumUuid)
+        CompletableFuture<Void> reconciliation = isFloodgatePreLoginAsync(event.getUsername())
+                .thenCompose(floodgatePlayer -> Boolean.TRUE.equals(floodgatePlayer)
+                        ? CompletableFuture.completedFuture(null)
+                        : reconcileVerifiedProfile(event, verifiedPremiumUuid, bindingKey));
+        return EventTask.resumeWhenComplete(reconciliation);
+    }
+
+    private CompletableFuture<Void> reconcileVerifiedProfile(
+            GameProfileRequestEvent event, UUID verifiedPremiumUuid, String bindingKey) {
+        return databaseManager.reconcileVerifiedPremiumProfile(event.getUsername(), verifiedPremiumUuid)
                 .handle((dbResult, throwable) -> {
                     if (throwable != null || dbResult == null || dbResult.isDatabaseError()
                             || dbResult.getValue() == null) {
@@ -487,7 +520,6 @@ public class AuthListener {
                     rejectedProfileBindings.invalidate(bindingKey);
                     return null;
                 });
-        return EventTask.resumeWhenComplete(reconciliation);
     }
 
     private boolean isBedrockProfile(UUID profileUuid) {
@@ -694,7 +726,8 @@ public class AuthListener {
      * <p>
      * FLOW dla nowych graczy (pierwszego połączenia):
      * - Velocity próbuje połączyć z pierwszym serwerem z listy try (np. 2b2t)
-     * - My przechwytujemy i przekierowujemy na auth server
+     * - Domyślnie przechwytujemy i przekierowujemy na auth server
+     * - Mojang-verified premium może zachować target, gdy operator włączy jawny opt-in
      * - Po połączeniu z auth server, onServerConnected uruchomi auto-transfer
      * <p>
      * ASYNC: Returns {@link EventTask} (or null for synchronous fast-paths) to avoid
@@ -713,8 +746,8 @@ public class AuthListener {
             logger.debug("ServerPreConnectEvent for player {} -> server {}",
                     player.getUsername(), targetServerName);
 
-            if (handleFirstConnection(event, player, previousServer, targetServerName)) {
-                return null;
+            if (previousServer == null) {
+                return handleFirstConnection(event, player, targetServerName);
             }
 
             // ✅ JEŚLI TO AUTH SERVER - SPRAWDŹ DODATKOWO AUTORYZACJĘ
@@ -732,49 +765,99 @@ public class AuthListener {
         }
     }
 
-    private boolean handleFirstConnection(ServerPreConnectEvent event, Player player,
-                                          RegisteredServer previousServer, String targetServerName) {
-        // ServerPreConnectEvent#getPreviousServer() is the stable source of truth for
-        // whether this is an initial connection. Player#getCurrentServer() may be reset
-        // during server kicks before this event finishes processing.
-        if (previousServer == null) {
-            String authServerName = settings.getAuthServerName();
-            
-            // Jeśli cel to już auth server - pozwól
-            if (targetServerName.equals(authServerName)) {
-                logger.debug("First connection {} -> auth server - allowing", player.getUsername());
-                return true;
-            }
+    private EventTask handleFirstConnection(ServerPreConnectEvent event, Player player,
+                                            String targetServerName) {
+        String authServerName = settings.getAuthServerName();
 
-            // ✅ BEDROCK/FLOODGATE: Skip auth server for Bedrock players.
-            // Floodgate already authenticated the player via Xbox Live during the handshake
-            // phase, before this event fires. Redirecting to limbo causes
-            // ClientboundLevelChunkWithLightPacket translation failures in Geyser.
-            if (shouldBypassAuthServer(player)) {
-                logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
-                        player.getUsername(), targetServerName);
-                return true;
+        if (shouldBypassAuthServerForPremium(player)) {
+            if (targetServerName.equals(authServerName)) {
+                return EventTask.resumeWhenComplete(selectInitialBackendAsync(
+                        event, player, () -> shouldBypassAuthServerForPremium(player),
+                        PREMIUM_MARKER, "Premium"));
             }
-            
-            // ✅ FORCED HOSTS: Zapamiętaj oryginalny target serwer przed przekierowaniem
-            // Velocity resolved forced-hosts PRZED tym eventem, więc targetServerName
-            // zawiera poprawny serwer z [forced-hosts] lub [servers.try]
-            connectionManager.setForcedHostTarget(player.getUniqueId(), targetServerName);
-            
-            // Przekieruj na auth server zamiast backend
-            Optional<RegisteredServer> authServer = plugin.getServer().getServer(authServerName);
-            if (authServer.isPresent()) {
-                logger.debug("First connection {} -> {} - redirecting to auth server (forced host target saved)",
-                        player.getUsername(), targetServerName);
-                event.setResult(ServerPreConnectEvent.ServerResult.allowed(authServer.get()));
-            } else {
-                logger.error("Auth server '{}' not found! Player {} cannot connect.", 
-                        authServerName, player.getUsername());
-                event.setResult(ServerPreConnectEvent.ServerResult.denied());
-            }
-            return true;
+            logger.info(PREMIUM_MARKER, "Premium player {} -> {} (skipping auth server)",
+                    player.getUsername(), targetServerName);
+            return null;
         }
-        return false;
+
+        // ✅ BEDROCK/FLOODGATE: Skip auth server for Bedrock players.
+        // Floodgate already authenticated the player via Xbox Live during the handshake
+        // phase, before this event fires. Redirecting to limbo causes
+        // ClientboundLevelChunkWithLightPacket translation failures in Geyser.
+        if (shouldBypassAuthServer(player)) {
+            if (targetServerName.equals(authServerName)) {
+                return EventTask.resumeWhenComplete(selectInitialBackendAsync(
+                        event, player, () -> shouldBypassAuthServer(player),
+                        AUTH_MARKER, "Floodgate"));
+            }
+            logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
+                    player.getUsername(), targetServerName);
+            return null;
+        }
+
+        // Jeśli cel to już auth server - pozwól
+        if (targetServerName.equals(authServerName)) {
+            logger.debug("First connection {} -> auth server - allowing", player.getUsername());
+            return null;
+        }
+
+        // ✅ FORCED HOSTS: Zapamiętaj oryginalny target serwer przed przekierowaniem
+        // Velocity resolved forced-hosts PRZED tym eventem, więc targetServerName
+        // zawiera poprawny serwer z [forced-hosts] lub [servers.try]
+        connectionManager.setForcedHostTarget(player.getUniqueId(), targetServerName);
+
+        // Przekieruj na auth server zamiast backend
+        Optional<RegisteredServer> authServer = plugin.getServer().getServer(authServerName);
+        if (authServer.isPresent()) {
+            logger.debug("First connection {} -> {} - redirecting to auth server (forced host target saved)",
+                    player.getUsername(), targetServerName);
+            event.setResult(ServerPreConnectEvent.ServerResult.allowed(authServer.get()));
+        } else {
+            logger.error("Auth server '{}' not found! Player {} cannot connect.",
+                    authServerName, player.getUsername());
+            event.setResult(ServerPreConnectEvent.ServerResult.denied());
+        }
+        return null;
+    }
+
+    private boolean shouldBypassAuthServerForPremium(Player player) {
+        return settings.isPremiumBypassAuthServerEnabled() && player.isOnlineMode();
+    }
+
+    private CompletableFuture<Void> selectInitialBackendAsync(
+            ServerPreConnectEvent event, Player player, BooleanSupplier bypassStillAllowed,
+            Marker marker, String bypassType) {
+        return connectionManager.findAvailableBackendServerForInitialConnectionAsync()
+                .handle((backend, throwable) -> {
+                    if (throwable != null) {
+                        logger.error(marker, "Failed to select initial backend for {} player {}",
+                                bypassType, player.getUsername(), throwable);
+                        event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                    } else if (!player.isActive() || !isInitialBypassStillAllowed(bypassStillAllowed)) {
+                        event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                    } else if (backend != null && backend.isPresent()) {
+                        RegisteredServer target = backend.get();
+                        logger.info(marker, "{} player {} -> {} (skipping auth server)",
+                                bypassType, player.getUsername(), target.getServerInfo().getName());
+                        event.setResult(ServerPreConnectEvent.ServerResult.allowed(target));
+                    } else {
+                        logger.error(marker,
+                                "No backend available for {} player {} while bypassing auth server",
+                                bypassType, player.getUsername());
+                        event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                    }
+                    return null;
+                });
+    }
+
+    private boolean isInitialBypassStillAllowed(BooleanSupplier bypassStillAllowed) {
+        try {
+            return bypassStillAllowed.getAsBoolean();
+        } catch (RuntimeException exception) {
+            logger.error(SECURITY_MARKER,
+                    "Failed to revalidate auth-server bypass after backend selection", exception);
+            return false;
+        }
     }
 
     private boolean handleAuthServerConnection(ServerPreConnectEvent event, Player player, String targetServerName) {

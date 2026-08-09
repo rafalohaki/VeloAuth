@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -292,5 +293,22 @@ class VeloAuthIntegrationTest {
         assertFalse(plugin.isInitialized(), "Initialization must not flip back to ready after shutdown started");
         assertFalse(plugin.getInitializationFuture().isDone(),
                 "Initialization future should not complete normally after shutdown has started");
+    }
+
+    @Test
+    void testFinalizeInitialization_bStatsFailure_shouldStillMarkPluginReady() throws Exception {
+        Metrics.Factory failingMetricsFactory = mock(Metrics.Factory.class);
+        when(failingMetricsFactory.make(any(), anyInt()))
+                .thenThrow(new IllegalStateException("metrics service unavailable"));
+        VeloAuth candidate = new VeloAuth(
+                proxyServer, logger, java.nio.file.Path.of("."), failingMetricsFactory);
+        java.lang.reflect.Method finalizeMethod = VeloAuth.class
+                .getDeclaredMethod("finalizeInitialization", long.class);
+        finalizeMethod.setAccessible(true);
+
+        assertDoesNotThrow(() -> finalizeMethod.invoke(candidate, 25L));
+        assertTrue(candidate.isInitialized(), "Optional metrics must not block authentication startup");
+        assertTrue(candidate.getInitializationFuture().isDone());
+        assertFalse(candidate.getInitializationFuture().isCompletedExceptionally());
     }
 }

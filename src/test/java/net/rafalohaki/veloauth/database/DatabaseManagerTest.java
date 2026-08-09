@@ -133,6 +133,52 @@ class DatabaseManagerTest {
     }
 
     @Test
+    void databaseConfigToString_shouldNeverExposeJdbcUrl() {
+        DatabaseConfig sensitiveConfig = DatabaseConfig.forLocalDatabase(
+                "H2", "support-report;PASSWORD=do-not-log-this");
+
+        String rendered = sensitiveConfig.toString();
+
+        assertFalse(rendered.contains("do-not-log-this"));
+        assertFalse(rendered.contains("jdbc:h2:"));
+        assertTrue(rendered.contains("jdbcUrl='<redacted>'"));
+    }
+
+    @Test
+    void registerPlayerIfAbsent_existingOwnerShouldReturnFalseWithoutDatabaseError() throws Exception {
+        JdbcAuthDao jdbcAuthDao = mock(JdbcAuthDao.class);
+        RegisteredPlayer player = player(
+                "RegisterUser", "$2a$10$offlinehashvalueofflinehashvalueofflinehashval", null);
+        when(jdbcAuthDao.insertPlayerIfAbsent(player)).thenReturn(false);
+
+        manager.setConnectedForTesting(true);
+        manager.setJdbcAuthDaoForTesting(jdbcAuthDao);
+
+        DatabaseManager.DbResult<Boolean> result = manager.registerPlayerIfAbsent(player).join();
+
+        assertFalse(result.isDatabaseError());
+        assertEquals(Boolean.FALSE, result.getValue());
+    }
+
+    @Test
+    void registerPlayerIfAbsent_sqlExceptionShouldReturnGenericDatabaseError() throws Exception {
+        JdbcAuthDao jdbcAuthDao = mock(JdbcAuthDao.class);
+        RegisteredPlayer player = player(
+                "RegisterUser", "$2a$10$offlinehashvalueofflinehashvalueofflinehashval", null);
+        when(jdbcAuthDao.insertPlayerIfAbsent(player))
+                .thenThrow(new SQLException("duplicate details with secret values"));
+
+        manager.setConnectedForTesting(true);
+        manager.setJdbcAuthDaoForTesting(jdbcAuthDao);
+
+        DatabaseManager.DbResult<Boolean> result = manager.registerPlayerIfAbsent(player).join();
+
+        assertTrue(result.isDatabaseError());
+        assertEquals(messages.get("database.error"), result.getErrorMessage());
+        assertFalse(result.getErrorMessage().contains("secret values"));
+    }
+
+    @Test
     void isPremium_runtimeExceptionShouldReturnGenericDatabaseError() {
         PremiumUuidDao premiumUuidDao = mock(PremiumUuidDao.class);
         try {

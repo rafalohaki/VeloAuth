@@ -131,6 +131,41 @@ class CommandFlowFixesTest {
     }
 
     @Test
+    void testCommandInputs_toString_shouldNotExposePasswordArguments() {
+        CommandHelper.CommandInputs inputs = new CommandHelper.CommandInputs(
+                player, new String[]{"superSecretPassword", "123456"});
+
+        String rendered = inputs.toString();
+
+        assertFalse(rendered.contains("superSecretPassword"));
+        assertFalse(rendered.contains("123456"));
+        assertTrue(rendered.contains("argCount=2"));
+    }
+
+    @Test
+    void testLoginAndRegisterPermissions_authorizedActiveSessionOnAuthServer_shouldBeHidden() {
+        RegisteredPlayer registeredPlayer = createRegisteredPlayer(
+                TEST_PLAYER_NAME, playerUuid, hash("secret123"));
+        when(connectionManager.isPlayerOnAuthServer(player)).thenReturn(true);
+        authCache.addAuthorizedPlayer(playerUuid, CachedAuthUser.fromRegisteredPlayer(registeredPlayer, false));
+        authCache.startSession(playerUuid, TEST_PLAYER_NAME, TEST_IP);
+
+        assertFalse(new LoginCommand(inlineContext).hasPermission(invocation(player)));
+        assertFalse(new RegisterCommand(inlineContext).hasPermission(invocation(player)));
+    }
+
+    @Test
+    void testLoginAndRegisterPermissions_authorizedButSessionExpired_shouldRemainVisible() {
+        RegisteredPlayer registeredPlayer = createRegisteredPlayer(
+                TEST_PLAYER_NAME, playerUuid, hash("secret123"));
+        when(connectionManager.isPlayerOnAuthServer(player)).thenReturn(true);
+        authCache.addAuthorizedPlayer(playerUuid, CachedAuthUser.fromRegisteredPlayer(registeredPlayer, false));
+
+        assertTrue(new LoginCommand(inlineContext).hasPermission(invocation(player)));
+        assertTrue(new RegisterCommand(inlineContext).hasPermission(invocation(player)));
+    }
+
+    @Test
     void testChangePasswordCommand_WhenLockHeld_ShowsInProgressMessage() {
         ChangePasswordCommand command = new ChangePasswordCommand(inlineContext);
         assertTrue(inlineContext.tryAcquireCommandLock(playerUuid));
@@ -225,7 +260,7 @@ class CommandFlowFixesTest {
     void testRegisterCommand_WhenPostAuthFlowFails_DoesNotSendSuccess() {
         databaseManager.setFindResult(TEST_PLAYER_NAME,
                 CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
-        databaseManager.enqueueSavePlayerResult(DatabaseManager.DbResult.success(true));
+        databaseManager.enqueueRegistrationResult(DatabaseManager.DbResult.success(true));
         databaseManager.setPremiumResult(TEST_PLAYER_NAME,
                 CompletableFuture.completedFuture(DatabaseManager.DbResult.databaseError("premium lookup failed")));
 
@@ -237,6 +272,23 @@ class CommandFlowFixesTest {
         List<String> sentMessages = capturedTexts(messagesCaptor);
         assertFalse(sentMessages.contains(messages.get("auth.register.success")));
         assertTrue(sentMessages.contains(messages.get("error.database.query")));
+        assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP));
+    }
+
+    @Test
+    void testRegisterCommand_ConcurrentNicknameOwnerCreated_ShowsAlreadyRegistered() {
+        databaseManager.setFindResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
+        databaseManager.enqueueRegistrationResult(DatabaseManager.DbResult.success(false));
+
+        RegisterCommand command = new RegisterCommand(inlineContext);
+        command.execute(invocation(player, "secret123", "secret123"));
+
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
+        List<String> sentMessages = capturedTexts(messagesCaptor);
+        assertTrue(sentMessages.contains(messages.get("auth.register.already_registered")));
+        assertFalse(sentMessages.contains(messages.get("auth.register.success")));
         assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP));
     }
 
@@ -534,6 +586,8 @@ class CommandFlowFixesTest {
         private final Map<String, CompletableFuture<DbResult<Boolean>>> premiumResults = new ConcurrentHashMap<>();
         private final ConcurrentLinkedDeque<CompletableFuture<DbResult<Boolean>>> savePlayerResults =
                 new ConcurrentLinkedDeque<>();
+        private final ConcurrentLinkedDeque<CompletableFuture<DbResult<Boolean>>> registrationResults =
+                new ConcurrentLinkedDeque<>();
         private CompletableFuture<DbResult<Boolean>> defaultSavePlayerResult =
                 CompletableFuture.completedFuture(DbResult.success(true));
         private CompletableFuture<DbResult<Boolean>> savePremiumUuidResult =
@@ -569,6 +623,10 @@ class CommandFlowFixesTest {
 
         void enqueueSavePlayerResult(DbResult<Boolean> result) {
             savePlayerResults.add(CompletableFuture.completedFuture(result));
+        }
+
+        void enqueueRegistrationResult(DbResult<Boolean> result) {
+            registrationResults.add(CompletableFuture.completedFuture(result));
         }
 
         void setSavePremiumUuidResult(CompletableFuture<DbResult<Boolean>> result) {
@@ -609,6 +667,14 @@ class CommandFlowFixesTest {
         public CompletableFuture<DbResult<Boolean>> savePlayer(RegisteredPlayer player) {
             CompletableFuture<DbResult<Boolean>> queuedResult = savePlayerResults.poll();
             return queuedResult != null ? queuedResult : defaultSavePlayerResult;
+        }
+
+        @Override
+        public CompletableFuture<DbResult<Boolean>> registerPlayerIfAbsent(RegisteredPlayer player) {
+            CompletableFuture<DbResult<Boolean>> queuedResult = registrationResults.poll();
+            return queuedResult != null
+                    ? queuedResult
+                    : CompletableFuture.completedFuture(DbResult.success(true));
         }
 
         @Override

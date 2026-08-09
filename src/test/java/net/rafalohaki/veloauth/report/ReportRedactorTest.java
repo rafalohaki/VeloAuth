@@ -113,6 +113,42 @@ class ReportRedactorTest {
     }
 
     @Test
+    void redact_connectionParameters_redactsSecretParametersAndPreservesDiagnostics() {
+        String input = "  connection-parameters: \"sslmode=require&sslpassword=p%40ss%3Aword&applicationName=VeloAuth\"\n";
+
+        String result = ReportRedactor.redact(input);
+
+        assertFalse(result.contains("p%40ss%3Aword"), () -> "SSL password leaked in: " + result);
+        assertTrue(result.contains("sslpassword=<redacted>"), () -> "Expected redacted parameter, got: " + result);
+        assertTrue(result.contains("sslmode=require"), () -> "SSL mode was modified: " + result);
+        assertTrue(result.contains("applicationName=VeloAuth"), () -> "Non-secret parameter was modified: " + result);
+    }
+
+    @Test
+    void redact_connectionUrlQuery_redactsCaseInsensitiveSecretParameters() {
+        String input = "connection-url: \"jdbc:postgresql://db.example/veloauth?sslmode=require&SSLPassword=topSecret&client_secret=clientSecretValue\"\n";
+
+        String result = ReportRedactor.redact(input);
+
+        assertFalse(result.contains("topSecret"));
+        assertFalse(result.contains("clientSecretValue"));
+        assertTrue(result.contains("SSLPassword=<redacted>"));
+        assertTrue(result.contains("client_secret=<redacted>"));
+        assertTrue(result.contains("sslmode=require"));
+    }
+
+    @Test
+    void redact_connectionUrlPasswordContainingAtSign_redactsCompleteUserInfo() {
+        String input = "connection-url: \"postgresql://user:p@ss@db.example:5432/veloauth\"\n";
+
+        String result = ReportRedactor.redact(input);
+
+        assertFalse(result.contains("user:p@ss@"));
+        assertFalse(result.contains("ss@db.example"));
+        assertTrue(result.contains("postgresql://<redacted>@db.example:5432/veloauth"));
+    }
+
+    @Test
     void redact_nonSecretValues_preserved() {
         String input = "  server-name: limbo\n  port: 3306\n  debug-enabled: true\n";
 
@@ -200,6 +236,19 @@ class ReportRedactorTest {
         assertFalse(result.contains("secret-token"));
         assertFalse(result.contains("user:pass@"));
         assertTrue(result.contains("<redacted>"));
+    }
+
+    @Test
+    void redactLog_jdbcSslPasswordAndAccessToken_replaced() {
+        String input = "jdbc:postgresql://db/veloauth?sslpassword=jdbcSecret&accessToken=apiSecret sslmode=require";
+
+        String result = ReportRedactor.redactLog(input);
+
+        assertFalse(result.contains("jdbcSecret"));
+        assertFalse(result.contains("apiSecret"));
+        assertTrue(result.contains("sslpassword=<redacted>"));
+        assertTrue(result.contains("accessToken=<redacted>"));
+        assertTrue(result.contains("sslmode=require"));
     }
 
     @Test

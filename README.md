@@ -19,29 +19,29 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 ## Key Features
 
 - 🔒 **Intelligent Nickname Protection** - Premium nicknames are reserved unless already registered by cracked players
-- ⚡ **Premium Auto-Login** - Mojang account owners skip authentication automatically
+- ⚡ **Premium Auto-Login** - Mojang account owners skip password entry after Velocity verifies their session; auth/limbo passthrough is a separate opt-in
 - 🔄 **Automatic Nickname Change Detection** - Detects when a premium player renames their Mojang account and updates the database record automatically
-- 🛡️ **Secure Offline Auth** - BCrypt password hashing with brute-force protection
+- 🛡️ **Secure Offline Auth** - BCrypt password hashing, brute-force protection, and atomic first-owner registration enforced by the database
 - 📱 **Optional Floodgate Support** - Bedrock and linked Floodgate accounts are detected before Mojang resolution; only UUIDs confirmed by Floodgate can bypass the auth server
 - 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
-- 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are completely hidden from tab-completion once the player is logged in
+- 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are hidden while authorization and the matching login session are active; expired sessions expose the recovery commands again
 - 🚀 **High Performance** - Three-layer premium resolution cache: in-memory → database → external API, with configurable positive and negative TTLs
 - 🔐 **Optional 2FA (TOTP)** - Opt-in RFC 6238 second factor compatible with Google Authenticator, Authy, Aegis. See [2FA.md](2FA.md) for the operator + player handbook.
 - 🔄 **Conflict Resolution** - Smart handling of premium/cracked nickname conflicts
 - 📊 **Admin Tools** - Complete conflict management with `/vauth conflicts`
 - 🗄️ **Multi-Database** - MySQL, PostgreSQL, H2, SQLite
 - 🌍 **17 Languages** - EN, PL, DE, FR, RU, TR, SI, FI, ZH_CN, ZH_HK, JA, HI, VI, KO, TH, ID, PT_BR
-- 🔄 **LimboAuth Compatible** - 100% database compatibility (no migration needed)
-- 📢 **Discord Alerts** - Webhook notifications for security events
+- 🔄 **LimboAuth Schema Compatible** - existing accounts are upgraded in place with additive, automatic schema changes; no manual UUID rewrite
+- 📢 **Discord Alerts** - Webhook notifications for security events; failed deliveries are retried instead of consuming the alert cooldown
 - 🧵 **Virtual Threads** - Built on Java 21 for maximum performance
-- 📈 **bStats Analytics** - Anonymous usage statistics via bStats
+- 📈 **bStats Analytics** - Anonymous usage statistics via bStats; metrics startup is isolated from authentication availability
 
 ## When to use VeloAuth
 
 - **You run a Velocity proxy** with one or more backend servers and need authentication at the proxy layer (not per-backend).
 - **You accept both premium and cracked players** and need automatic, fail-secure routing — premium players skip `/login`, cracked players go through BCrypt-hashed registration.
 - **You already use LimboAuth** and want to migrate without losing data — VeloAuth reads the same database schema.
-- **You want predictable performance** — premium status is resolved through a three-layer cache (in-memory → DB → Mojang/Ashcon API), virtual-thread I/O, and zero blocking on Velocity event threads.
+- **You want predictable performance** — premium status is resolved through a three-layer cache (in-memory → DB → Mojang/Ashcon API), while HTTP, Floodgate registry scans, database calls and backend pings stay off Velocity event threads.
 
 If you only run a single backend server (Paper/Spigot/Folia) without a proxy, you don't need VeloAuth — use a backend-side auth plugin instead.
 
@@ -55,6 +55,7 @@ VeloAuth ships three sensible operating modes. Pick one based on how strict you 
 premium:
   check-enabled: true
   allow-cracked-on-premium-nicks: false
+  bypass-auth-server: false
 ```
 
 - **What you get:** premium players are verified by Mojang and auto-login (no `/login` prompt); new accounts use their Mojang UUID, while LimboAuth-migrated `/premium` accounts keep their historical backend UUID so existing progress remains attached; cracked players go through `/register` + BCrypt; **premium nicknames are reserved** for their Mojang owners.
@@ -94,15 +95,26 @@ premium:
 
 There is no profile that "gives premium owners premium UUID *and* lets cracked clients on the same nickname through" — that requires a Velocity API feature that does not exist yet.
 
-## Changelog
+`premium.bypass-auth-server` is independent from the three nickname-protection profiles. Keep it
+`false` to preserve the established flow where every Java connection briefly visits auth/limbo.
+Set it to `true` only if Mojang-verified Java players should connect directly to Velocity's
+forced-host/`try` backend target. Cracked players still use auth/limbo, and resolver/cache/name
+matches never grant this bypass.
 
-See [CHANGELOG.md](CHANGELOG.md) for release-by-release notes, upgrade instructions, and breaking-behavior callouts.
+## Architecture and releases
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) documents trust boundaries, event flow, persistence,
+  configuration reload semantics and upgrade constraints.
+- Published release notes and downloadable artifacts are available on
+  [GitHub Releases](https://github.com/rafalohaki/VeloAuth/releases) and
+  [Modrinth](https://modrinth.com/plugin/veloauth).
 
 ## Requirements
 
 - **Java 21 or newer**
 - **Velocity proxy** (3.5.x; VeloAuth currently targets the 3.5 API line)
-- **Limbo server**: NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or any other
+- **External auth/limbo server**: NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo,
+  hpfxd/Limbo, or another Velocity-compatible server. Embedded limbo is not part of the current runtime.
 - **Database**: MySQL, PostgreSQL, H2, or SQLite
 
 ## Quick Setup
@@ -131,12 +143,16 @@ try = ["lobby", "survival"]  # Order matters. Do NOT put 'limbo' here.
 
 [forced-hosts]
 # VeloAuth fully respects Velocity's forced hosts! 
-# Players connecting via this IP will be sent to limbo to login, 
-# and then seamlessly transferred to 'survival' instead of 'lobby'.
+# With the default premium routing, players connecting via this host visit limbo
+# and are then transferred to 'survival'. Verified premium players can keep the
+# direct 'survival' target only when premium.bypass-auth-server is explicitly true.
 "survival.example.com" = ["survival"] 
 ```
 
-**Important:** The `try` configuration controls where authenticated players are redirected by default. VeloAuth automatically skips the `limbo` server and selects the first available backend server, **unless** the player used a `forced-host` domain, in which case they are natively routed to their intended destination!
+**Important:** Keep the auth server out of `try`. VeloAuth filters it from backend fallback and
+preserves a forced-host target across the default auth flow. With premium passthrough enabled, a
+Mojang-verified player keeps Velocity's original backend target; if Velocity initially selected the
+auth server, VeloAuth asynchronously selects the first reachable non-auth backend.
 
 ### VeloAuth Config
 
@@ -159,16 +175,44 @@ auth-server:
 # GC pause or warmup — raise it (e.g. 5000) so they aren't flagged offline.
 # connection:
 #   ping-timeout-ms: 3000
+
+# Optional premium passthrough. Missing key means false, so existing configs keep
+# their current routing after an upgrade. No database migration is involved.
+premium:
+  bypass-auth-server: false
 ```
+
+With `premium.bypass-auth-server: true`, only a connection whose final
+`Player#isOnlineMode()` is true skips auth/limbo. This is an opt-in resource trade-off: bots using
+valid paid accounts can reach backend resources directly. `/vauth reload` applies this core
+premium routing flag immediately; an invalid reload leaves the previous valid configuration active.
+
+#### Reload and restart behavior
+
+`/vauth reload` parses and validates an unpublished configuration candidate first. If config
+validation fails, all previously active **configuration values** remain in use. Language bundles
+are reloaded as a separate step and are not part of the same transaction; they may refresh even
+when config validation fails. Conversely, if config publication succeeds but language reload
+fails, the command reports failure although the new hot-reloadable config values may already be
+live. Removing `premium.allow-cracked-on-premium-nicks` or `premium.bypass-auth-server` from a
+valid config restores the safe `false` default.
+
+The following values are intended to apply immediately: premium core routing flags, BCrypt cost,
+password length, registration IP limit, debug, report and language.
+Infrastructure captured during startup — database/pool, auth-server topology, premium-resolver
+limits and sources, Floodgate integration, connection tuning, password complexity policy,
+cache/session/brute-force lifetimes, audit retention and 2FA pending-store settings — requires a
+full proxy restart. When in doubt, restart the proxy after
+editing infrastructure settings; `/vauth reload` logs the effective boundary.
 
 #### Diagnostic report (`/vauth report`)
 
 `/vauth report` generates a diagnostic bundle and uploads it to [mclo.gs](https://mclo.gs) so you can share it with support. The report contains:
 
-- **VeloAuth `config.yml`** — secrets redacted (`password`, `webhook-url`, `ssl-password`, `forwarding-secret`, connection-URL credentials → `<redacted>`)
+- **VeloAuth `config.yml`** — secrets redacted (`password`/`passwd`, webhook URLs, SSL passwords, API/access tokens, client secrets, forwarding secrets and connection-URL/query credentials → `<redacted>`)
 - **`velocity.toml`** — secrets redacted (same redaction rules)
 - **Recent proxy logs (opt-in)** — omitted by default because logs can contain IPs, chat and third-party secrets. With `include-logs: true`, the tail of `logs/latest.log` is capped at 10 MiB and passed through local best-effort redaction before upload.
-- **Metadata** — VeloAuth/Velocity/Java versions, online-mode, server count, database type, ping timeout, premium-check settings (visible); auth server name, try-list and backend names (hidden, without backend addresses).
+- **Metadata** — VeloAuth/Velocity/Java versions, online-mode, server count, database type, ping timeout and effective premium routing flags (visible); auth server name, try-list and backend names (hidden, without backend addresses).
 
 ```yaml
 report:
@@ -264,7 +308,7 @@ Install Floodgate on the Velocity proxy and set Geyser's `auth-type` to `floodga
 Bedrock handling is deliberately split into two checks:
 
 1. During `PreLoginEvent`, a live Floodgate player (including a linked Java account) is forced into offline mode and never queried against Mojang. This prevents linked Bedrock users from accidentally entering the Java-premium handshake.
-2. Auth-server bypass is granted only after Floodgate confirms the final player UUID. A Java/cracked client cannot obtain bypass merely by copying the configured prefix.
+2. Auth-server bypass is granted only after Floodgate confirms the final player UUID. A Java/cracked client cannot obtain bypass merely by copying the configured prefix. This check also applies when Velocity's initial target is the auth server; a confirmed Floodgate player is sent to a reachable non-auth forced-host/`try` backend or denied fail-secure when none is available.
 
 With `bypass-auth-server: false`, Floodgate identities are still kept out of Mojang reconciliation, but they follow the normal VeloAuth auth-server flow. With it enabled, Bedrock players go directly to the forced-host/`try` target selected by Velocity.
 
@@ -284,15 +328,47 @@ alerts:
   alert-cooldown-minutes: 30    # minimum gap between two alerts
 ```
 
+The cooldown begins only after Discord accepts the webhook. A timeout, rejected request or executor
+failure leaves the alert eligible for retry; only one delivery attempt can be in flight at a time.
+
 ### Database Config
 
-Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
+Supported: H2 (default, local), SQLite (local), MySQL and PostgreSQL. Remote databases use HikariCP;
+local databases use direct JDBC. A minimal PostgreSQL configuration is:
+
+```yaml
+database:
+  storage-type: POSTGRESQL
+  hostname: db.example.com
+  port: 5432
+  database: veloauth
+  user: veloauth
+  password: "replace-me"
+  connection-pool-size: 20
+  postgresql:
+    ssl-enabled: true
+    ssl-mode: "require"
+```
+
+Prefer the structured fields above. If `connection-url` is used, put query parameters in
+`connection-parameters`; credentials and SSL secrets are redacted from `/vauth report`. Always
+back up the database before changing storage type, importing LimboAuth data or upgrading a release
+that contains schema changes.
+
+H2 and SQLite retain their historical paths under `./data` relative to the proxy working directory.
+VeloAuth creates the missing parent directory on a fresh installation; it does not relocate or
+rename an existing local database during an upgrade. Registration uses an insert-only database
+operation, so two concurrent proxies/clients cannot replace the first account owner. Normal
+authenticated account updates still use UPSERT, with duplicate-race recovery in a fresh transaction
+for PostgreSQL compatibility and a bounded retry for standard transaction deadlocks/serialization
+failures. Migration metadata is limited to the active catalog/schema, so unrelated tables in another
+PostgreSQL schema cannot suppress an additive migration.
 
 ## Player Commands
 
 | Command | Description | Restrictions |
 |---------|-------------|--------------|
-| `/register <password> <confirm>` | Create new account | Hidden after login. Premium nicknames are blocked in strict mode; permissive mixed mode explicitly allows first registration |
+| `/register <password> <confirm>` | Create new account | Hidden only while authorization + the matching session are active. Premium nicknames are blocked in strict mode; permissive mixed mode explicitly allows first registration |
 | `/login <password>` | Login to your account | Available to registered password accounts while they are on the auth server |
 | `/changepassword <old> <new>` | Change your password | Must be logged in |
 | `/2fa setup` | Enroll a TOTP authenticator (see [2FA.md](2FA.md)) | Must be logged in. Disabled when `two-factor.enabled: false` |
@@ -319,10 +395,10 @@ Supported: H2 (out-of-box), MySQL, PostgreSQL, SQLite
 2. **VeloAuth checks** authoritative premium state in `AUTH`, then the in-memory premium cache
 3. If **not in memory**, checks the `PREMIUM_UUIDS` database cache (persistent across restarts, but never authoritative over `AUTH`)
 4. If **not in DB cache**, resolves via **Mojang/Ashcon API** in parallel using virtual threads
-5. If **not premium**, player is sent to the **auth server** (unless a live Floodgate UUID qualifies for Bedrock bypass)
-6. Player types **/login** or **/register**
-7. **VeloAuth verifies** credentials with BCrypt
-8. Player is **redirected to backend server** via `try` configuration
+5. Velocity completes the selected online/offline handshake; premium Java identity is trusted only when the final `Player#isOnlineMode()` is `true`
+6. By default **every Java player** is sent through the auth server. A confirmed Floodgate UUID can use its separate bypass; a Mojang-verified Java player can preserve the original forced-host/`try` target only with `premium.bypass-auth-server: true`
+7. Premium players on auth/limbo are transferred automatically; cracked players type **/login** or **/register**, are verified with BCrypt, and first registration ownership is committed atomically by the database
+8. **VeloAuth connects** the authorized player to the preserved forced-host target or first available non-auth backend from `try`
 
 ### Premium Resolution (3 layers)
 ```
@@ -376,22 +452,52 @@ Fixed in 1.2.0 — health check runs once synchronously before the 30s scheduler
 
 ## LimboAuth Migration
 
-VeloAuth is **100% compatible** with LimboAuth databases:
+VeloAuth is schema-compatible with supported LimboAuth databases and performs required additive
+changes automatically:
 
 1. Stop LimboAuth on your backend servers
 2. Install VeloAuth on Velocity
 3. Configure VeloAuth to use the same database as LimboAuth
-4. Start Velocity - all existing accounts will work automatically
+4. Start Velocity and verify the migration logs before allowing players to connect
 
-VeloAuth performs additive schema upgrades automatically. In particular, players who previously used LimboAuth's `/premium` keep the historical `AUTH.UUID` exposed to backend servers, while the Mojang-verified UUID is stored separately in `AUTH.PREMIUMUUID`. This makes the plugin update seamless for existing player data; no manual UUID rewrite is required. As with every authentication/database update, take a database and backend-player-data backup before deployment.
+Players who previously used LimboAuth's `/premium` keep the historical `AUTH.UUID` exposed to
+backend servers, while the Mojang-verified UUID is stored separately in `AUTH.PREMIUMUUID`.
+`AUTH.PRESERVE_UUID` and supporting indexes are created automatically and idempotently; no manual
+UUID rewrite is required. This is still a database migration: take a database and backend-player-data
+backup, test on a copy, and keep the previous JAR/config available for rollback.
+
+## Verification
+
+Run the normal Java/H2/SQLite gates and the explicit duplication gate together with
+`mvnd clean verify pmd:cpd-check`. With Docker available, run both real-driver harnesses:
+
+```bash
+./scripts/test-postgresql.sh
+./scripts/test-mysql.sh
+```
+
+The PostgreSQL harness verifies case-insensitive premium nickname reconciliation, batched conflict
+deletion, idempotent LimboAuth migration, insert-only registration ownership and concurrent AUTH
+UPSERT. The MySQL harness verifies the same registration/UPSERT invariants on Connector/J. Both use
+ephemeral containers and remove them afterwards. GitHub Actions runs the normal build and both
+database gates before uploading a release artifact.
+
+Automated tests do not prove the real Velocity protocol flow. Before production, test premium,
+cracked and Floodgate clients on a staging proxy with forced hosts, `try` fallback, reconnects,
+backend outages and both values of `premium.bypass-auth-server`.
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or PR.
+Contributions are welcome. Read [ARCHITECTURE.md](ARCHITECTURE.md), follow the coding rules in
+`.github/skills/java-coding-standards/SKILL.md`, and run all verification commands above before
+opening a pull request.
 
 ## Support
 
-Need help? Found a bug? Open an issue on GitHub or join our Discord server.
+Need help? Found a bug? Open an issue on GitHub or join our Discord server. Never attach database
+passwords, forwarding secrets, webhook URLs, TOTP secrets, current TOTP codes or complete
+`otpauth://` URIs. Use `/vauth report` with logs disabled unless trusted support explicitly needs
+sanitized logs.
 
 ## License
 

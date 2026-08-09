@@ -125,6 +125,13 @@ public class Settings {
         }
     }
 
+    private Settings(Settings source, SettingsLoader.LoadedState state) {
+        this.dataDirectory = source.dataDirectory;
+        this.configFile = source.configFile;
+        this.yamlMapper = source.yamlMapper;
+        applyLoadedState(state);
+    }
+
     /**
      * Loads configuration from YAML file.
      *
@@ -139,11 +146,12 @@ public class Settings {
 
             logger.debug("Loading configuration from: {}", configFile);
 
-            applyLoadedState(SettingsLoader.load(this, configFile, yamlMapper, logger));
-
-            if (!validateLoadedConfig()) {
+            SettingsLoader.LoadedState loadedState = SettingsLoader.load(this, configFile, yamlMapper, logger);
+            Settings candidate = new Settings(this, loadedState);
+            if (!candidate.validateLoadedConfig()) {
                 return false;
             }
+            applyLoadedState(SettingsLoader.LoadedState.from(candidate));
 
             logger.debug("Configuration loaded successfully");
             return true;
@@ -160,9 +168,8 @@ public class Settings {
     // Validator throws on invalid config values. Convert to a graceful failure so
     // VeloAuth.initializeConfiguration() and /vauth reload can report it without
     // a stack trace propagating to the player or to Velocity's event dispatch.
-    // The live Settings instance is left in whatever state the loader applied; on
-    // first load the plugin aborts init, and on /vauth reload the caller can surface
-    // the validation error to the operator and keep running with the partial state.
+    // Validation runs against an unpublished candidate. On /vauth reload, rejected
+    // values therefore cannot partially mutate the live settings used by login events.
     private boolean validateLoadedConfig() {
         try {
             SettingsValidator.validate(this);
@@ -248,6 +255,7 @@ public class Settings {
     private void copyPremiumSettings(PremiumSettings source) {
         premiumSettings.setCheckEnabled(source.isCheckEnabled());
         premiumSettings.setAllowCrackedOnPremiumNicks(source.isAllowCrackedOnPremiumNicks());
+        premiumSettings.setBypassAuthServer(source.isBypassAuthServer());
         premiumSettings.getResolver().copyFrom(source.getResolver());
     }
 
@@ -416,6 +424,10 @@ public class Settings {
         return premiumSettings.isAllowCrackedOnPremiumNicks();
     }
 
+    public boolean isPremiumBypassAuthServerEnabled() {
+        return premiumSettings.isBypassAuthServer();
+    }
+
     public PremiumResolverSettings getPremiumResolverSettings() {
         return premiumSettings.getResolver();
     }
@@ -560,13 +572,16 @@ public class Settings {
      */
     public static class PremiumSettings {
         private final PremiumResolverSettings resolver = new PremiumResolverSettings();
-        private boolean checkEnabled = true;
-        private boolean allowCrackedOnPremiumNicks = false;
+        private volatile boolean checkEnabled = true;
+        private volatile boolean allowCrackedOnPremiumNicks = false;
+        private volatile boolean bypassAuthServer = false;
 
         public boolean isCheckEnabled() { return checkEnabled; }
         void setCheckEnabled(boolean value) { this.checkEnabled = value; }
         public boolean isAllowCrackedOnPremiumNicks() { return allowCrackedOnPremiumNicks; }
         void setAllowCrackedOnPremiumNicks(boolean value) { this.allowCrackedOnPremiumNicks = value; }
+        public boolean isBypassAuthServer() { return bypassAuthServer; }
+        void setBypassAuthServer(boolean value) { this.bypassAuthServer = value; }
         public PremiumResolverSettings getResolver() { return resolver; }
     }
 

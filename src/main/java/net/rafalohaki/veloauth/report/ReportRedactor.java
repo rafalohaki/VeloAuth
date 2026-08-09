@@ -24,6 +24,9 @@ import java.util.regex.Pattern;
 final class ReportRedactor {
 
     private static final String REDACTED = "<redacted>";
+    private static final String SECRET_KEY =
+            "password|passwd|ssl[-_]?password|webhook-url|forwarding-secret|"
+                    + "api[-_]?key|access[-_]?token|client[-_]?secret|token|secret";
 
     /**
      * YAML / TOML keys whose value is a secret and must be replaced.
@@ -41,7 +44,7 @@ final class ReportRedactor {
      * even normalised to a closed quote) — it never leaks.
      */
     private static final Pattern SECRET_KEY_VALUE = Pattern.compile(
-            "(?im)^\\s*(password|ssl-password|webhook-url|forwarding-secret|secret)" +
+            "(?im)^\\s*(" + SECRET_KEY + ")" +
             "(\\s*[:=]\\s*)([\"']?).*$"
     );
 
@@ -50,7 +53,12 @@ final class ReportRedactor {
      * Captures everything between {@code://} and the {@code @} and replaces it.
      */
     private static final Pattern URL_CREDENTIALS = Pattern.compile(
-            "(://)[^@\\s]+(@)"
+            "(://)[^\\s/]*(@)"
+    );
+
+    /** Secret assignments inside JDBC/URI query strings and connection-parameters values. */
+    private static final Pattern SECRET_PARAMETER = Pattern.compile(
+            "(?i)((?:[?&;]|\\b)(?:" + SECRET_KEY + ")=)([^&#;\\s\"']*)"
     );
 
     private static final Pattern DISCORD_WEBHOOK = Pattern.compile(
@@ -62,8 +70,8 @@ final class ReportRedactor {
     );
 
     private static final Pattern LOG_SECRET_KEY_VALUE = Pattern.compile(
-            "(?i)(\\b(?:password|passwd|token|api[-_]?key|secret|webhook-url)\\b\\s*[:=]\\s*)"
-                    + "(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;]+)"
+            "(?i)(\\b(?:" + SECRET_KEY + ")\\b\\s*[:=]\\s*)"
+                    + "(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;&#]+)"
     );
 
     private ReportRedactor() {
@@ -94,7 +102,14 @@ final class ReportRedactor {
         if (url == null || url.isEmpty()) {
             return url;
         }
-        return URL_CREDENTIALS.matcher(url).replaceAll(m -> m.group(1) + REDACTED + m.group(2));
+        String redacted = URL_CREDENTIALS.matcher(url)
+                .replaceAll(m -> m.group(1) + REDACTED + m.group(2));
+        return redactSecretParameters(redacted);
+    }
+
+    private static String redactSecretParameters(String input) {
+        return SECRET_PARAMETER.matcher(input)
+                .replaceAll(m -> m.group(1) + REDACTED);
     }
 
     /**

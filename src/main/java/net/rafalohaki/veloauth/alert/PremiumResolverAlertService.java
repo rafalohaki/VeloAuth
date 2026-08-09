@@ -7,10 +7,12 @@ import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
 import java.time.Instant;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -38,6 +40,7 @@ public class PremiumResolverAlertService implements AutoCloseable {
     private final ConcurrentHashMap<String, AtomicInteger> failuresByResolver = new ConcurrentHashMap<>();
     private final AtomicLong lastAlertTime = new AtomicLong(0);
     private final AtomicLong lastResetTime = new AtomicLong(System.currentTimeMillis());
+    private final AtomicBoolean alertInFlight = new AtomicBoolean(false);
 
     /**
      * Creates alert service.
@@ -45,16 +48,17 @@ public class PremiumResolverAlertService implements AutoCloseable {
      * @param settings Plugin settings
      */
     public PremiumResolverAlertService(Settings settings) {
-        this.alertSettings = settings.getAlertSettings();
+        this(Objects.requireNonNull(settings, "settings").getAlertSettings());
+    }
 
-        // Initialize Discord client if enabled
-        if (alertSettings.isDiscordEnabled() && alertSettings.getDiscordWebhookUrl() != null) {
-            this.discordClient = new DiscordWebhookClient(alertSettings.getDiscordWebhookUrl());
-        } else {
-            this.discordClient = null;
-        }
+    private PremiumResolverAlertService(Settings.AlertSettings alertSettings) {
+        this(alertSettings, createDiscordClient(alertSettings));
+    }
 
-        // Scheduler for periodic checks and metric resets
+    PremiumResolverAlertService(Settings.AlertSettings alertSettings, DiscordWebhookClient discordClient) {
+        this.alertSettings = Objects.requireNonNull(alertSettings, "alertSettings");
+        this.discordClient = discordClient;
+
         this.scheduler = Executors.newScheduledThreadPool(1, r -> {
             Thread t = new Thread(r, "VeloAuth-AlertService");
             t.setDaemon(true);
@@ -72,6 +76,13 @@ public class PremiumResolverAlertService implements AutoCloseable {
         logger.info(PREMIUM_MARKER, "Alert service initialized (Discord: {}, Check interval: {}min)",
                 discordClient != null ? "enabled" : "disabled",
                 alertSettings.getCheckIntervalMinutes());
+    }
+
+    private static DiscordWebhookClient createDiscordClient(Settings.AlertSettings settings) {
+        if (settings.isDiscordEnabled() && settings.getDiscordWebhookUrl() != null) {
+            return new DiscordWebhookClient(settings.getDiscordWebhookUrl());
+        }
+        return null;
     }
 
     /**
@@ -127,14 +138,27 @@ public class PremiumResolverAlertService implements AutoCloseable {
             return;
         }
 
-        if (!lastAlertTime.compareAndSet(last, now)) {
-            return; // Another thread won the race
+        if (!alertInFlight.compareAndSet(false, true)) {
+            return;
         }
 
         // Send alert off-thread: recordResolution() runs inside the premium-resolver future
         // (a player's login path) and the Discord send blocks for up to 5s — exactly when
         // resolvers are already failing. The daemon scheduler thread absorbs that latency.
-        scheduler.execute(() -> sendFailureAlert(total, failed, failureRate));
+        try {
+            scheduler.execute(() -> {
+                try {
+                    if (sendFailureAlert(total, failed, failureRate)) {
+                        lastAlertTime.set(System.currentTimeMillis());
+                    }
+                } finally {
+                    alertInFlight.set(false);
+                }
+            });
+        } catch (RuntimeException e) {
+            alertInFlight.set(false);
+            logger.warn(PREMIUM_MARKER, "Failed to schedule premium resolver alert", e);
+        }
     }
 
     /**
@@ -144,10 +168,10 @@ public class PremiumResolverAlertService implements AutoCloseable {
      * @param failed      Failed requests
      * @param failureRate Failure rate (0.0-1.0)
      */
-    private void sendFailureAlert(int total, int failed, double failureRate) {
+    private boolean sendFailureAlert(int total, int failed, double failureRate) {
         if (discordClient == null) {
             logLocalAlert(total, failed, failureRate);
-            return;
+            return true;
         }
 
         try {
@@ -159,9 +183,11 @@ public class PremiumResolverAlertService implements AutoCloseable {
             } else {
                 logger.error(PREMIUM_MARKER, "Failed to send Discord alert (check webhook URL)");
             }
+            return sent;
 
         } catch (Exception e) {
             logger.error(PREMIUM_MARKER, "Error sending Discord alert", e);
+            return false;
         }
     }
 

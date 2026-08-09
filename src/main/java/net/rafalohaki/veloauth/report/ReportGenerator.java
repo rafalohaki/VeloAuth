@@ -116,6 +116,8 @@ final class ReportGenerator {
         meta.add(McLogsClient.MetadataEntry.visible("premium_check", settings.isPremiumCheckEnabled(), "Premium check"));
         meta.add(McLogsClient.MetadataEntry.visible("allow_cracked_on_premium_nicks",
                 settings.isAllowCrackedOnPremiumNicks(), "Allow cracked on premium nicks"));
+        meta.add(McLogsClient.MetadataEntry.visible("premium_bypass_auth_server",
+                settings.isPremiumBypassAuthServerEnabled(), "Premium auth-server bypass"));
         // Hidden metadata — useful for support but not displayed on the public page.
         meta.add(McLogsClient.MetadataEntry.hidden("auth_server", settings.getAuthServerName()));
         meta.add(McLogsClient.MetadataEntry.hidden("try_list",

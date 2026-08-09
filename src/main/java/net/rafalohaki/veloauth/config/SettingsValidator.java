@@ -135,6 +135,7 @@ public final class SettingsValidator {
 
     static void validatePremium(Settings settings) {
         warnAllowCrackedOnPremiumNicks(settings);
+        warnPremiumAuthServerBypass(settings);
 
         if (!settings.isPremiumCheckEnabled()) {
             return;
@@ -157,6 +158,12 @@ public final class SettingsValidator {
         }
         logger.warn("Config 'premium.allow-cracked-on-premium-nicks=true' — VeloAuth will NOT force Mojang auth for premium nicks without a DB record. Cracked clients can register premium nicknames first; nickname-theft protection is reduced.");
         logger.warn("Config 'premium.allow-cracked-on-premium-nicks=true' — New premium players connecting for the first time will get OFFLINE UUIDs permanently (Velocity PreLogin has no 'try online, fallback offline' mode). Existing premium owners in AUTH keep their established backend UUID identity.");
+    }
+
+    private static void warnPremiumAuthServerBypass(Settings settings) {
+        if (settings.isPremiumBypassAuthServerEnabled()) {
+            logger.warn("Config 'premium.bypass-auth-server=true' — Mojang-verified Java players will connect directly to backend servers. This reduces limbo isolation against bots using valid premium accounts.");
+        }
     }
 
     private static final int MIN_BCRYPT_COST = 10;

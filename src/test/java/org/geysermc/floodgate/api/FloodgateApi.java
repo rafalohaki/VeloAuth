@@ -9,6 +9,7 @@ import java.util.UUID;
 public final class FloodgateApi {
 
     private static volatile FloodgateApi instance;
+    private static volatile Thread lastGetPlayersThread;
 
     private final String playerPrefix;
     private final Set<UUID> playerIds;
@@ -31,6 +32,11 @@ public final class FloodgateApi {
 
     public static void clear() {
         instance = null;
+        lastGetPlayersThread = null;
+    }
+
+    public static Thread getLastGetPlayersThread() {
+        return lastGetPlayersThread;
     }
 
     public boolean isFloodgatePlayer(UUID playerId) {
@@ -38,6 +44,7 @@ public final class FloodgateApi {
     }
 
     public Collection<PlayerView> getPlayers() {
+        lastGetPlayersThread = Thread.currentThread();
         return players;
     }
 

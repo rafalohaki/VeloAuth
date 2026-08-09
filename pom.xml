@@ -465,11 +465,9 @@
                         <id>pmd-check</id>
                         <phase>verify</phase>
                         <goals>
-                            <!-- PMD `check` is a hard gate (failOnViolation=true above). CPD's
-                                 `cpd-check` is intentionally NOT in verify — it would fail the
-                                 build on ~10 known production-code duplications that need
-                                 dedicated extraction PRs. Run `mvnd pmd:cpd-check` manually to
-                                 see the current backlog. -->
+                            <!-- PMD `check` is bound to verify. CPD remains an explicit, separate
+                                 release gate so duplicate analysis can be run and diagnosed on
+                                 its own: `mvnd pmd:check pmd:cpd-check`. Both are expected to pass. -->
                             <goal>check</goal>
                         </goals>
                     </execution>

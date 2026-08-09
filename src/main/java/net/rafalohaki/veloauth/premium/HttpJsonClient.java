@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 final class HttpJsonClient {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final int MAX_RESPONSE_BYTES = 64 * 1024;
 
     private HttpJsonClient() {
     }
@@ -63,8 +64,19 @@ final class HttpJsonClient {
 
     private static String readBody(HttpURLConnection connection) throws IOException {
         try (InputStream input = connection.getInputStream()) {
-            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            return readBody(input, connection.getContentLengthLong());
         }
+    }
+
+    static String readBody(InputStream input, long contentLength) throws IOException {
+        if (contentLength > MAX_RESPONSE_BYTES) {
+            throw new IOException("Premium resolver response exceeds maximum size");
+        }
+        byte[] bytes = input.readNBytes(MAX_RESPONSE_BYTES + 1);
+        if (bytes.length > MAX_RESPONSE_BYTES) {
+            throw new IOException("Premium resolver response exceeds maximum size");
+        }
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 
     record HttpJsonResponse(int statusCode, String body) {

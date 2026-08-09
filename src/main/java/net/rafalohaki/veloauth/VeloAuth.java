@@ -215,9 +215,6 @@ public class VeloAuth {
             authCache.clearAll();
         }
 
-        // Initialize bStats metrics
-        metricsFactory.make(this, BSTATS_PLUGIN_ID);
-
         lifecycleLock.lock();
         try {
             if (shutdownStarted) {
@@ -230,8 +227,17 @@ public class VeloAuth {
         } finally {
             lifecycleLock.unlock();
         }
-        
+
+        initializeMetricsSafely();
         logStartupInfo(initializationDuration);
+    }
+
+    private void initializeMetricsSafely() {
+        try {
+            metricsFactory.make(this, BSTATS_PLUGIN_ID);
+        } catch (RuntimeException e) {
+            logger.warn("bStats initialization failed; VeloAuth will continue without metrics", e);
+        }
     }
 
     /**
@@ -772,8 +778,8 @@ public class VeloAuth {
                 logger.warn("Changes to the following settings require a full server restart to take effect: "
                         + "database, auth-server, premium-resolver, floodgate, brute-force, conflict-mode-ttl, cache, "
                         + "session-timeout, premium-cache, connection pool, and rate-limiter settings. "
-                        + "Only bcrypt-cost, password-length, ip-limit-registrations, debug, report, and language "
-                        + "apply immediately.");
+                        + "Only premium core routing flags, bcrypt-cost, password-length, "
+                        + "ip-limit-registrations, debug, report, and language apply immediately.");
                 logStartupInfo(0); // Pass 0 as duration for reload
                 return languageReloaded; // Return true only if both succeeded
             } else {

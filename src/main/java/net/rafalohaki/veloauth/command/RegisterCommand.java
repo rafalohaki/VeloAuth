@@ -34,7 +34,7 @@ class RegisterCommand implements SimpleCommand {
 
     @Override
     public boolean hasPermission(Invocation invocation) {
-        return CommandHelper.isPlayerOnAuthServer(invocation, ctx);
+        return CommandHelper.isPlayerOnAuthServerAndNeedsAuthentication(invocation, ctx);
     }
 
     @Override
@@ -167,12 +167,12 @@ class RegisterCommand implements SimpleCommand {
     }
 
     private boolean persistNewPlayer(AuthenticationContext authContext, RegisteredPlayer newPlayer) {
-        var saveResult = ctx.databaseManager().savePlayer(newPlayer).join();
-        if (ctx.handleDatabaseError(saveResult, authContext.player(), "Failed to save new player")) {
+        var saveResult = ctx.databaseManager().registerPlayerIfAbsent(newPlayer).join();
+        if (ctx.handleDatabaseError(saveResult, authContext.player(), "Failed to register new player")) {
             return false;
         }
         if (!Boolean.TRUE.equals(saveResult.getValue())) {
-            ctx.sendDatabaseErrorMessage(authContext.player());
+            authContext.player().sendMessage(ctx.sm().alreadyRegistered());
             return false;
         }
         return true;

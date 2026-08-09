@@ -240,6 +240,17 @@ final class DefaultConfigGenerator {
                   # Enable only if your server explicitly accepts cracked players on premium
                   # nicks and you accept that trade-off.
                   allow-cracked-on-premium-nicks: false
+                  # Allow Mojang-verified Java players to skip the auth/limbo server and keep
+                  # Velocity's original forced-host / try-list backend target.
+                  #
+                  # Default (false): preserve the established VeloAuth flow for upgrades — every
+                  # Java player visits the auth server before the backend.
+                  # true: only Player#isOnlineMode() connections bypass limbo. Resolver/cache/name
+                  # matches never grant this bypass. Cracked players are unaffected.
+                  #
+                  # Security trade-off: bots with valid paid accounts reach backend resources
+                  # directly. Enable only when that reduced limbo isolation is acceptable.
+                  bypass-auth-server: false
                   resolver:
                     # Query Mojang API
                     mojang-enabled: true

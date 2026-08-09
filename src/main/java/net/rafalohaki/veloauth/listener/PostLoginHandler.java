@@ -56,11 +56,11 @@ public class PostLoginHandler {
 
         PremiumAuthorizer.authorize(player, playerIp, authCache);
 
-        // Premium player is now authorized in cache
-        // ServerPreConnectEvent will redirect to auth server automatically
-        // Then onServerConnected will trigger auto-transfer to backend
+        // Premium player is now authorized in cache. ServerPreConnectEvent either preserves
+        // the original backend target for the explicit passthrough opt-in or uses the default
+        // auth-server hop followed by the existing auto-transfer flow.
         if (logger.isDebugEnabled()) {
-            logger.debug("Premium player {} authorized - ServerPreConnectEvent will route to auth server",
+            logger.debug("Premium player {} authorized - ServerPreConnectEvent will apply configured routing",
                     player.getUsername());
         }
     }

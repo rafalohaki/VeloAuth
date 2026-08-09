@@ -205,6 +205,7 @@ public class DatabaseManager {
     }
 
     private void initializeConnection() throws SQLException {
+        config.prepareLocalStorage();
         if (config.hasDataSource()) {
             initializeHikariConnection();
         } else {
@@ -226,7 +227,8 @@ public class DatabaseManager {
     private void initializeStandardJdbcConnection() throws SQLException {
         String jdbcUrl = config.getJdbcUrl();
         if (logger.isDebugEnabled()) {
-            logger.debug(DB_MARKER, "Connecting to database (standard JDBC): {}", jdbcUrl);
+            logger.debug(DB_MARKER, "Connecting to database using standard JDBC (type: {})",
+                    config.getStorageType());
         }
 
         connectionSource = new JdbcConnectionSource(
@@ -698,8 +700,25 @@ public class DatabaseManager {
             logger.error(DB_MARKER, "Database operation '{}' failed for {}", operation, identifier);
         }
         if (logger.isDebugEnabled()) {
-            logger.debug(DB_MARKER, "Database operation '{}' failure details for {}", operation, identifier, throwable);
+            SQLException sqlException = findSqlException(throwable);
+            logger.debug(DB_MARKER,
+                    "Database operation '{}' failure type={} sqlState={} vendorCode={}",
+                    operation,
+                    throwable == null ? "unknown" : throwable.getClass().getSimpleName(),
+                    sqlException == null ? "n/a" : sqlException.getSQLState(),
+                    sqlException == null ? 0 : sqlException.getErrorCode());
         }
+    }
+
+    private SQLException findSqlException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof SQLException sqlException) {
+                return sqlException;
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     /**
@@ -711,6 +730,21 @@ public class DatabaseManager {
         }
 
         return submitConnectedTask(() -> executePlayerSave(player));
+    }
+
+    /**
+     * Atomically creates a registration while preserving any existing nickname owner.
+     * The general {@link #savePlayer(RegisteredPlayer)} upsert remains available for
+     * authenticated account updates and migrations.
+     *
+     * @return {@code true} when created, {@code false} when the nickname already exists
+     */
+    public CompletableFuture<DbResult<Boolean>> registerPlayerIfAbsent(RegisteredPlayer player) {
+        if (player == null) {
+            return CompletableFuture.completedFuture(DbResult.success(false));
+        }
+
+        return submitConnectedTask(() -> executePlayerRegistration(player));
     }
 
     private DbResult<Void> validateDatabaseConnection() {
@@ -737,6 +771,22 @@ public class DatabaseManager {
             return DbResult.success(success);
         } catch (SQLException e) {
             logDatabaseOperationFailure("player save", player.getNickname(), e);
+            return genericDatabaseErrorResult();
+        }
+    }
+
+    private DbResult<Boolean> executePlayerRegistration(RegisteredPlayer player) {
+        try {
+            boolean created = jdbcAuthDao.insertPlayerIfAbsent(player);
+            if (created) {
+                playerCache.put(player.getLowercaseNickname(), player);
+                if (logger.isDebugEnabled()) {
+                    logger.debug(DB_MARKER, "Registered new player: {}", player.getNickname());
+                }
+            }
+            return DbResult.success(created);
+        } catch (SQLException e) {
+            logDatabaseOperationFailure("player registration", player.getNickname(), e);
             return genericDatabaseErrorResult();
         }
     }

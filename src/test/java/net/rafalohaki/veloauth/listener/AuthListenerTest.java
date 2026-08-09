@@ -54,6 +54,7 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -110,6 +111,7 @@ class AuthListenerTest {
         when(logger.isDebugEnabled()).thenReturn(false);
         when(logger.isInfoEnabled()).thenReturn(false);
         when(settings.isPremiumCheckEnabled()).thenReturn(true);
+        when(settings.isPremiumBypassAuthServerEnabled()).thenReturn(false);
         when(settings.isFloodgateIntegrationEnabled()).thenReturn(false);
         when(settings.isFloodgateBypassAuthServerEnabled()).thenReturn(false);
         when(settings.getAuthServerName()).thenReturn("auth");
@@ -265,11 +267,15 @@ class AuthListenerTest {
 
         PreLoginEvent event = new PreLoginEvent(createConnection("192.0.2.25"), linkedUsername);
 
+        Thread callingThread = Thread.currentThread();
         EventTask task = authListener.onPreLogin(event);
 
-        assertNull(task, "A Floodgate registry hit should use the synchronous pre-login path");
+        assertNotNull(task, "Floodgate registry scanning must run outside the Velocity event callback");
+        awaitEventTask(task);
         assertTrue(event.getResult().isForceOfflineMode(),
                 "Linked Bedrock accounts must not be sent through Mojang's Java handshake");
+        assertNotSame(callingThread, FloodgateApi.getLastGetPlayersThread(),
+                "Floodgate getPlayers() is O(n) and must not run on the event thread");
         verify(preLoginHandler, never()).resolvePremiumStatusAsync(anyString(), nullable(InetAddress.class));
         verify(databaseManager, never())
                 .findPlayerByNicknameOrPremiumUuidReadOnly(anyString(), nullable(UUID.class));
@@ -284,6 +290,7 @@ class AuthListenerTest {
 
         when(player.getUsername()).thenReturn("RoutingPlayer");
         when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.isOnlineMode()).thenReturn(true);
         when(backendServer.getServerInfo()).thenReturn(
                 new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
         when(authServer.getServerInfo()).thenReturn(
@@ -298,6 +305,149 @@ class AuthListenerTest {
         assertSame(authServer, event.getResult().getServer().orElse(null),
                 "Previous server semantics should redirect first connections to auth server");
         verify(connectionManager).setForcedHostTarget(playerUuid, "backend");
+    }
+
+    @Test
+    void onServerPreConnect_premiumBypassEnabled_allowsOriginalBackendWithoutTransferState() {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(settings.isPremiumBypassAuthServerEnabled()).thenReturn(true);
+        when(player.getUsername()).thenReturn("VerifiedPremium");
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.isOnlineMode()).thenReturn(true);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+
+        assertNull(task, "Direct premium backend routing should remain a synchronous fast path");
+        assertSame(backendServer, event.getResult().getServer().orElse(null));
+        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+        verify(connectionManager, never()).findAvailableBackendServerForInitialConnectionAsync();
+        verify(postLoginHandler, never()).handlePremiumPlayer(eq(player), anyString());
+    }
+
+    @Test
+    void onServerPreConnect_premiumBypassEnabled_offlinePlayerStillUsesAuthServer() {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(settings.isPremiumBypassAuthServerEnabled()).thenReturn(true);
+        when(player.getUsername()).thenReturn("OfflinePlayer");
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.isOnlineMode()).thenReturn(false);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+
+        assertNull(task);
+        assertSame(authServer, event.getResult().getServer().orElse(null));
+        verify(connectionManager).setForcedHostTarget(playerUuid, "backend");
+    }
+
+    @Test
+    void onServerPreConnect_premiumBypassEnabled_initialAuthTargetSelectsBackendAsync() {
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(settings.isPremiumBypassAuthServerEnabled()).thenReturn(true);
+        when(player.getUsername()).thenReturn("PremiumAuthTarget");
+        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(player.isOnlineMode()).thenReturn(true);
+        when(player.isActive()).thenReturn(true);
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
+                .thenReturn(CompletableFuture.completedFuture(Optional.of(backendServer)));
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+
+        assertNotNull(task, "Selecting a backend may ping servers and must suspend the event asynchronously");
+        awaitEventTask(task);
+        assertSame(backendServer, event.getResult().getServer().orElse(null));
+        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+        verify(postLoginHandler, never()).handlePremiumPlayer(eq(player), anyString());
+    }
+
+    @Test
+    void onServerPreConnect_premiumBypassEnabled_withoutAvailableBackendDeniesFailSecure() {
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(settings.isPremiumBypassAuthServerEnabled()).thenReturn(true);
+        when(player.getUsername()).thenReturn("PremiumWithoutBackend");
+        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(player.isOnlineMode()).thenReturn(true);
+        when(player.isActive()).thenReturn(true);
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
+                .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+
+        assertNotNull(task);
+        awaitEventTask(task);
+        assertFalse(event.getResult().isAllowed(), "Missing backend must never fall through to limbo as a fake bypass");
+    }
+
+    @Test
+    void onServerPreConnect_premiumBypassEnabled_backendSelectionFailureDeniesFailSecure() {
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(settings.isPremiumBypassAuthServerEnabled()).thenReturn(true);
+        when(player.getUsername()).thenReturn("PremiumSelectionFailure");
+        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(player.isOnlineMode()).thenReturn(true);
+        when(player.isActive()).thenReturn(true);
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
+                .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("selection failed")));
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+
+        assertNotNull(task);
+        awaitEventTask(task);
+        assertFalse(event.getResult().isAllowed(), "Selection errors must deny the connection fail-secure");
+    }
+
+    @Test
+    void onServerPreConnect_premiumBypassRevokedWhileSelectingBackend_deniesFailSecure() {
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        CompletableFuture<Optional<RegisteredServer>> pendingBackend = new CompletableFuture<>();
+        when(settings.isPremiumBypassAuthServerEnabled()).thenReturn(true, false);
+        when(player.getUsername()).thenReturn("PremiumBypassRevoked");
+        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(player.isOnlineMode()).thenReturn(true);
+        when(player.isActive()).thenReturn(true);
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
+                .thenReturn(pendingBackend);
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+        pendingBackend.complete(Optional.of(backendServer));
+
+        assertNotNull(task);
+        awaitEventTask(task);
+        assertFalse(event.getResult().isAllowed(),
+                "A bypass disabled during asynchronous selection must not route around auth");
     }
 
     @Test
@@ -337,6 +487,35 @@ class AuthListenerTest {
         EventTask task = authListener.onServerPreConnect(event);
 
         assertNull(task);
+        assertSame(backendServer, event.getResult().getServer().orElse(null));
+        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+    }
+
+    @Test
+    void onServerPreConnect_floodgateConfirmedUuid_initialAuthTargetSelectsBackendAsync() {
+        UUID bedrockUuid = UUID.randomUUID();
+        FloodgateApi.install(".", Set.of(bedrockUuid), List.of());
+        when(settings.isFloodgateIntegrationEnabled()).thenReturn(true);
+        when(settings.isFloodgateBypassAuthServerEnabled()).thenReturn(true);
+
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(player.getUsername()).thenReturn(".BedrockAuthTarget");
+        when(player.getUniqueId()).thenReturn(bedrockUuid);
+        when(player.isActive()).thenReturn(true);
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
+                .thenReturn(CompletableFuture.completedFuture(Optional.of(backendServer)));
+        ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+
+        assertNotNull(task, "Floodgate bypass must not leave a trusted player parked on auth");
+        awaitEventTask(task);
         assertSame(backendServer, event.getResult().getServer().orElse(null));
         verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
     }
@@ -653,9 +832,13 @@ class AuthListenerTest {
         GameProfileRequestEvent event = new GameProfileRequestEvent(
                 createConnection("192.0.2.43"), originalProfile, true);
 
+        Thread callingThread = Thread.currentThread();
         EventTask task = authListener.onGameProfileRequest(event);
 
-        assertNull(task, "Floodgate identity must never be reconciled as a Mojang premium profile");
+        assertNotNull(task, "Live Floodgate username lookup must suspend the event asynchronously");
+        awaitEventTask(task);
+        assertNotSame(callingThread, FloodgateApi.getLastGetPlayersThread(),
+                "GameProfile fallback must not scan Floodgate players on the event thread");
         verify(databaseManager, never()).reconcileVerifiedPremiumProfile(anyString(), any(UUID.class));
     }
 
