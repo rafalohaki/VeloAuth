@@ -395,7 +395,9 @@
                 <version>3.1.2</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
-                    <argLine>@{argLine} --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED -Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading -Dnet.bytebuddy.experimental=true -Dnet.bytebuddy.safe=true -Xshare:off -Dorg.slf4j.simpleLogger.logFile=System.out -Dorg.slf4j.simpleLogger.defaultLogLevel=error</argLine>
+                    <!-- The port-collision test asserts this failure structurally; suppress only
+                         MCProtocolLib's duplicate expected stack trace in the test JVM. -->
+                    <argLine>@{argLine} --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED -Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading -Dnet.bytebuddy.experimental=true -Dnet.bytebuddy.safe=true -Xshare:off -Dorg.slf4j.simpleLogger.logFile=System.out -Dorg.slf4j.simpleLogger.defaultLogLevel=error -Dorg.slf4j.simpleLogger.log.org.geysermc.mcprotocollib.network.server.NetworkServer=off</argLine>
                 </configuration>
             </plugin>
 

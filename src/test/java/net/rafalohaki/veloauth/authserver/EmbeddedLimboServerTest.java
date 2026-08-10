@@ -119,7 +119,10 @@ class EmbeddedLimboServerTest {
         server.start();
 
         EmbeddedLimboServer collision = newServer(port);
-        assertThrows(IllegalStateException.class, collision::start);
+        IllegalStateException collisionFailure =
+                assertThrows(IllegalStateException.class, collision::start);
+        assertTrue(collisionFailure.getMessage().contains("Failed to start embedded limbo"));
+        assertTrue(collisionFailure.getCause().getMessage().contains("MCProtocolLib did not bind"));
         collision.close();
 
         server.close();
