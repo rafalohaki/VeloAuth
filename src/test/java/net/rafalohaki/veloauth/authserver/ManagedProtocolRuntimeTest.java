@@ -96,6 +96,83 @@ class ManagedProtocolRuntimeTest {
         }
     }
 
+    @Test
+    void open_ValidPendingRuntime_ShouldRemainStagedUntilOperationalConfirmation() throws Exception {
+        Path sourceArtifact = Path.of(ViaManagerImpl.class.getProtectionDomain()
+                .getCodeSource().getLocation().toURI());
+        Path runtimeDirectory = temporaryDirectory.resolve("runtime");
+        Files.createDirectories(runtimeDirectory);
+
+        String activeVersion = "9.9.8-active";
+        Path activeArtifact = runtimeDirectory.resolve("viaversion-common-" + activeVersion + ".jar");
+        Files.copy(sourceArtifact, activeArtifact);
+        Path activeManifest = runtimeDirectory.resolve(RuntimeSnapshotManager.ACTIVE_MANIFEST);
+        writeManifest(activeManifest, activeVersion, sha256(activeArtifact));
+
+        String pendingVersion = "9.9.9-pending";
+        Path pendingArtifact = runtimeDirectory.resolve("viaversion-common-" + pendingVersion + ".jar");
+        Files.copy(sourceArtifact, pendingArtifact);
+        Path pendingManifest = runtimeDirectory.resolve(RuntimeSnapshotManager.PENDING_MANIFEST);
+        writeManifest(pendingManifest, pendingVersion, sha256(pendingArtifact));
+
+        ManagedProtocolRuntime runtime = ManagedProtocolRuntime.open(
+                temporaryDirectory, mock(Logger.class), "test");
+        try {
+            assertEquals(pendingVersion, runtime.runtimeVersion());
+            assertTrue(Files.exists(pendingManifest),
+                    "A loadable candidate must stay pending until the provider is operational");
+            assertTrue(Files.readString(activeManifest).contains(activeVersion),
+                    "The previous active runtime must remain available before operational confirmation");
+
+            runtime.confirmOperational();
+            runtime.confirmOperational();
+
+            assertFalse(Files.exists(pendingManifest),
+                    "Operational confirmation must consume the staged manifest exactly once");
+            assertTrue(Files.readString(activeManifest).contains(pendingVersion),
+                    "Only an operational candidate may replace the active runtime manifest");
+        } finally {
+            runtime.close();
+        }
+    }
+
+    @Test
+    void open_PendingRuntimeFailingBehavioralProbe_ShouldFallBackToActiveRuntime() throws Exception {
+        Path sourceArtifact = Path.of(ViaManagerImpl.class.getProtectionDomain()
+                .getCodeSource().getLocation().toURI());
+        Path runtimeDirectory = temporaryDirectory.resolve("runtime");
+        Files.createDirectories(runtimeDirectory);
+
+        String activeVersion = "9.9.8-active";
+        Path activeArtifact = runtimeDirectory.resolve("viaversion-common-" + activeVersion + ".jar");
+        Files.copy(sourceArtifact, activeArtifact);
+        Path activeManifest = runtimeDirectory.resolve(RuntimeSnapshotManager.ACTIVE_MANIFEST);
+        writeManifest(activeManifest, activeVersion, sha256(activeArtifact));
+
+        String pendingVersion = "9.9.9-pending";
+        Path pendingArtifact = runtimeDirectory.resolve("viaversion-common-" + pendingVersion + ".jar");
+        Files.copy(sourceArtifact, pendingArtifact);
+        Path pendingManifest = runtimeDirectory.resolve(RuntimeSnapshotManager.PENDING_MANIFEST);
+        writeManifest(pendingManifest, pendingVersion, sha256(pendingArtifact));
+
+        ManagedProtocolRuntime runtime = ManagedProtocolRuntime.open(
+                temporaryDirectory,
+                mock(Logger.class),
+                "test",
+                candidate -> {
+                    if (pendingVersion.equals(candidate.runtimeVersion())) {
+                        throw new IllegalStateException("simulated translated-login failure");
+                    }
+                });
+        try {
+            assertEquals(activeVersion, runtime.runtimeVersion());
+            assertFalse(Files.exists(pendingManifest));
+            assertTrue(Files.readString(activeManifest).contains(activeVersion));
+        } finally {
+            runtime.close();
+        }
+    }
+
     private static void writeManifest(Path manifest, String version, String sha256) throws Exception {
         String baseUrl = "https://repo.viaversion.com/com/viaversion/viaversion-common/";
         Files.writeString(manifest,

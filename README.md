@@ -153,6 +153,11 @@ Cracked players deliberately stay connected in this limbo, including across recu
 until the required authentication steps succeed; only the existing post-auth flow transfers them
 to a real backend.
 
+The chunk-free holding state is presented to clients as `minecraft:the_end`, giving the temporary
+authentication screen a darker backdrop without creating or saving an End world. This is not a
+configuration option and affects only embedded limbo: after authentication the backend sends its
+own dimension and world state normally.
+
 ```toml
 [servers]
 lobby = "127.0.0.1:25565"  # Typical backend server
@@ -227,9 +232,12 @@ virtual thread check the official repository (at most once per 15 minutes across
 new snapshot is resolved to an immutable timestamped JAR, downloaded without redirects, checked
 against the repository's SHA-256 sidecar, bounded by size, structurally validated, and written to a
 pending manifest. It never replaces the classes serving current players. On the next full restart,
-VeloAuth initializes and verifies every advertised translation path before promoting it. An
-incompatible/corrupt candidate is rejected automatically and startup falls back to the previous
-working runtime, then to the build-pinned runtime. A valid cache continues to start offline.
+VeloAuth initializes every advertised translation path and completes a real loopback login plus
+keepalive with the bundled client (currently 26.2) before selecting it. Pending remains staged until
+the actual embedded listener is published in Velocity; only then is it promoted. An incompatible,
+corrupt or behaviorally broken candidate is rejected automatically and startup falls back to the
+previous working runtime, then to the build-pinned runtime, in the same restart. A valid cache
+continues to start offline.
 Corrupt or off-repository manifests are removed automatically, and concurrent runtime preparation
 is serialized so one proxy process cannot download/publish the same artifact twice.
 
@@ -611,12 +619,12 @@ database gates before uploading a release artifact.
 The normal suite also performs a native 1.8 login, bidirectional protocol-47 keepalive checks,
 translated status handshakes for representative 1.12.2, 1.16.5, 1.20.1 and 1.21.4 clients, and a
 complete MCProtocolLib 26.2 login held through the first keepalive. That latest-client path also
-requires ViaVersion's level-loading event and a translated spawn above the unloaded void, preventing
-the client from remaining on "Loading terrain". The real Velocity smoke proves pinned startup,
-snapshot staging, activation on restart and a third restart that rejects a tampered pending manifest
-while retaining client availability through the same keepalive boundary. It also submits a rejected
-`/login` attempt and verifies that the cracked client remains in limbo with authentication commands
-still usable.
+requires the translated End registry/type/world identifiers, ViaVersion's level-loading event and a
+spawn above the unloaded void, preventing the client from remaining on "Loading terrain". The real
+Velocity smoke proves pinned startup, snapshot staging, activation on restart and a third restart
+that rejects a tampered pending manifest while retaining client availability through the same
+keepalive boundary. It also submits a rejected `/login` attempt and verifies that the cracked client
+remains in limbo with authentication commands still usable.
 
 Automated tests do not prove the real Velocity protocol flow. Before production, test premium,
 cracked and Floodgate clients on a staging proxy with forced hosts, `try` fallback, reconnects,

@@ -97,8 +97,8 @@ final class RuntimeSnapshotManager {
         }
         STORE_LOCK.lock();
         try {
-            writeManifest(ACTIVE_MANIFEST, candidate.artifact());
             Files.deleteIfExists(runtimeDirectory.resolve(PENDING_MANIFEST));
+            writeManifest(ACTIVE_MANIFEST, candidate.artifact());
             pruneArtifacts(Set.of(
                     candidate.artifact().artifactName(),
                     RuntimeArtifactDescriptor.pinned().artifactName()));

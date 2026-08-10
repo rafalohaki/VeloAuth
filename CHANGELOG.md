@@ -24,6 +24,11 @@ All notable user-visible changes to VeloAuth are documented in this file.
   fallback and backend exclusion use the same external or embedded target.
 - Embedded protocol responsibilities are separated behind `ProtocolRuntime`; remote repository
   resolution and verified artifact publication have independent, testable boundaries.
+- MCProtocolLib and Adventure now share Velocity's Gson runtime instead of relocating a private
+  copy, preventing a shaded `NoSuchMethodError` while decoding modern play packets.
+- Embedded limbo presents its chunk-free holding state as `minecraft:the_end` for a darker
+  authentication backdrop. It does not create a world or change the backend dimension after
+  transfer.
 - bStats Velocity was updated to 3.2.1, its lifecycle is closed explicitly, and fresh generated
   configs now explain telemetry privacy, global opt-out, embedded forwarding and restart semantics.
 
@@ -48,6 +53,11 @@ All notable user-visible changes to VeloAuth are documented in this file.
   fallback is selected.
 - Future timestamped runtime versions with three or four numeric release components are ordered
   monotonically and unknown formats fail closed.
+- A staged ViaVersion runtime now completes a bundled-client loopback login and keepalive before
+  selection and is promoted only after the real embedded listener is published successfully.
+  Failed preflights fall back to the previous active or build-pinned runtime in the same startup.
+- Concurrent proxy shutdown can no longer resurrect a partially initialized embedded provider,
+  listener or protocol classloader after it has entered the closed state.
 
 ### Security
 

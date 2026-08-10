@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.ReentrantLock;
 
 /** Loopback-only Minecraft holding server translated from a minimal 1.8 protocol base. */
 final class EmbeddedLimboServer implements AutoCloseable {
@@ -42,7 +43,7 @@ final class EmbeddedLimboServer implements AutoCloseable {
     private static final int MAX_SOCKET_BACKLOG = 1024;
     private static final int READ_TIMEOUT_SECONDS = 30;
     private static final int WRITE_TIMEOUT_SECONDS = 10;
-    private static final int KEEP_ALIVE_INTERVAL_SECONDS = 15;
+    private static final Duration KEEP_ALIVE_INTERVAL = Duration.ofSeconds(15);
     private static final int VELOCITY_FORWARDING_TRANSACTION_ID = 0;
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(8);
     private static final Duration BIND_ADDRESS_TIMEOUT = Duration.ofSeconds(2);
@@ -62,6 +63,7 @@ final class EmbeddedLimboServer implements AutoCloseable {
     private final Semaphore connectionSlots;
     private final java.util.Set<Session> acceptedSessions = ConcurrentHashMap.newKeySet();
     private final AtomicReference<State> state = new AtomicReference<>(State.NEW);
+    private final ReentrantLock lifecycleLock = new ReentrantLock();
     private final AtomicInteger playersInGame = new AtomicInteger();
     private final LongAdder rejectedConnections = new LongAdder();
     private final LongAdder invalidRedirects = new LongAdder();
@@ -97,18 +99,22 @@ final class EmbeddedLimboServer implements AutoCloseable {
             throw new IllegalStateException("Embedded limbo can only be started once (state=" + state.get() + ')');
         }
 
-        BoundedNetworkServer candidate = new BoundedNetworkServer(
-                LoopbackAddress.socket(config.port()),
-                EmbeddedLimboServer::createProtocol,
-                protocolRuntime,
-                MAX_FRAME_BYTES,
-                Math.min(config.maxConnections(), MAX_SOCKET_BACKLOG));
-        candidate.setGlobalFlag(BuiltinFlags.READ_TIMEOUT, READ_TIMEOUT_SECONDS);
-        candidate.setGlobalFlag(BuiltinFlags.WRITE_TIMEOUT, WRITE_TIMEOUT_SECONDS);
-        candidate.addListener(new LimboServerListener());
-        server = candidate;
-
+        BoundedNetworkServer candidate = null;
+        lifecycleLock.lock();
         try {
+            if (state.get() != State.STARTING) {
+                throw new IllegalStateException(
+                        "Embedded limbo startup was cancelled (state=" + state.get() + ')');
+            }
+            candidate = new BoundedNetworkServer(
+                    LoopbackAddress.socket(config.port()),
+                    EmbeddedLimboServer::createProtocol,
+                    protocolRuntime,
+                    MAX_FRAME_BYTES,
+                    Math.min(config.maxConnections(), MAX_SOCKET_BACKLOG));
+            candidate.setGlobalFlag(BuiltinFlags.READ_TIMEOUT, READ_TIMEOUT_SECONDS);
+            candidate.setGlobalFlag(BuiltinFlags.WRITE_TIMEOUT, WRITE_TIMEOUT_SECONDS);
+            candidate.addListener(new LimboServerListener());
             candidate.bind(true);
             if (!candidate.isListening()) {
                 throw new IllegalStateException(
@@ -122,12 +128,21 @@ final class EmbeddedLimboServer implements AutoCloseable {
                 throw new IllegalStateException(
                         "Embedded limbo did not publish a valid loopback listener address");
             }
-            state.set(State.LISTENING);
-        } catch (RuntimeException e) {
-            state.set(State.FAILED);
-            closeNetworkServer(candidate);
+            server = candidate;
+            if (!state.compareAndSet(State.STARTING, State.LISTENING)) {
+                server = null;
+                throw new IllegalStateException(
+                        "Embedded limbo startup was cancelled (state=" + state.get() + ')');
+            }
+        } catch (RuntimeException | LinkageError e) {
+            state.compareAndSet(State.STARTING, State.FAILED);
+            if (candidate != null) {
+                closeNetworkServer(candidate);
+            }
             throw new IllegalStateException(
                     "Failed to start embedded limbo on IPv4 loopback port " + config.port(), e);
+        } finally {
+            lifecycleLock.unlock();
         }
     }
 
@@ -173,23 +188,28 @@ final class EmbeddedLimboServer implements AutoCloseable {
 
     @Override
     public void close() {
-        State previous = state.getAndUpdate(current -> switch (current) {
-            case CLOSED, STOPPING -> current;
-            default -> State.STOPPING;
-        });
-        if (previous == State.CLOSED || previous == State.STOPPING) {
-            return;
-        }
+        lifecycleLock.lock();
+        try {
+            State previous = state.getAndUpdate(current -> switch (current) {
+                case CLOSED, STOPPING -> current;
+                default -> State.STOPPING;
+            });
+            if (previous == State.CLOSED || previous == State.STOPPING) {
+                return;
+            }
 
-        expectedRedirects.clear();
-        BoundedNetworkServer current = server;
-        server = null;
-        if (current != null) {
-            closeNetworkServer(current);
+            expectedRedirects.clear();
+            BoundedNetworkServer current = server;
+            server = null;
+            if (current != null) {
+                closeNetworkServer(current);
+            }
+            acceptedSessions.clear();
+            playersInGame.set(0);
+            state.set(State.CLOSED);
+        } finally {
+            lifecycleLock.unlock();
         }
-        acceptedSessions.clear();
-        playersInGame.set(0);
-        state.set(State.CLOSED);
     }
 
     private void closeNetworkServer(BoundedNetworkServer current) {
@@ -198,7 +218,7 @@ final class EmbeddedLimboServer implements AutoCloseable {
                 logger.warn("Embedded limbo Netty event loops did not terminate within {} seconds",
                         SHUTDOWN_TIMEOUT.toSeconds());
             }
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | LinkageError e) {
             logger.warn("Embedded limbo network shutdown failed", e);
         }
     }
@@ -348,9 +368,9 @@ final class EmbeddedLimboServer implements AutoCloseable {
             session.send(initialPosition(session));
             keepAliveTask = session.getChannel().eventLoop().scheduleAtFixedRate(
                     () -> tickKeepAlive(session),
-                    KEEP_ALIVE_INTERVAL_SECONDS,
-                    KEEP_ALIVE_INTERVAL_SECONDS,
-                    TimeUnit.SECONDS);
+                    config.keepAliveInterval().toMillis(),
+                    config.keepAliveInterval().toMillis(),
+                    TimeUnit.MILLISECONDS);
         }
 
         private LegacyProtocolCodec.PlayerPosition initialPosition(Session session) {
@@ -417,7 +437,17 @@ final class EmbeddedLimboServer implements AutoCloseable {
         }
     }
 
-    record Config(int port, int maxConnections, Duration handshakeTimeout, Duration loginTimeout) {
+    record Config(
+            int port,
+            int maxConnections,
+            Duration handshakeTimeout,
+            Duration loginTimeout,
+            Duration keepAliveInterval) {
+
+        Config(int port, int maxConnections, Duration handshakeTimeout, Duration loginTimeout) {
+            this(port, maxConnections, handshakeTimeout, loginTimeout, KEEP_ALIVE_INTERVAL);
+        }
+
         Config {
             if (port < 0 || port > 65535) {
                 throw new IllegalArgumentException("port must be in range 0-65535");
@@ -430,6 +460,9 @@ final class EmbeddedLimboServer implements AutoCloseable {
             }
             if (loginTimeout == null || loginTimeout.isZero() || loginTimeout.isNegative()) {
                 throw new IllegalArgumentException("loginTimeout must be positive");
+            }
+            if (keepAliveInterval == null || keepAliveInterval.isZero() || keepAliveInterval.isNegative()) {
+                throw new IllegalArgumentException("keepAliveInterval must be positive");
             }
         }
     }

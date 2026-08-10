@@ -137,6 +137,27 @@ class RuntimeSnapshotManagerTest {
     }
 
     @Test
+    void recordSuccessful_PendingRemovalFailure_ShouldPreservePreviousActiveManifest() throws Exception {
+        byte[] artifact = testJar();
+        URI repository = serveRepository(artifact, sha256(artifact), new AtomicInteger());
+        RuntimeSnapshotManager manager = manager(repository, Clock.fixed(CHECK_TIME, ZoneOffset.UTC));
+        manager.stageLatestSnapshot("5.11.0");
+        RuntimeSnapshotManager.RuntimeCandidate pending = manager.startupCandidates().getFirst();
+        Path activeManifest = temporaryDirectory.resolve(RuntimeSnapshotManager.ACTIVE_MANIFEST);
+        String previousActive = "previous-active-runtime\n";
+        Files.writeString(activeManifest, previousActive);
+        Path pendingManifest = temporaryDirectory.resolve(RuntimeSnapshotManager.PENDING_MANIFEST);
+        Files.delete(pendingManifest);
+        Files.createDirectory(pendingManifest);
+        Files.writeString(pendingManifest.resolve("undeletable-child"), "block activation");
+
+        assertThrows(IllegalStateException.class, () -> manager.recordSuccessful(pending));
+
+        assertEquals(previousActive, Files.readString(activeManifest),
+                "A failed pending cleanup must not partially replace the active runtime");
+    }
+
+    @Test
     void startupCandidates_InvalidRegularManifest_ShouldRemoveItAndUsePinnedFallback() throws Exception {
         Files.createDirectories(temporaryDirectory);
         Path invalidManifest = temporaryDirectory.resolve(RuntimeSnapshotManager.PENDING_MANIFEST);

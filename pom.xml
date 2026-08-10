@@ -480,6 +480,11 @@
                                     <exclude>net.kyori:adventure-text-serializer-legacy</exclude>
                                     <exclude>net.kyori:adventure-text-serializer-plain</exclude>
                                     <exclude>net.kyori:adventure-text-serializer-commons</exclude>
+                                    <!-- Adventure's proxy-provided Gson serializer exposes Gson
+                                         types in its public method descriptors. MCProtocolLib must
+                                         use Velocity's matching Gson type universe as well; bundling
+                                         or relocating Gson creates a NoSuchMethodError after Join Game. -->
+                                    <exclude>com.google.code.gson:gson</exclude>
                                     <exclude>net.kyori:option</exclude>
                                     <exclude>net.kyori:examination-api</exclude>
                                     <exclude>net.kyori:examination-string</exclude>
@@ -574,10 +579,6 @@
                                 <relocation>
                                     <pattern>net.lenni0451.commons</pattern>
                                     <shadedPattern>net.rafalohaki.veloauth.libs.lenni0451</shadedPattern>
-                                </relocation>
-                                <relocation>
-                                    <pattern>com.google.gson</pattern>
-                                    <shadedPattern>net.rafalohaki.veloauth.libs.gson</shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>net.kyori.adventure.text.serializer.json.legacyimpl</pattern>

@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 /** Single restart-scoped owner of the external or self-contained authentication topology. */
 public final class AuthServerProvider implements AutoCloseable {
@@ -32,6 +33,7 @@ public final class AuthServerProvider implements AutoCloseable {
     private final Path dataDirectory;
     private final RuntimeFactory runtimeFactory;
     private final AtomicReference<State> state = new AtomicReference<>(State.NEW);
+    private final ReentrantLock lifecycleLock = new ReentrantLock();
 
     private volatile ServerInfo ownedServerInfo;
     private volatile EmbeddedLimboServer embeddedServer;
@@ -117,14 +119,24 @@ public final class AuthServerProvider implements AutoCloseable {
             throw new IllegalStateException("Auth-server provider can only be started once (state=" + state.get() + ')');
         }
         if (mode == Settings.AuthServerMode.EXTERNAL) {
-            state.set(State.READY);
+            lifecycleLock.lock();
+            try {
+                requireStarting();
+                state.set(State.READY);
+            } finally {
+                lifecycleLock.unlock();
+            }
             return;
         }
 
+        ProtocolRuntime unopenedRuntime = null;
+        EmbeddedLimboServer unpublishedServer = null;
         try {
+            requireStarting();
             ensureReservedNameIsAvailable();
             ProtocolRuntime runtime = runtimeFactory.open(dataDirectory, logger);
-            protocolRuntime = runtime;
+            unopenedRuntime = runtime;
+            requireStarting();
             verifyProtocolRuntime(runtime);
 
             EmbeddedLimboServer candidate = new EmbeddedLimboServer(
@@ -134,23 +146,52 @@ public final class AuthServerProvider implements AutoCloseable {
                     runtime,
                     playerMessages(),
                     logger);
-            embeddedServer = candidate;
+            unpublishedServer = candidate;
             candidate.start();
+            requireStarting();
 
             ServerInfo serverInfo = new ServerInfo(serverName, LoopbackAddress.socket(candidate.port()));
-            ownedServerInfo = serverInfo;
-            RegisteredServer registration = proxyServer.registerServer(serverInfo);
-            Optional<RegisteredServer> published = proxyServer.getServer(serverName);
-            if (registration == null || published.isEmpty()
-                    || !serverInfo.equals(published.get().getServerInfo())) {
-                throw new IllegalStateException(
-                        "Velocity did not publish the embedded auth-server registration");
+            lifecycleLock.lock();
+            try {
+                requireStarting();
+                protocolRuntime = runtime;
+                embeddedServer = candidate;
+                ownedServerInfo = serverInfo;
+                unopenedRuntime = null;
+                unpublishedServer = null;
+
+                RegisteredServer registration = proxyServer.registerServer(serverInfo);
+                Optional<RegisteredServer> published = proxyServer.getServer(serverName);
+                if (registration == null || published.isEmpty()
+                        || !serverInfo.equals(published.get().getServerInfo())) {
+                    throw new IllegalStateException(
+                            "Velocity did not publish the embedded auth-server registration");
+                }
+                runtime.confirmOperational();
+                requireStarting();
+                state.set(State.READY);
+            } finally {
+                lifecycleLock.unlock();
             }
-            state.set(State.READY);
         } catch (RuntimeException | LinkageError exception) {
-            state.set(State.FAILED);
-            rollbackPartialStart();
+            state.compareAndSet(State.STARTING, State.FAILED);
+            closeUnpublishedServer(unpublishedServer);
+            closeUnpublishedRuntime(unopenedRuntime);
+            lifecycleLock.lock();
+            try {
+                rollbackPartialStart();
+            } finally {
+                lifecycleLock.unlock();
+            }
             throw new IllegalStateException("Embedded auth-server startup failed", exception);
+        }
+    }
+
+    private void requireStarting() {
+        State current = state.get();
+        if (current != State.STARTING) {
+            throw new IllegalStateException(
+                    "Auth-server provider startup was cancelled (state=" + current + ')');
         }
     }
 
@@ -289,13 +330,18 @@ public final class AuthServerProvider implements AutoCloseable {
 
     @Override
     public void close() {
-        if (!beginStopping()) {
-            return;
+        lifecycleLock.lock();
+        try {
+            if (!beginStopping()) {
+                return;
+            }
+            unregisterOwnedServer();
+            closeEmbeddedServer();
+            closeProtocolRuntime();
+            state.set(State.CLOSED);
+        } finally {
+            lifecycleLock.unlock();
         }
-        unregisterOwnedServer();
-        closeEmbeddedServer();
-        closeProtocolRuntime();
-        state.set(State.CLOSED);
     }
 
     private boolean beginStopping() {
@@ -314,6 +360,28 @@ public final class AuthServerProvider implements AutoCloseable {
         unregisterOwnedServer();
         closeEmbeddedServer();
         closeProtocolRuntime();
+    }
+
+    private void closeUnpublishedServer(EmbeddedLimboServer server) {
+        if (server == null) {
+            return;
+        }
+        try {
+            server.close();
+        } catch (RuntimeException | LinkageError exception) {
+            logger.warn("Failed to close unpublished embedded auth server", exception);
+        }
+    }
+
+    private void closeUnpublishedRuntime(ProtocolRuntime runtime) {
+        if (runtime == null) {
+            return;
+        }
+        try {
+            runtime.close();
+        } catch (RuntimeException | LinkageError exception) {
+            logger.warn("Failed to close unpublished embedded protocol runtime", exception);
+        }
     }
 
     private void unregisterOwnedServer() {
@@ -337,8 +405,13 @@ public final class AuthServerProvider implements AutoCloseable {
     private void closeEmbeddedServer() {
         EmbeddedLimboServer current = embeddedServer;
         embeddedServer = null;
-        if (current != null) {
+        if (current == null) {
+            return;
+        }
+        try {
             current.close();
+        } catch (RuntimeException | LinkageError exception) {
+            logger.warn("Failed to close embedded auth server", exception);
         }
     }
 
@@ -350,7 +423,7 @@ public final class AuthServerProvider implements AutoCloseable {
         }
         try {
             current.close();
-        } catch (RuntimeException exception) {
+        } catch (RuntimeException | LinkageError exception) {
             logger.warn("Failed to close embedded protocol runtime", exception);
         }
     }

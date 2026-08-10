@@ -37,12 +37,22 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
     private final Method minimumVersionName;
     private final Method maximumVersionName;
     private final Method close;
+    private final RuntimeSnapshotManager snapshots;
+    private final RuntimeSnapshotManager.RuntimeCandidate candidate;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean operationalConfirmed = new AtomicBoolean();
 
-    private ManagedProtocolRuntime(RuntimeClassLoader classLoader, Object delegate, String runtimeVersion) {
+    private ManagedProtocolRuntime(
+            RuntimeClassLoader classLoader,
+            Object delegate,
+            String runtimeVersion,
+            RuntimeSnapshotManager snapshots,
+            RuntimeSnapshotManager.RuntimeCandidate candidate) {
         this.classLoader = classLoader;
         this.delegate = delegate;
         this.runtimeVersion = Objects.requireNonNull(runtimeVersion, "runtimeVersion");
+        this.snapshots = snapshots;
+        this.candidate = candidate;
         Class<?> type = delegate.getClass();
         try {
             supportsProtocol = type.getMethod("supportsProtocol", int.class);
@@ -61,9 +71,19 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
     }
 
     static ManagedProtocolRuntime open(Path dataDirectory, Logger logger, String pluginVersion) {
+        return open(dataDirectory, logger, pluginVersion,
+                runtime -> EmbeddedLimboRuntimeProbe.verify(runtime, logger));
+    }
+
+    static ManagedProtocolRuntime open(
+            Path dataDirectory,
+            Logger logger,
+            String pluginVersion,
+            RuntimeValidator validator) {
         Objects.requireNonNull(dataDirectory, "dataDirectory");
         Objects.requireNonNull(logger, "logger");
         Objects.requireNonNull(pluginVersion, "pluginVersion");
+        Objects.requireNonNull(validator, "validator");
         RuntimeSnapshotManager snapshots = new RuntimeSnapshotManager(dataDirectory, logger);
         IllegalStateException aggregate = new IllegalStateException(
                 "No verified embedded protocol runtime could be initialized");
@@ -75,13 +95,19 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
                         dataDirectory.resolve("runtime-config"),
                         logger,
                         pluginVersion,
-                        candidate.artifact().version());
+                        candidate.artifact().version(),
+                        snapshots,
+                        candidate);
                 try {
-                    snapshots.recordSuccessful(candidate);
+                    validator.validate(runtime);
                     return runtime;
-                } catch (RuntimeException e) {
-                    runtime.close();
-                    throw e;
+                } catch (RuntimeException | LinkageError validationFailure) {
+                    try {
+                        runtime.close();
+                    } catch (RuntimeException | LinkageError closeFailure) {
+                        validationFailure.addSuppressed(closeFailure);
+                    }
+                    throw validationFailure;
                 }
             } catch (RuntimeException | LinkageError e) {
                 snapshots.recordFailed(candidate, e);
@@ -97,7 +123,9 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
             Logger logger,
             String pluginVersion) {
         return open(artifact, runtimeConfigDirectory, logger, pluginVersion,
-                net.rafalohaki.veloauth.BuildConstants.EMBEDDED_VIAVERSION_VERSION);
+                net.rafalohaki.veloauth.BuildConstants.EMBEDDED_VIAVERSION_VERSION,
+                null,
+                null);
     }
 
     private static ManagedProtocolRuntime open(
@@ -105,7 +133,9 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
             Path runtimeConfigDirectory,
             Logger logger,
             String pluginVersion,
-            String runtimeVersion) {
+            String runtimeVersion,
+            RuntimeSnapshotManager snapshots,
+            RuntimeSnapshotManager.RuntimeCandidate candidate) {
         RUNTIME_INITIALIZATION_LOCK.lock();
         try {
             RuntimeClassLoader loader = null;
@@ -118,7 +148,8 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
                 delegate = bootstrap
                         .getConstructor(Path.class, Logger.class, String.class)
                         .newInstance(runtimeConfigDirectory, logger, pluginVersion);
-                return new ManagedProtocolRuntime(loader, delegate, runtimeVersion);
+                return new ManagedProtocolRuntime(
+                        loader, delegate, runtimeVersion, snapshots, candidate);
             } catch (IOException | ReflectiveOperationException | RuntimeException | LinkageError e) {
                 closeDelegate(delegate, e);
                 closeLoader(loader);
@@ -170,6 +201,26 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
     }
 
     @Override
+    public void confirmOperational() {
+        if (snapshots == null || candidate == null
+                || candidate.source() != RuntimeSnapshotManager.CandidateSource.PENDING) {
+            return;
+        }
+        if (closed.get()) {
+            throw new IllegalStateException("Closed embedded protocol runtime cannot be activated");
+        }
+        if (!operationalConfirmed.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            snapshots.recordSuccessful(candidate);
+        } catch (RuntimeException activationFailure) {
+            operationalConfirmed.set(false);
+            throw activationFailure;
+        }
+    }
+
+    @Override
     public void sendVelocityForwardingRequest(
             Channel channel, int transactionId, Runnable loginContinuation) {
         invoke(sendVelocityForwardingRequest,
@@ -183,10 +234,10 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        RuntimeException failure = null;
+        Throwable failure = null;
         try {
             invoke(close);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | LinkageError e) {
             failure = e;
         }
         try {
@@ -198,8 +249,11 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
                 failure.addSuppressed(e);
             }
         }
-        if (failure != null) {
-            throw failure;
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (failure instanceof LinkageError linkageFailure) {
+            throw linkageFailure;
         }
     }
 
@@ -244,6 +298,11 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
         } catch (ReflectiveOperationException | RuntimeException | LinkageError closeFailure) {
             initializationFailure.addSuppressed(closeFailure);
         }
+    }
+
+    @FunctionalInterface
+    interface RuntimeValidator {
+        void validate(ManagedProtocolRuntime runtime);
     }
 
     /** Child-first only for the downloaded implementation and its tiny VeloAuth bootstrap. */

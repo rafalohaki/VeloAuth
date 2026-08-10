@@ -11,6 +11,7 @@ import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundRegistryDataPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerPositionPacket;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -78,6 +80,7 @@ class EmbeddedLimboProtocolMatrixTest {
         AtomicReference<byte[]> forwardingRequestData = new AtomicReference<>();
         AtomicReference<ClientboundLoginPacket> loginPacket = new AtomicReference<>();
         AtomicReference<ClientboundPlayerPositionPacket> positionPacket = new AtomicReference<>();
+        AtomicInteger endDimensionId = new AtomicInteger(-1);
         MinecraftProtocol protocol = new MinecraftProtocol(new GameProfile(playerId, username), null);
         assertEquals(runtime.maximumProtocol(), protocol.getCodec().getProtocolVersion());
         client = ClientNetworkSessionFactory.factory()
@@ -92,6 +95,15 @@ class EmbeddedLimboProtocolMatrixTest {
                         && Key.key("velocity", "player_info").equals(query.getChannel())) {
                     forwardingRequestData.set(query.getData());
                     forwardingRequested.countDown();
+                } else if (packet instanceof ClientboundRegistryDataPacket registryData
+                        && Key.key("minecraft", "dimension_type").equals(registryData.getRegistry())) {
+                    for (int index = 0; index < registryData.getEntries().size(); index++) {
+                        if (Key.key("minecraft", "the_end")
+                                .equals(registryData.getEntries().get(index).getId())) {
+                            endDimensionId.set(index);
+                            break;
+                        }
+                    }
                 } else if (packet instanceof ClientboundLoginPacket login) {
                     loginPacket.set(login);
                     joined.countDown();
@@ -115,6 +127,13 @@ class EmbeddedLimboProtocolMatrixTest {
                 "An empty request asks Velocity to use its compatible default forwarding version");
         assertTrue(joined.await(10, TimeUnit.SECONDS),
                 "Minecraft 26.2 client should receive its translated Join Game packet");
+        assertTrue(endDimensionId.get() >= 0,
+                "Minecraft 26.2 should receive the End dimension registry entry");
+        assertEquals(endDimensionId.get(), loginPacket.get().getCommonPlayerSpawnInfo().getDimension(),
+                "Translated Join Game must reference the End dimension type");
+        assertEquals(Key.key("minecraft", "the_end"),
+                loginPacket.get().getCommonPlayerSpawnInfo().getWorldName(),
+                "Translated Join Game must use the End world identifier");
         assertTrue(loginPacket.get().isEnforcesSecureChat(),
                 "Embedded limbo should not trigger the modern client's insecure-chat warning toast");
         assertTrue(terrainLoadingStarted.await(10, TimeUnit.SECONDS),

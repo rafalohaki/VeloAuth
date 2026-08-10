@@ -18,7 +18,9 @@ MCProtocolLib brings the following package-relocated runtime dependencies into t
 - Cloudburst NBT `3.0.4.Final` — [Apache-2.0](https://github.com/CloudburstMC/NBT/blob/master/LICENSE)
 - Cloudburst Math API/Immutable `2.0` — [MIT](https://github.com/CloudburstMC/math/blob/master/LICENSE.txt)
 - Cloudburst/NukkitX fastutil modules `8.5.3` — [Apache-2.0](https://github.com/CloudburstMC/fastutil/blob/develop/LICENSE-2.0)
-- Gson `2.13.2` — [Apache-2.0](https://github.com/google/gson/blob/main/LICENSE)
+
+Gson is not bundled or relocated. MCProtocolLib and Adventure share the Gson runtime supplied by
+Velocity because Adventure's public serializer API exposes Gson types in method descriptors.
 
 The complete MCProtocolLib MIT text is shipped in the plugin JAR at
 `META-INF/licenses/MCProtocolLib-LICENSE.txt`. Maven license metadata for the transitive artifacts

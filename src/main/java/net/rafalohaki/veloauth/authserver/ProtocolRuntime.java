@@ -29,6 +29,14 @@ interface ProtocolRuntime extends AutoCloseable {
     int clientProtocol(Channel channel);
 
     /**
+     * Commits restart-staged runtime metadata after the owning auth-server provider is ready.
+     * Exact build artifacts and test runtimes have nothing to publish.
+     */
+    default void confirmOperational() {
+        // No managed snapshot to promote.
+    }
+
+    /**
      * Sends Velocity's standard login forwarding query when the connected protocol supports it,
      * then resumes the base-protocol login in wire order.
      *

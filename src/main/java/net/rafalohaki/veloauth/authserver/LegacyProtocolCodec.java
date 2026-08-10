@@ -17,6 +17,7 @@ final class LegacyProtocolCodec {
 
     static final int PROTOCOL_VERSION = 47;
     static final String MINECRAFT_VERSION = "1.8.x";
+    private static final int END_DIMENSION_ID = 1;
     private static final int LAST_SERVERBOUND_GAME_PACKET = 0x19;
 
     static final PacketCodec CODEC = PacketCodec.builder()
@@ -245,7 +246,7 @@ final class LegacyProtocolCodec {
         public void serialize(ByteBuf output) {
             output.writeInt(entityId);
             output.writeByte(2); // Adventure mode.
-            output.writeByte(0); // Overworld.
+            output.writeByte(END_DIMENSION_ID);
             output.writeByte(0); // Peaceful.
             output.writeByte(1); // Advertised maximum players.
             writeString(output, "default");

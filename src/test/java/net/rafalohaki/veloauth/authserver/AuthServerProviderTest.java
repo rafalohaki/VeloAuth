@@ -17,11 +17,17 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -116,6 +122,7 @@ class AuthServerProviderTest {
                 provider.prepare(player(ProtocolVersion.MINECRAFT_26_2)));
         assertEquals(AuthServerProvider.Preparation.UNSUPPORTED_PROTOCOL,
                 provider.prepare(player(ProtocolVersion.MINECRAFT_1_7_6)));
+        assertEquals(1, runtime.operationalConfirmations.get());
 
         provider.close();
         assertTrue(runtime.closed.get());
@@ -189,7 +196,86 @@ class AuthServerProviderTest {
         assertThrows(IllegalStateException.class, provider::start);
 
         assertTrue(runtime.closed.get());
+        assertEquals(0, runtime.operationalConfirmations.get());
         verify(proxy).unregisterServer(attempted.get());
+        assertPortCanBeBound(port);
+    }
+
+    @Test
+    void embedded_RuntimeActivationFailure_ShouldRollbackRegistrationListenerAndRuntime() throws Exception {
+        int port = freePort();
+        ProxyFixture fixture = proxyFixture();
+        FakeProtocolRuntime runtime = new FakeProtocolRuntime() {
+            @Override
+            public void confirmOperational() {
+                super.confirmOperational();
+                throw new IllegalStateException("simulated runtime-manifest activation failure");
+            }
+        };
+        AuthServerProvider provider = track(embeddedProvider(fixture.proxy(), port, runtime));
+
+        assertThrows(IllegalStateException.class, provider::start);
+
+        assertTrue(runtime.closed.get());
+        assertEquals(1, runtime.operationalConfirmations.get());
+        assertFalse(provider.isReady());
+        assertTrue(provider.resolve().isEmpty());
+        assertTrue(fixture.registration().get() == null);
+        verify(fixture.proxy()).unregisterServer(any(ServerInfo.class));
+        assertPortCanBeBound(port);
+    }
+
+    @Test
+    void embedded_CloseDuringRuntimeOpen_ShouldNeverResurrectProviderOrListener() throws Exception {
+        int port = freePort();
+        ProxyServer proxy = mock(ProxyServer.class);
+        when(proxy.getServer(anyString())).thenReturn(Optional.empty());
+        CountDownLatch runtimeOpenStarted = new CountDownLatch(1);
+        CountDownLatch allowRuntimeOpen = new CountDownLatch(1);
+        FakeProtocolRuntime runtime = new FakeProtocolRuntime() {
+            @Override
+            public void close() {
+                super.close();
+                throw new LinkageError("simulated incompatible runtime cleanup");
+            }
+        };
+        AuthServerProvider provider = track(embeddedProvider(proxy, port, (directory, logger) -> {
+            runtimeOpenStarted.countDown();
+            try {
+                if (!allowRuntimeOpen.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("test runtime open was not released");
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("test runtime open was interrupted", interrupted);
+            }
+            return runtime;
+        }));
+        CompletableFuture<Void> startup = new CompletableFuture<>();
+        Thread startupThread = Thread.ofVirtual().start(() -> {
+            try {
+                provider.start();
+                startup.complete(null);
+            } catch (Throwable failure) {
+                startup.completeExceptionally(failure);
+            }
+        });
+
+        try {
+            assertTrue(runtimeOpenStarted.await(5, TimeUnit.SECONDS));
+            provider.close();
+        } finally {
+            allowRuntimeOpen.countDown();
+        }
+
+        assertThrows(CompletionException.class, startup::join);
+        startupThread.join(Duration.ofSeconds(5));
+        assertFalse(startupThread.isAlive());
+        assertTrue(runtime.closed.get());
+        assertFalse(provider.isReady());
+        assertTrue(provider.resolve().isEmpty());
+        assertEquals(0, runtime.operationalConfirmations.get());
+        verify(proxy, never()).registerServer(any(ServerInfo.class));
         assertPortCanBeBound(port);
     }
 
@@ -303,6 +389,7 @@ class AuthServerProviderTest {
 
     private static class FakeProtocolRuntime implements ProtocolRuntime {
         private final AtomicBoolean closed = new AtomicBoolean();
+        private final AtomicInteger operationalConfirmations = new AtomicInteger();
         private final int maximumProtocol;
         private final String maximumVersionName;
 
@@ -354,6 +441,11 @@ class AuthServerProviderTest {
         @Override
         public int clientProtocol(Channel channel) {
             return AuthServerProvider.MIN_SUPPORTED_PROTOCOL;
+        }
+
+        @Override
+        public void confirmOperational() {
+            operationalConfirmations.incrementAndGet();
         }
 
         @Override

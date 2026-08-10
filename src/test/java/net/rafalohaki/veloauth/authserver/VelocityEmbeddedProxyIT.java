@@ -1,5 +1,6 @@
 package net.rafalohaki.veloauth.authserver;
 
+import net.kyori.adventure.key.Key;
 import org.geysermc.mcprotocollib.auth.GameProfile;
 import org.geysermc.mcprotocollib.network.ClientSession;
 import org.geysermc.mcprotocollib.network.Session;
@@ -8,6 +9,7 @@ import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundRegistryDataPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundSystemChatPacket;
@@ -22,8 +24,10 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Opt-in real-proxy smoke; scripts/test-velocity-embedded.sh owns the Velocity process. */
@@ -51,6 +55,7 @@ class VelocityEmbeddedProxyIT {
         CountDownLatch keptAlive = new CountDownLatch(1);
         CountDownLatch commandResponse = new CountDownLatch(1);
         AtomicBoolean commandSent = new AtomicBoolean();
+        AtomicInteger endDimensionId = new AtomicInteger(-1);
         AtomicReference<ClientboundLoginPacket> loginPacket = new AtomicReference<>();
         AtomicReference<ClientboundPlayerPositionPacket> positionPacket = new AtomicReference<>();
         MinecraftProtocol protocol = new MinecraftProtocol(
@@ -63,7 +68,16 @@ class VelocityEmbeddedProxyIT {
         client.addListener(new SessionAdapter() {
             @Override
             public void packetReceived(Session session, Packet packet) {
-                if (packet instanceof ClientboundLoginPacket login) {
+                if (packet instanceof ClientboundRegistryDataPacket registryData
+                        && Key.key("minecraft", "dimension_type").equals(registryData.getRegistry())) {
+                    for (int index = 0; index < registryData.getEntries().size(); index++) {
+                        if (Key.key("minecraft", "the_end")
+                                .equals(registryData.getEntries().get(index).getId())) {
+                            endDimensionId.set(index);
+                            break;
+                        }
+                    }
+                } else if (packet instanceof ClientboundLoginPacket login) {
                     loginPacket.set(login);
                     joined.countDown();
                 } else if (packet instanceof ClientboundGameEventPacket event
@@ -84,6 +98,13 @@ class VelocityEmbeddedProxyIT {
 
         assertTrue(joined.await(20, TimeUnit.SECONDS),
                 "Minecraft 26.2 client should reach VeloAuth embedded limbo through Velocity");
+        assertTrue(endDimensionId.get() >= 0,
+                "Velocity should deliver the End dimension registry entry");
+        assertEquals(endDimensionId.get(), loginPacket.get().getCommonPlayerSpawnInfo().getDimension(),
+                "Velocity should preserve embedded limbo's End dimension type");
+        assertEquals(Key.key("minecraft", "the_end"),
+                loginPacket.get().getCommonPlayerSpawnInfo().getWorldName(),
+                "Velocity should preserve embedded limbo's End world identifier");
         assertTrue(loginPacket.get().isEnforcesSecureChat(),
                 "Velocity should preserve embedded limbo's secure-chat marker");
         assertTrue(terrainLoadingStarted.await(10, TimeUnit.SECONDS),

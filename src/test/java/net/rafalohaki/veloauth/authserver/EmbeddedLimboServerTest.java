@@ -55,6 +55,10 @@ class EmbeddedLimboServerTest {
 
             MinecraftWireTestSupport.Frame joinGame = readFrame(socket);
             assertEquals(0x01, joinGame.packetId());
+            joinGame.payload().readInt();
+            joinGame.payload().readUnsignedByte();
+            assertEquals(1, joinGame.payload().readByte(),
+                    "Minecraft 1.8 should enter the End dimension");
 
             MinecraftWireTestSupport.Frame position = readFrame(socket);
             assertEquals(0x08, position.packetId());
