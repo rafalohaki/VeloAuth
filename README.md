@@ -610,11 +610,13 @@ database gates before uploading a release artifact.
 
 The normal suite also performs a native 1.8 login, bidirectional protocol-47 keepalive checks,
 translated status handshakes for representative 1.12.2, 1.16.5, 1.20.1 and 1.21.4 clients, and a
-complete MCProtocolLib 26.2 login held through the first keepalive. The real Velocity smoke proves
-pinned startup, snapshot staging, activation on restart and a third restart that rejects a
-tampered pending manifest while retaining client availability through the same keepalive boundary.
-It also submits a rejected `/login` attempt and verifies that the cracked client remains in limbo
-with authentication commands still usable.
+complete MCProtocolLib 26.2 login held through the first keepalive. That latest-client path also
+requires ViaVersion's level-loading event and a translated spawn above the unloaded void, preventing
+the client from remaining on "Loading terrain". The real Velocity smoke proves pinned startup,
+snapshot staging, activation on restart and a third restart that rejects a tampered pending manifest
+while retaining client availability through the same keepalive boundary. It also submits a rejected
+`/login` attempt and verifies that the cracked client remains in limbo with authentication commands
+still usable.
 
 Automated tests do not prove the real Velocity protocol flow. Before production, test premium,
 cracked and Floodgate clients on a staging proxy with forced hosts, `try` fallback, reconnects,

@@ -47,6 +47,8 @@ final class EmbeddedLimboServer implements AutoCloseable {
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(8);
     private static final Duration BIND_ADDRESS_TIMEOUT = Duration.ofSeconds(2);
     private static final LegacyProtocolCodec.JoinGame JOIN_GAME = new LegacyProtocolCodec.JoinGame(1);
+    // Modern clients can remain on Loading terrain when spawned inside an unloaded void world.
+    // Preserve the native 1.8 position and place translated connections above the world instead.
     private static final LegacyProtocolCodec.PlayerPosition LEGACY_INITIAL_POSITION =
             new LegacyProtocolCodec.PlayerPosition(0.5, 64.0, 0.5, 0.0F, 0.0F);
     private static final LegacyProtocolCodec.PlayerPosition TRANSLATED_INITIAL_POSITION =

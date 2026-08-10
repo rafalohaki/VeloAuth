@@ -38,6 +38,9 @@ All notable user-visible changes to VeloAuth are documented in this file.
 - Minecraft 1.8 keepalive challenges now use the protocol-47 VarInt wire format in both directions.
   Cracked players can remain in embedded limbo beyond the first 15-second keepalive, authenticate,
   and then follow the existing post-auth backend transfer instead of being disconnected by Velocity.
+- Translated clients now spawn above the unloaded void world instead of at Y=64, preventing modern
+  cracked clients from remaining on "Loading terrain" before they can use `/login` or `/register`.
+  Native Minecraft 1.8 keeps its previous spawn height.
 - Removing premium security opt-ins from a valid reload restores their safe `false` defaults.
 - Concurrent runtime preparation in one proxy process no longer downloads or publishes the same
   artifact twice.
