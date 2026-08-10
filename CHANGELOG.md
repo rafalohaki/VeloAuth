@@ -13,6 +13,8 @@ All notable user-visible changes to VeloAuth are documented in this file.
 - Restart-staged ViaVersion snapshot updates. Candidates are resolved to immutable artifacts,
   verified before publication and activated only after isolated initialization on a later restart.
 - Embedded runtime status, compatibility and topology details in `/vauth report` and startup logs.
+- Privacy-safe bStats custom charts for online client protocol versions, auth topology, database
+  family, language bucket and premium/Floodgate/2FA feature adoption.
 
 ### Changed
 
@@ -22,6 +24,8 @@ All notable user-visible changes to VeloAuth are documented in this file.
   fallback and backend exclusion use the same external or embedded target.
 - Embedded protocol responsibilities are separated behind `ProtocolRuntime`; remote repository
   resolution and verified artifact publication have independent, testable boundaries.
+- bStats Velocity was updated to 3.2.1, its lifecycle is closed explicitly, and fresh generated
+  configs now explain telemetry privacy, global opt-out, embedded forwarding and restart semantics.
 
 ### Fixed
 
@@ -43,11 +47,15 @@ All notable user-visible changes to VeloAuth are documented in this file.
 - Runtime metadata, checksums and JARs use bounded responses, strict origin validation, disabled XML
   external entities, SHA-256 verification and atomic publication.
 - Minecraft frames, unauthenticated connections and handshake/login durations are bounded.
+- Custom metrics use fixed or allow-listed aggregate categories and never read player identity,
+  addresses, virtual hosts, custom operator names or secrets.
 
 ### Upgrade notes
 
 - Requires Java 21 and a Velocity 3.5 API-compatible proxy.
 - A full proxy restart is required. Do not use `/vauth reload` as a plugin-upgrade substitute.
+- Existing `config.yml` files remain untouched. To display custom charts, the VeloAuth bStats page
+  owner must add the documented chart IDs once; server operators do not need a new config key.
 - Version 1.5.0 adds no database table, column or migration and does not rewrite player UUIDs,
   password hashes, TOTP secrets, `AUTH` or `PREMIUM_UUIDS` records.
 - Back up the database, `config.yml`, language files and `velocity.toml`; canary premium, cracked,

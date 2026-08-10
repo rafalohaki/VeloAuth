@@ -35,6 +35,7 @@ import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -64,6 +65,8 @@ public class VeloAuth {
     private final Logger logger;
     private final Path dataDirectory;
     private final Metrics.Factory metricsFactory;
+
+    private volatile Metrics metrics;
 
     // Główne komponenty pluginu
     private Settings settings;
@@ -246,10 +249,55 @@ public class VeloAuth {
     }
 
     private void initializeMetricsSafely() {
+        Metrics candidate = null;
         try {
-            metricsFactory.make(this, BSTATS_PLUGIN_ID);
+            candidate = Objects.requireNonNull(
+                    metricsFactory.make(this, BSTATS_PLUGIN_ID),
+                    "bStats metrics factory returned null");
+            BStatsCharts.register(candidate, server, settings);
         } catch (RuntimeException e) {
+            closeMetricsSafely(candidate);
             logger.warn("bStats initialization failed; VeloAuth will continue without metrics", e);
+            return;
+        }
+
+        boolean published;
+        lifecycleLock.lock();
+        try {
+            published = !shutdownStarted && metrics == null;
+            if (published) {
+                metrics = candidate;
+            }
+        } finally {
+            lifecycleLock.unlock();
+        }
+
+        if (!published) {
+            closeMetricsSafely(candidate);
+            logger.debug("bStats initialization discarded because the plugin is stopping or metrics already exist");
+        }
+    }
+
+    private void shutdownMetricsSafely() {
+        Metrics activeMetrics;
+        lifecycleLock.lock();
+        try {
+            activeMetrics = metrics;
+            metrics = null;
+        } finally {
+            lifecycleLock.unlock();
+        }
+        closeMetricsSafely(activeMetrics);
+    }
+
+    private void closeMetricsSafely(Metrics metricsToClose) {
+        if (metricsToClose == null) {
+            return;
+        }
+        try {
+            metricsToClose.shutdown();
+        } catch (RuntimeException exception) {
+            logger.warn("bStats shutdown failed; continuing VeloAuth cleanup", exception);
         }
     }
 
@@ -655,6 +703,8 @@ public class VeloAuth {
         try {
             logger.info("Initiating VeloAuth graceful shutdown...");
 
+            shutdownMetricsSafely();
+
             // 1. Unregister event listeners
             if (authListener != null) {
                 server.getEventManager().unregisterListener(this, authListener);
@@ -788,8 +838,8 @@ public class VeloAuth {
             String dbType = settings.getDatabaseStorageType();
             String language = settings.getLanguage();
             
-            logger.info("Initialized in {} ms ({} database, {} language, bStats enabled)", 
-                    initializationDuration, dbType, language);
+            logger.info("Initialized in {} ms ({} database, {} language, bStats integration {})",
+                    initializationDuration, dbType, language, metrics == null ? "unavailable" : "initialized");
             logger.info("Ready - player connections allowed");
         }
     }

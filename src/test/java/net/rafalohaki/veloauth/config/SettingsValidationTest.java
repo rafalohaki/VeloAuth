@@ -821,6 +821,9 @@ class SettingsValidationTest {
 
         assertTrue(generatedConfig.contains("mode: embedded"));
         assertTrue(generatedConfig.contains("port: 0"));
+        assertTrue(generatedConfig.contains("velocity:player_info"));
+        assertTrue(generatedConfig.contains("Existing config.yml files are never rewritten"));
+        assertTrue(generatedConfig.contains("plugins/bStats/config.txt"));
         assertFalse(generatedConfig.contains("client-compatibility:"));
         assertFalse(generatedConfig.contains("forwarding-secret-file:"));
     }

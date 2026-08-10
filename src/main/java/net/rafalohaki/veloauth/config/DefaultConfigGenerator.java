@@ -37,6 +37,7 @@ final class DefaultConfigGenerator {
                 AUDIT_LOG_SECTION,
                 TWO_FACTOR_SECTION,
                 REPORT_SECTION,
+                BSTATS_SECTION,
                 "" // trailing newline
         ).replace(BUILT_IN_LANGUAGE_CODES_PLACEHOLDER, BuiltInLanguages.quotedCodeList());
 
@@ -47,6 +48,10 @@ final class DefaultConfigGenerator {
     private static final String LANGUAGE_SECTION = """
                 # VeloAuth Configuration
                 # Complete Velocity Authentication Plugin
+                #
+                # Existing config.yml files are never rewritten during startup or reload.
+                # Missing optional keys use backward-compatible defaults. Copy new sections from
+                # the current README only when you want to change their documented behaviour.
                 
                 # Language configuration (built-in languages listed below; custom languages supported)
                 language: en
@@ -134,16 +139,26 @@ final class DefaultConfigGenerator {
                   # configurations with no mode remain external after an update. Changing the
                   # mode always requires a full proxy restart.
                   mode: embedded
-                  # External mode only: must match a server name in velocity.toml [servers].
+                  # EXTERNAL MODE ONLY: must match a server name in velocity.toml [servers].
+                  # This value is ignored in embedded mode; do not register the reserved
+                  # veloauth-embedded-limbo name yourself.
                   server-name: limbo
                   # Seconds before an unauthenticated player is kicked from the auth server.
                   # Set to 0 (or any value <= 0) to disable the kick — the player can stay on
                   # the auth/limbo server indefinitely.
                   timeout-seconds: 300
                   embedded:
-                    # Supports Java clients from 1.8 through 26.2. VeloAuth downloads its pinned,
-                    # checksum-verified protocol runtime on first embedded-mode startup.
-                    # 0 selects a free loopback port automatically; no forwarding secret is used.
+                    # The release fallback supports Java 1.8 through 26.2. After startup VeloAuth
+                    # may checksum-verify and stage a newer usable ViaVersion snapshot; it becomes
+                    # active only after the next full restart. External mode performs no managed
+                    # runtime check, download or classloading.
+                    #
+                    # The listener always binds to loopback. 0 (recommended) selects a free port;
+                    # a fixed value is still loopback-only and must not be exposed publicly.
+                    # With Velocity modern forwarding, Java 1.13+ receives the standard
+                    # velocity:player_info query. Velocity reads and signs with its existing
+                    # forwarding secret; VeloAuth never reads, copies or logs that secret.
+                    # Modern forwarding itself cannot carry Java 1.8-1.12 clients.
                     port: 0
                     # Hard limits for the unauthenticated public edge.
                     max-connections: 512
@@ -385,4 +400,14 @@ final class DefaultConfigGenerator {
                   # omitted by default. Explicit opt-in applies local best-effort redaction too,
                   # but reports should still be shared only with trusted support staff.
                   include-logs: false""";
+
+    private static final String BSTATS_SECTION = """
+
+                # Anonymous bStats telemetry is controlled globally by Velocity's bStats file,
+                # not by a VeloAuth YAML key: plugins/bStats/config.txt (restart after changing it).
+                # VeloAuth reports aggregate environment data plus bounded custom charts for
+                # online client protocol versions, active auth mode, database family, built-in
+                # language/custom, premium/Floodgate routing and whether 2FA support is enabled.
+                # Nicknames, UUIDs, IP addresses, hostnames, database names and secrets are never
+                # included. See README.md for chart IDs and the one-time bStats panel setup.""";
 }

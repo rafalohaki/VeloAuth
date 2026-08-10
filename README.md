@@ -35,7 +35,7 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🔄 **LimboAuth Schema Compatible** - existing accounts are upgraded in place with additive, automatic schema changes; no manual UUID rewrite
 - 📢 **Discord Alerts** - Webhook notifications for security events; failed deliveries are retried instead of consuming the alert cooldown
 - 🧵 **Virtual Threads** - Built on Java 21 for maximum performance
-- 📈 **bStats Analytics** - Anonymous usage statistics via bStats; metrics startup is isolated from authentication availability
+- 📈 **bStats Analytics** - Anonymous aggregate usage statistics, including privacy-safe client-version and feature-adoption charts; metrics can never block authentication startup
 
 ## When to use VeloAuth
 
@@ -175,11 +175,15 @@ language: en
 auth-server:
   # New config files use embedded. Existing configs without this key stay external after upgrade.
   mode: embedded
+  # External mode only; ignored in embedded mode.
+  server-name: limbo
   # Seconds before an unauthenticated player is kicked from the auth server.
   # Set to 0 to disable the kick (player can stay on auth/limbo indefinitely).
   timeout-seconds: 300
   embedded:
     # 0 = automatically select a free loopback port. The bind address is never public.
+    # For modern forwarding, Velocity owns the existing forwarding secret and answers
+    # VeloAuth's velocity:player_info query; do not copy any secret into this config.
     port: 0
     max-connections: 512
     handshake-timeout-seconds: 10
@@ -296,6 +300,37 @@ report:
 
 Set `enabled: false` to disable the command entirely. Even with local redaction, treat every
 generated link as public and share it only with trusted support staff.
+
+#### Anonymous bStats metrics
+
+VeloAuth uses bStats' proxy-wide setting and does not add a second telemetry switch to
+`config.yml`. Server owners retain the standard global control in
+`plugins/bStats/config.txt`; change `enabled` there and restart Velocity. A missing VeloAuth
+configuration key therefore cannot accidentally override the operator's global bStats choice.
+
+The standard bStats Velocity payload already contains aggregate player count, registered backend
+count, online mode, Velocity/plugin/Java versions and coarse OS/runtime information. VeloAuth adds
+these bounded custom charts:
+
+| Chart ID | bStats type | Reported value |
+|---|---|---|
+| `client_versions` | Advanced Pie | Current online players grouped only by Velocity protocol version |
+| `auth_server_mode` | Simple Pie | `embedded` or `external` active at startup |
+| `database_backend` | Simple Pie | `H2`, `SQLITE`, `MYSQL`, `POSTGRESQL`, or `OTHER` |
+| `language` | Simple Pie | One of the 17 built-in codes, otherwise the single `custom` bucket |
+| `premium_routing` | Simple Pie | `disabled`, `auth-server`, or `verified-bypass` |
+| `floodgate_routing` | Simple Pie | `disabled`, `auth-server`, or `verified-bypass` |
+| `two_factor_support` | Simple Pie | `enabled` or `disabled` |
+
+`client_versions` is a point-in-time distribution of players online when bStats samples the proxy;
+it is not a unique-player counter or session history. VeloAuth never reads or submits player names,
+UUIDs, IP addresses, virtual hosts, database names, custom language names, passwords, forwarding
+secrets or webhook URLs for these charts. The custom values are public aggregate project metrics.
+
+Code registration alone does not create the visual cards on bStats. The VeloAuth project owner must
+open the plugin's bStats page, choose **Edit**, and add the seven chart IDs above with the matching
+types once. bStats normally sends its first sample a few minutes after startup and then roughly
+every 30 minutes; metrics initialization failures are logged and isolated from player authentication.
 
 #### Password complexity policy (optional, off by default)
 

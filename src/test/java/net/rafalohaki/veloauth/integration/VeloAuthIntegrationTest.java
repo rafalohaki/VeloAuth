@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -49,6 +50,7 @@ class VeloAuthIntegrationTest {
 
     private static final String TEST_PLAYER_NAME = "TestPlayer";
     private static final String TEST_IP = "127.0.0.1";
+    private static final int EXPECTED_BSTATS_CHART_COUNT = 7;
     private VeloAuth plugin;
     private DatabaseManager databaseManager;
     private AuthCache authCache;
@@ -310,5 +312,52 @@ class VeloAuthIntegrationTest {
         assertTrue(candidate.isInitialized(), "Optional metrics must not block authentication startup");
         assertTrue(candidate.getInitializationFuture().isDone());
         assertFalse(candidate.getInitializationFuture().isCompletedExceptionally());
+    }
+
+    @Test
+    void testMetricsLifecycle_success_shouldRegisterChartsAndCloseMetrics() throws Exception {
+        Metrics.Factory metricsFactory = mock(Metrics.Factory.class);
+        Metrics metrics = mock(Metrics.class);
+        when(metricsFactory.make(any(), anyInt())).thenReturn(metrics);
+        VeloAuth candidate = new VeloAuth(
+                proxyServer, logger, java.nio.file.Path.of("."), metricsFactory);
+        setSettings(candidate);
+
+        assertDoesNotThrow(() -> invokePrivateLifecycleMethod(candidate, "initializeMetricsSafely"));
+        verify(metrics, times(EXPECTED_BSTATS_CHART_COUNT)).addCustomChart(any());
+
+        assertDoesNotThrow(() -> invokePrivateLifecycleMethod(candidate, "shutdownMetricsSafely"));
+        verify(metrics).shutdown();
+    }
+
+    @Test
+    void testMetricsLifecycle_chartRegistrationFailure_shouldClosePartialMetrics() throws Exception {
+        Metrics.Factory metricsFactory = mock(Metrics.Factory.class);
+        Metrics metrics = mock(Metrics.class);
+        when(metricsFactory.make(any(), anyInt())).thenReturn(metrics);
+        doThrow(new IllegalStateException("custom chart unavailable"))
+                .when(metrics).addCustomChart(any());
+        VeloAuth candidate = new VeloAuth(
+                proxyServer, logger, java.nio.file.Path.of("."), metricsFactory);
+        setSettings(candidate);
+
+        assertDoesNotThrow(() -> invokePrivateLifecycleMethod(candidate, "initializeMetricsSafely"));
+        verify(metrics).shutdown();
+
+        assertDoesNotThrow(() -> invokePrivateLifecycleMethod(candidate, "shutdownMetricsSafely"));
+        verify(metrics, times(1)).shutdown();
+    }
+
+    private void setSettings(VeloAuth candidate) throws ReflectiveOperationException {
+        java.lang.reflect.Field settingsField = VeloAuth.class.getDeclaredField("settings");
+        settingsField.setAccessible(true);
+        settingsField.set(candidate, settings);
+    }
+
+    private static void invokePrivateLifecycleMethod(VeloAuth candidate, String methodName)
+            throws ReflectiveOperationException {
+        java.lang.reflect.Method method = VeloAuth.class.getDeclaredMethod(methodName);
+        method.setAccessible(true);
+        method.invoke(candidate);
     }
 }
