@@ -10,8 +10,11 @@ import org.geysermc.mcprotocollib.network.event.session.SessionAdapter;
 import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
+import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerPositionPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundGameEventPacket;
 import org.geysermc.mcprotocollib.protocol.packet.login.clientbound.ClientboundCustomQueryPacket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -69,9 +72,12 @@ class EmbeddedLimboProtocolMatrixTest {
         server.expectPlayer(playerId, username);
         CountDownLatch forwardingRequested = new CountDownLatch(1);
         CountDownLatch joined = new CountDownLatch(1);
+        CountDownLatch terrainLoadingStarted = new CountDownLatch(1);
+        CountDownLatch positionedOutsideVoidWorld = new CountDownLatch(1);
         CountDownLatch keptAlive = new CountDownLatch(1);
         AtomicReference<byte[]> forwardingRequestData = new AtomicReference<>();
         AtomicReference<ClientboundLoginPacket> loginPacket = new AtomicReference<>();
+        AtomicReference<ClientboundPlayerPositionPacket> positionPacket = new AtomicReference<>();
         MinecraftProtocol protocol = new MinecraftProtocol(new GameProfile(playerId, username), null);
         assertEquals(runtime.maximumProtocol(), protocol.getCodec().getProtocolVersion());
         client = ClientNetworkSessionFactory.factory()
@@ -89,6 +95,12 @@ class EmbeddedLimboProtocolMatrixTest {
                 } else if (packet instanceof ClientboundLoginPacket login) {
                     loginPacket.set(login);
                     joined.countDown();
+                } else if (packet instanceof ClientboundGameEventPacket event
+                        && event.getNotification() == GameEvent.LEVEL_CHUNKS_LOAD_START) {
+                    terrainLoadingStarted.countDown();
+                } else if (packet instanceof ClientboundPlayerPositionPacket position) {
+                    positionPacket.set(position);
+                    positionedOutsideVoidWorld.countDown();
                 } else if (packet instanceof ClientboundKeepAlivePacket) {
                     keptAlive.countDown();
                 }
@@ -105,6 +117,12 @@ class EmbeddedLimboProtocolMatrixTest {
                 "Minecraft 26.2 client should receive its translated Join Game packet");
         assertTrue(loginPacket.get().isEnforcesSecureChat(),
                 "Embedded limbo should not trigger the modern client's insecure-chat warning toast");
+        assertTrue(terrainLoadingStarted.await(10, TimeUnit.SECONDS),
+                "Minecraft 26.2 should receive the translated start-loading-chunks event");
+        assertTrue(positionedOutsideVoidWorld.await(10, TimeUnit.SECONDS),
+                "Minecraft 26.2 should receive the translated initial player position");
+        assertEquals(400.0, positionPacket.get().getPosition().getY(),
+                "Modern clients must spawn above the unloaded void world to leave Loading terrain");
         assertTrue(keptAlive.await(20, TimeUnit.SECONDS),
                 "A cracked client must remain connected through embedded limbo's first keepalive");
         assertTrue(client.isConnected(),

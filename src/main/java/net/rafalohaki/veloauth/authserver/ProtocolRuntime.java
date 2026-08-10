@@ -25,6 +25,9 @@ interface ProtocolRuntime extends AutoCloseable {
 
     void inject(Channel channel);
 
+    /** Returns the negotiated Minecraft protocol for an injected connection. */
+    int clientProtocol(Channel channel);
+
     /**
      * Sends Velocity's standard login forwarding query when the connected protocol supports it,
      * then resumes the base-protocol login in wire order.

@@ -55,6 +55,12 @@ class EmbeddedLimboServerTest {
 
             MinecraftWireTestSupport.Frame joinGame = readFrame(socket);
             assertEquals(0x01, joinGame.packetId());
+
+            MinecraftWireTestSupport.Frame position = readFrame(socket);
+            assertEquals(0x08, position.packetId());
+            position.payload().readDouble();
+            assertEquals(64.0, position.payload().readDouble(),
+                    "Minecraft 1.8 should retain its legacy in-world spawn height");
             assertEquals(1, server.playersInGame());
             assertEquals(0, server.invalidRedirects());
         }
@@ -192,6 +198,11 @@ class EmbeddedLimboServerTest {
         @Override
         public void inject(Channel channel) {
             // The base-protocol test intentionally exercises MCProtocolLib without translation.
+        }
+
+        @Override
+        public int clientProtocol(Channel channel) {
+            return LegacyProtocolCodec.PROTOCOL_VERSION;
         }
 
         @Override

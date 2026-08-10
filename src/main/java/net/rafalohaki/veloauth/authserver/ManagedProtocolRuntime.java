@@ -30,6 +30,7 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
     private final String runtimeVersion;
     private final Method supportsProtocol;
     private final Method inject;
+    private final Method clientProtocol;
     private final Method sendVelocityForwardingRequest;
     private final Method minimumProtocol;
     private final Method maximumProtocol;
@@ -46,6 +47,7 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
         try {
             supportsProtocol = type.getMethod("supportsProtocol", int.class);
             inject = type.getMethod("inject", Channel.class);
+            clientProtocol = type.getMethod("clientProtocol", Channel.class);
             sendVelocityForwardingRequest = type.getMethod(
                     "sendVelocityForwardingRequest", Channel.class, int.class, Runnable.class);
             minimumProtocol = type.getMethod("minimumProtocol");
@@ -160,6 +162,11 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
     @Override
     public void inject(Channel channel) {
         invoke(inject, Objects.requireNonNull(channel, "channel"));
+    }
+
+    @Override
+    public int clientProtocol(Channel channel) {
+        return (Integer) invoke(clientProtocol, Objects.requireNonNull(channel, "channel"));
     }
 
     @Override

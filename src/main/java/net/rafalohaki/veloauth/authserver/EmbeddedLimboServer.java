@@ -47,8 +47,10 @@ final class EmbeddedLimboServer implements AutoCloseable {
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(8);
     private static final Duration BIND_ADDRESS_TIMEOUT = Duration.ofSeconds(2);
     private static final LegacyProtocolCodec.JoinGame JOIN_GAME = new LegacyProtocolCodec.JoinGame(1);
-    private static final LegacyProtocolCodec.PlayerPosition INITIAL_POSITION =
+    private static final LegacyProtocolCodec.PlayerPosition LEGACY_INITIAL_POSITION =
             new LegacyProtocolCodec.PlayerPosition(0.5, 64.0, 0.5, 0.0F, 0.0F);
+    private static final LegacyProtocolCodec.PlayerPosition TRANSLATED_INITIAL_POSITION =
+            new LegacyProtocolCodec.PlayerPosition(0.5, 400.0, 0.5, 0.0F, 0.0F);
 
     private final Config config;
     private final PlayerMessages playerMessages;
@@ -341,12 +343,18 @@ final class EmbeddedLimboServer implements AutoCloseable {
             cancel(loginTimeoutTask);
             playersInGame.incrementAndGet();
             session.send(JOIN_GAME);
-            session.send(INITIAL_POSITION);
+            session.send(initialPosition(session));
             keepAliveTask = session.getChannel().eventLoop().scheduleAtFixedRate(
                     () -> tickKeepAlive(session),
                     KEEP_ALIVE_INTERVAL_SECONDS,
                     KEEP_ALIVE_INTERVAL_SECONDS,
                     TimeUnit.SECONDS);
+        }
+
+        private LegacyProtocolCodec.PlayerPosition initialPosition(Session session) {
+            return protocolRuntime.clientProtocol(session.getChannel()) == PROTOCOL_VERSION
+                    ? LEGACY_INITIAL_POSITION
+                    : TRANSLATED_INITIAL_POSITION;
         }
 
         private void handleGame(Session session, Packet packet) {

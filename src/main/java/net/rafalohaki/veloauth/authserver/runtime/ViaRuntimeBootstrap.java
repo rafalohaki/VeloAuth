@@ -133,15 +133,23 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
         pipeline.addBefore(MC_PROTOCOL_CODEC, ENCODER_NAME, new ViaEncodeHandler(connection));
     }
 
+    /** Returns the protocol negotiated by ViaVersion for this connection. */
+    public int clientProtocol(Channel channel) {
+        UserConnection connection = requireConnection(channel);
+        int protocol = connection.getProtocolInfo().protocolVersion().getVersion();
+        if (!supportsProtocol(protocol)) {
+            throw new IllegalStateException(
+                    "Embedded protocol connection negotiated an unsupported protocol " + protocol);
+        }
+        return protocol;
+    }
+
     /** Sends a login query directly in the negotiated client protocol without exposing the secret. */
     public void sendVelocityForwardingRequest(
             Channel channel, int transactionId, Runnable loginContinuation) {
         java.util.Objects.requireNonNull(channel, "channel");
         java.util.Objects.requireNonNull(loginContinuation, "loginContinuation");
-        UserConnection connection = connections.get(channel);
-        if (connection == null) {
-            throw new IllegalStateException("Embedded protocol connection is not registered");
-        }
+        UserConnection connection = requireConnection(channel);
         if (connection.getProtocolInfo().protocolVersion().olderThan(ProtocolVersion.v1_13)) {
             loginContinuation.run();
             return;
@@ -158,6 +166,15 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
                 channel.close();
             }
         });
+    }
+
+    private UserConnection requireConnection(Channel channel) {
+        java.util.Objects.requireNonNull(channel, "channel");
+        UserConnection connection = connections.get(channel);
+        if (connection == null) {
+            throw new IllegalStateException("Embedded protocol connection is not registered");
+        }
+        return connection;
     }
 
     @Override

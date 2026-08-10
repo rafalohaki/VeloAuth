@@ -352,6 +352,11 @@ class AuthServerProviderTest {
         }
 
         @Override
+        public int clientProtocol(Channel channel) {
+            return AuthServerProvider.MIN_SUPPORTED_PROTOCOL;
+        }
+
+        @Override
         public void close() {
             closed.set(true);
         }

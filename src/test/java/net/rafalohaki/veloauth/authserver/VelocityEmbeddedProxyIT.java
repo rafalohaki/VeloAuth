@@ -7,9 +7,12 @@ import org.geysermc.mcprotocollib.network.event.session.SessionAdapter;
 import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
+import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundSystemChatPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerPositionPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundGameEventPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundChatCommandPacket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -43,10 +46,13 @@ class VelocityEmbeddedProxyIT {
                 "Run through scripts/test-velocity-embedded.sh");
         int port = Integer.getInteger("veloauth.smoke.port", 25565);
         CountDownLatch joined = new CountDownLatch(1);
+        CountDownLatch terrainLoadingStarted = new CountDownLatch(1);
+        CountDownLatch positionedOutsideVoidWorld = new CountDownLatch(1);
         CountDownLatch keptAlive = new CountDownLatch(1);
         CountDownLatch commandResponse = new CountDownLatch(1);
         AtomicBoolean commandSent = new AtomicBoolean();
         AtomicReference<ClientboundLoginPacket> loginPacket = new AtomicReference<>();
+        AtomicReference<ClientboundPlayerPositionPacket> positionPacket = new AtomicReference<>();
         MinecraftProtocol protocol = new MinecraftProtocol(
                 new GameProfile(UUID.randomUUID(), "VAuthSmoke"), null);
         client = ClientNetworkSessionFactory.factory()
@@ -60,6 +66,12 @@ class VelocityEmbeddedProxyIT {
                 if (packet instanceof ClientboundLoginPacket login) {
                     loginPacket.set(login);
                     joined.countDown();
+                } else if (packet instanceof ClientboundGameEventPacket event
+                        && event.getNotification() == GameEvent.LEVEL_CHUNKS_LOAD_START) {
+                    terrainLoadingStarted.countDown();
+                } else if (packet instanceof ClientboundPlayerPositionPacket position) {
+                    positionPacket.set(position);
+                    positionedOutsideVoidWorld.countDown();
                 } else if (packet instanceof ClientboundKeepAlivePacket) {
                     keptAlive.countDown();
                 } else if (packet instanceof ClientboundSystemChatPacket && commandSent.get()) {
@@ -74,6 +86,12 @@ class VelocityEmbeddedProxyIT {
                 "Minecraft 26.2 client should reach VeloAuth embedded limbo through Velocity");
         assertTrue(loginPacket.get().isEnforcesSecureChat(),
                 "Velocity should preserve embedded limbo's secure-chat marker");
+        assertTrue(terrainLoadingStarted.await(10, TimeUnit.SECONDS),
+                "Velocity should preserve ViaVersion's start-loading-chunks event");
+        assertTrue(positionedOutsideVoidWorld.await(10, TimeUnit.SECONDS),
+                "Velocity should deliver the embedded limbo position to the latest client");
+        assertTrue(positionPacket.get().getPosition().getY() >= 320.0,
+                "Latest clients must spawn above the unloaded void world to leave Loading terrain");
         assertTrue(keptAlive.await(20, TimeUnit.SECONDS),
                 "A cracked client should survive embedded limbo's first keepalive through Velocity");
         assertTrue(client.isConnected(),
