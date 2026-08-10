@@ -170,6 +170,11 @@ stop_velocity() {
     tail -120 "${VELOCITY_LOG}" >&2 || true
     exit 1
   fi
+  if grep -Fq "logs/latest.log (Permission denied)" "${VELOCITY_LOG}"; then
+    echo "Velocity smoke lost write access to its global log during shutdown" >&2
+    tail -120 "${VELOCITY_LOG}" >&2 || true
+    exit 1
+  fi
 }
 
 test_latest_client() {

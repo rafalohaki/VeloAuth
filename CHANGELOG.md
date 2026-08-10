@@ -32,6 +32,12 @@ All notable user-visible changes to VeloAuth are documented in this file.
 - Embedded limbo completes Velocity/Velocity-CTD modern forwarding automatically by sending the
   standard login query before login success. Velocity keeps exclusive ownership of the forwarding
   secret; no additional VeloAuth configuration is required.
+- Embedded limbo advertises its deliberately chat-free state as secure to modern clients, avoiding
+  the misleading "Chat messages can't be verified" toast during authentication. This does not
+  change signed-chat policy on real backends or how Velocity handles authentication commands.
+- Minecraft 1.8 keepalive challenges now use the protocol-47 VarInt wire format in both directions.
+  Cracked players can remain in embedded limbo beyond the first 15-second keepalive, authenticate,
+  and then follow the existing post-auth backend transfer instead of being disconnected by Velocity.
 - Removing premium security opt-ins from a valid reload restores their safe `false` defaults.
 - Concurrent runtime preparation in one proxy process no longer downloads or publishes the same
   artifact twice.

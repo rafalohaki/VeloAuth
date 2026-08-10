@@ -363,6 +363,12 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
         public int get1_13TabCompleteDelay() {
             return 0;
         }
+
+        @Override
+        public boolean enforceSecureChat() {
+            // Embedded limbo has no player-chat surface; Velocity owns its authentication commands.
+            return true;
+        }
     }
 
     private static final class Slf4jHandler extends Handler {

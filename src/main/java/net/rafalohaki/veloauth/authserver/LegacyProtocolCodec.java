@@ -226,12 +226,12 @@ final class LegacyProtocolCodec {
 
     record KeepAlive(int challenge) implements MinecraftPacket {
         KeepAlive(ByteBuf input) {
-            this(input.readInt());
+            this(readVarInt(input));
         }
 
         @Override
         public void serialize(ByteBuf output) {
-            output.writeInt(challenge);
+            writeVarInt(output, challenge);
         }
     }
 

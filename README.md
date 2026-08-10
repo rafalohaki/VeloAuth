@@ -145,6 +145,14 @@ newer complete the standard `velocity:player_info` login query automatically. Ve
 `config.yml`. Modern forwarding itself does not support 1.8-1.12 clients, independently of the
 embedded limbo's wider protocol matrix.
 
+The embedded limbo has no player-chat surface; `/login`, `/register` and `/2fa` remain
+Velocity-owned commands. Its private protocol translator marks that temporary, chat-free state as
+secure so modern clients do not show the misleading "Chat messages can't be verified" toast. The
+real backend still supplies its own signed-chat policy after transfer; VeloAuth does not change it.
+Cracked players deliberately stay connected in this limbo, including across recurring keepalives,
+until the required authentication steps succeed; only the existing post-auth flow transfers them
+to a real backend.
+
 ```toml
 [servers]
 lobby = "127.0.0.1:25565"  # Typical backend server
@@ -559,6 +567,15 @@ Fixed in 1.2.0 — all operator-facing log messages and exception strings are no
 **Q: "Database not connected" right after Velocity startup.**
 Fixed in 1.2.0 — health check runs once synchronously before the 30s scheduler kicks in. The `isConnected()` gate used by admin commands now reflects pool state (initialized + not shut down) rather than waiting for the first health check.
 
+**Q: Shutdown prints `FileNotFoundException: logs/latest.log (Permission denied)`.**
+This path is Velocity's global Log4j output, not a VeloAuth log file. Stop the proxy and verify that
+the same OS/container user that launches Java can traverse the proxy directory and create, append
+and rename files under `logs/`. In a hosting panel, repair the owner/group through its file manager
+or support tooling; do not grant world-writable permissions and do not make VeloAuth change host
+filesystem ownership. The embedded smoke test checks that VeloAuth itself closes cleanly and that
+this error is absent in a writable runtime directory, but it cannot repair permissions outside the
+plugin data directory.
+
 ## LimboAuth Migration
 
 VeloAuth is schema-compatible with supported LimboAuth databases and performs required additive
@@ -591,10 +608,13 @@ UPSERT. The MySQL harness verifies the same registration/UPSERT invariants on Co
 ephemeral containers and remove them afterwards. GitHub Actions runs the normal build and both
 database gates before uploading a release artifact.
 
-The normal suite also performs a native 1.8 login, translated status handshakes for representative
-1.12.2, 1.16.5, 1.20.1 and 1.21.4 clients, and a complete MCProtocolLib 26.2 login. The real
-Velocity smoke proves pinned startup, snapshot staging, activation on restart and a third restart
-that rejects a tampered pending manifest while retaining client availability.
+The normal suite also performs a native 1.8 login, bidirectional protocol-47 keepalive checks,
+translated status handshakes for representative 1.12.2, 1.16.5, 1.20.1 and 1.21.4 clients, and a
+complete MCProtocolLib 26.2 login held through the first keepalive. The real Velocity smoke proves
+pinned startup, snapshot staging, activation on restart and a third restart that rejects a
+tampered pending manifest while retaining client availability through the same keepalive boundary.
+It also submits a rejected `/login` attempt and verifies that the cracked client remains in limbo
+with authentication commands still usable.
 
 Automated tests do not prove the real Velocity protocol flow. Before production, test premium,
 cracked and Floodgate clients on a staging proxy with forced hosts, `try` fallback, reconnects,
