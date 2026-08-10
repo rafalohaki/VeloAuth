@@ -11,6 +11,7 @@ import org.geysermc.mcprotocollib.network.event.session.SessionAdapter;
 import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.GameMode;
 import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundRegistryDataPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
@@ -169,6 +170,7 @@ final class EmbeddedLimboRuntimeProbe {
                     || endId < 0
                     || joined.getCommonPlayerSpawnInfo().getDimension() != endId
                     || !END_WORLD.equals(joined.getCommonPlayerSpawnInfo().getWorldName())
+                    || joined.getCommonPlayerSpawnInfo().getGameMode() != GameMode.SPECTATOR
                     || !Arrays.asList(joined.getWorldNames()).contains(END_WORLD)
                     || !joined.isEnforcesSecureChat()
                     || positioned.getPosition().getY() < 320.0

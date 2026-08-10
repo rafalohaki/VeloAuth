@@ -10,6 +10,7 @@ import org.geysermc.mcprotocollib.network.event.session.SessionAdapter;
 import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.GameMode;
 import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundRegistryDataPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
@@ -134,6 +135,9 @@ class EmbeddedLimboProtocolMatrixTest {
         assertEquals(Key.key("minecraft", "the_end"),
                 loginPacket.get().getCommonPlayerSpawnInfo().getWorldName(),
                 "Translated Join Game must use the End world identifier");
+        assertEquals(GameMode.SPECTATOR,
+                loginPacket.get().getCommonPlayerSpawnInfo().getGameMode(),
+                "Translated clients should remain suspended instead of falling through the void");
         assertTrue(loginPacket.get().isEnforcesSecureChat(),
                 "Embedded limbo should not trigger the modern client's insecure-chat warning toast");
         assertTrue(terrainLoadingStarted.await(10, TimeUnit.SECONDS),

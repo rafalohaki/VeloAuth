@@ -12,10 +12,12 @@ import org.slf4j.Logger;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Disconnects players who linger on the auth server without authenticating within
@@ -42,7 +44,9 @@ public final class AuthTimeoutScheduler {
     private final AuthCache authCache;
     private final ConnectionManager connectionManager;
     private final Logger logger;
-    private final Map<UUID, ScheduledTask> pending = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, ScheduledTask> pending = new ConcurrentHashMap<>();
+    private final ReentrantLock lifecycleLock = new ReentrantLock();
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public AuthTimeoutScheduler(VeloAuth plugin, Settings settings, Messages messages,
                                 AuthCache authCache, ConnectionManager connectionManager) {
@@ -65,31 +69,38 @@ public final class AuthTimeoutScheduler {
             return;
         }
         UUID uuid = player.getUniqueId();
-        cancel(uuid);
 
-        ScheduledTask task = plugin.getServer().getScheduler().buildTask(plugin, () -> {
-            pending.remove(uuid);
-            if (!player.isActive()) {
+        lifecycleLock.lock();
+        try {
+            if (closed.get()) {
                 return;
             }
-            // Re-check: maybe player authenticated in the meantime but cancel() didn't fire
-            // (e.g. external session restore). Verify against cache + current server.
-            if (isAuthorizedAndStillOnAuthServer(player)) {
-                return;
-            }
-            if (!connectionManager.isPlayerOnAuthServer(player)) {
-                return; // already moved on, nothing to do
-            }
+            ScheduledTaskRegistry.replace(pending, uuid, callback ->
+                    plugin.getServer().getScheduler().buildTask(plugin, callback)
+                            .delay(seconds, TimeUnit.SECONDS)
+                            .schedule(), () -> {
+                if (closed.get() || !player.isActive()) {
+                    return;
+                }
+                // Re-check: maybe player authenticated in the meantime but cancel() didn't fire
+                // (e.g. external session restore). Verify against cache + current server.
+                if (isAuthorizedAndStillOnAuthServer(player)) {
+                    return;
+                }
+                if (!connectionManager.isPlayerOnAuthServer(player)) {
+                    return; // already moved on, nothing to do
+                }
 
-            player.disconnect(messages.component("auth.timeout.kick", NamedTextColor.RED, seconds));
-            if (logger.isInfoEnabled()) {
-                logger.info(AUTH_MARKER,
-                        "Kicked player {} after {}s auth timeout (no login/register)",
-                        player.getUsername(), seconds);
-            }
-        }).delay(seconds, TimeUnit.SECONDS).schedule();
-
-        pending.put(uuid, task);
+                player.disconnect(messages.component("auth.timeout.kick", NamedTextColor.RED, seconds));
+                if (logger.isInfoEnabled()) {
+                    logger.info(AUTH_MARKER,
+                            "Kicked player {} after {}s auth timeout (no login/register)",
+                            player.getUsername(), seconds);
+                }
+            });
+        } finally {
+            lifecycleLock.unlock();
+        }
         if (logger.isDebugEnabled()) {
             logger.debug(AUTH_MARKER, "Auth timeout scheduled for {} ({}s)",
                     player.getUsername(), seconds);
@@ -106,17 +117,20 @@ public final class AuthTimeoutScheduler {
      * Cancels a scheduled timeout. Called on successful authentication or disconnect.
      */
     public void cancel(UUID uuid) {
-        ScheduledTask task = pending.remove(uuid);
-        if (task != null) {
-            task.cancel();
-        }
+        ScheduledTaskRegistry.cancel(pending, uuid);
     }
 
     /**
      * Cancels every pending timeout. Called during plugin shutdown.
      */
     public void shutdown() {
-        pending.values().forEach(ScheduledTask::cancel);
-        pending.clear();
+        lifecycleLock.lock();
+        try {
+            if (closed.compareAndSet(false, true)) {
+                ScheduledTaskRegistry.cancelAll(pending);
+            }
+        } finally {
+            lifecycleLock.unlock();
+        }
     }
 }

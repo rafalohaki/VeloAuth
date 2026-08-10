@@ -85,7 +85,6 @@ public class VeloAuth {
     private PendingTotpStore pendingTotpStore;
     private TotpReplayGuard totpReplayGuard;
     private net.rafalohaki.veloauth.report.ReportService reportService;
-    private ScheduledExecutorService premiumCacheCleanupScheduler;
     private ScheduledExecutorService premiumDbCleanupScheduler;
     private ScheduledExecutorService auditLogCleanupScheduler;
 
@@ -508,22 +507,6 @@ public class VeloAuth {
             logger.debug("AuthCache reference set in DatabaseManager");
         }
 
-        // Schedule dedicated premium cache cleanup at the same interval as auth cache cleanup
-        int cleanupInterval = settings.getCacheCleanupIntervalMinutes();
-        if (cleanupInterval > 0) {
-            premiumCacheCleanupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "VeloAuth-PremiumCacheCleanup");
-                t.setDaemon(true);
-                return t;
-            });
-            premiumCacheCleanupScheduler.scheduleAtFixedRate(
-                    authCache::cleanExpiredPremiumEntries,
-                    cleanupInterval,
-                    cleanupInterval,
-                    TimeUnit.MINUTES
-            );
-        }
-
         // Schedule periodic cleanup of expired PREMIUM_UUIDS entries from the database
         long premiumTtlMinutes = (long) settings.getPremiumTtlHours() * 60;
         if (premiumTtlMinutes > 0 && databaseManager != null) {
@@ -736,7 +719,6 @@ public class VeloAuth {
                 closeAuthServerProviderSafely();
             }
 
-            shutdownCleanupScheduler(premiumCacheCleanupScheduler, "Premium cache cleanup scheduler");
             shutdownCleanupScheduler(premiumDbCleanupScheduler, "Premium DB cleanup scheduler");
             shutdownCleanupScheduler(auditLogCleanupScheduler, "Audit log cleanup scheduler");
 

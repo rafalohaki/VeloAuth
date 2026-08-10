@@ -18,12 +18,18 @@ import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Manager połączeń i transferów graczy między serwerami.
@@ -44,6 +50,7 @@ public class ConnectionManager {
     private static final int MAX_AUTH_SERVER_WAIT_ATTEMPTS = 3;
     private static final int BACKEND_WAIT_REMINDER_INTERVAL = 6;
     private static final long AUTO_TRANSFER_DELAY_MS = 300;
+    private static final long BACKEND_FALLBACK_WARN_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
     
     /** Retry attempt counter per player to prevent infinite fallback loops */
     private final Map<UUID, AtomicInteger> retryAttempts = new ConcurrentHashMap<>();
@@ -52,13 +59,19 @@ public class ConnectionManager {
     private final Map<UUID, Boolean> timeoutRetryScheduled = new ConcurrentHashMap<>();
 
     /** Timeout retry tasks per player - allows cancellation on disconnect and manual transfers */
-    private final Map<UUID, ScheduledTask> timeoutRetryTasks = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, ScheduledTask> timeoutRetryTasks = new ConcurrentHashMap<>();
     
     /** Pending transfer tasks per player - allows cancellation on disconnect to prevent race conditions */
-    private final Map<UUID, ScheduledTask> pendingTransfers = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, ScheduledTask> pendingTransfers = new ConcurrentHashMap<>();
     
     /** Backend wait retry tasks per player - allows cancellation on disconnect */
-    private final Map<UUID, ScheduledTask> backendWaitTasks = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, ScheduledTask> backendWaitTasks = new ConcurrentHashMap<>();
+
+    /** Serializes task publication with shutdown so late async completions cannot resurrect work. */
+    private final ReentrantLock taskLifecycleLock = new ReentrantLock();
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicLong backendFallbackWarnAfterNanos = new AtomicLong(System.nanoTime());
+    private final AtomicInteger suppressedBackendFallbackWarnings = new AtomicInteger();
     
     /** Max number of backend wait retries before giving up (5s interval × 60 = 5 minutes) */
     private static final int MAX_BACKEND_WAIT_RETRIES = 60;
@@ -438,19 +451,16 @@ public class ConnectionManager {
 
     private void scheduleBackendRetryAfterLimbo(Player player, RegisteredServer targetServer, String serverName) {
         UUID playerUuid = player.getUniqueId();
-        cancelPendingTransfer(playerUuid);
 
-        ScheduledTask task = plugin.getServer().getScheduler().buildTask(plugin, () -> {
-            pendingTransfers.remove(playerUuid);
+        scheduleOwnedTask(pendingTransfers, playerUuid,
+                AUTO_TRANSFER_DELAY_MS, TimeUnit.MILLISECONDS, () -> {
             if (!player.isActive() || !isPlayerOnAuthServer(player)) {
                 return;
             }
             // Retry blokuje na join() — wykonaj na virtual thread, nie na wątku schedulera
             VirtualThreadExecutorProvider.submitTask(() ->
                     executeBackendRetryAfterLimbo(player, targetServer, serverName));
-        }).delay(AUTO_TRANSFER_DELAY_MS, TimeUnit.MILLISECONDS).schedule();
-
-        pendingTransfers.put(playerUuid, task);
+        });
     }
 
     /**
@@ -465,17 +475,14 @@ public class ConnectionManager {
         }
 
         if (attempt >= MAX_BACKEND_WAIT_RETRIES) {
-            backendWaitTasks.remove(playerUuid);
+            ScheduledTaskRegistry.cancel(backendWaitTasks, playerUuid);
             logger.warn("Backend wait timeout for {} after {} attempts", player.getUsername(), attempt);
             sendIfNotEmpty(player, "connection.error.no_servers", NamedTextColor.RED);
             return;
         }
 
-        cancelBackendWaitTask(playerUuid);
-
-        ScheduledTask task = plugin.getServer().getScheduler().buildTask(plugin, () -> {
-            backendWaitTasks.remove(playerUuid);
-
+        scheduleOwnedTask(backendWaitTasks, playerUuid,
+                BACKEND_WAIT_INTERVAL_SECONDS, TimeUnit.SECONDS, () -> {
             if (!player.isActive() || !isPlayerOnAuthServer(player)) {
                 return;
             }
@@ -483,9 +490,7 @@ public class ConnectionManager {
             findAvailableBackendServerForRetryAsync(player)
                     .whenComplete((server, throwable) ->
                             handleBackendWaitSelection(player, attempt, server, throwable));
-        }).delay(BACKEND_WAIT_INTERVAL_SECONDS, TimeUnit.SECONDS).schedule();
-
-        backendWaitTasks.put(playerUuid, task);
+        });
     }
 
     private void handleBackendWaitSelection(Player player, int attempt,
@@ -604,14 +609,9 @@ public class ConnectionManager {
 
     private void scheduleTimeoutRetry(Player player, RegisteredServer targetServer, String serverName) {
         UUID playerUuid = player.getUniqueId();
-        cancelTimeoutRetryTask(playerUuid);
 
-        ScheduledTask task = plugin.getServer().getScheduler().buildTask(plugin, () -> {
-            timeoutRetryTasks.remove(playerUuid);
-            executeTimeoutRetry(player, targetServer, serverName);
-        }).delay(400, TimeUnit.MILLISECONDS).schedule();
-
-        timeoutRetryTasks.put(playerUuid, task);
+        scheduleOwnedTask(timeoutRetryTasks, playerUuid, 400, TimeUnit.MILLISECONDS,
+                () -> executeTimeoutRetry(player, targetServer, serverName));
     }
 
     private void executeTimeoutRetry(Player player, RegisteredServer targetServer, String serverName) {
@@ -674,13 +674,14 @@ public class ConnectionManager {
     }
 
     /**
-     * Fully-async variant: pings every candidate (try list, then full fallback) in parallel.
+     * Fully-async variant: probes each candidate phase concurrently without blocking the caller.
      * <p>
      * Previous behavior: the try-list phase pinged in parallel but the fallback (line 690 in
      * the old code) used a sequential stream of {@code isServerAvailable(...).join()} — worst
-     * case <em>N × ping-timeout-ms</em> blocked on the calling thread. The new fallback fans
-     * out pings in parallel just like the try-list, so worst-case wall time stays at one
-     * {@code connection.ping-timeout-ms} timeout regardless of how many servers are registered.
+     * case <em>N × ping-timeout-ms</em> blocked on the calling thread. The new fallback fans out
+     * pings like the try-list, while each phase can finish as soon as its highest-priority reachable
+     * result is known. Worst-case wall time per phase stays at one
+     * {@code connection.ping-timeout-ms} timeout regardless of the number of registered servers.
      */
     private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerAsync() {
         String authServerName = authServerProvider.serverName();
@@ -698,16 +699,39 @@ public class ConnectionManager {
             if (found.isPresent()) {
                 return CompletableFuture.completedFuture(found);
             }
-            if (tryCandidates.isEmpty()) {
-                logger.warn("No backend candidates found in try list");
-            }
             // Fallback: parallel ping of every registered server (minus auth).
-            logger.warn("No server from try list is available, attempting fallback...");
+            logBackendFallbackWarning();
+            Set<String> alreadyChecked = tryCandidates.stream()
+                    .map(server -> server.getServerInfo().getName())
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
             java.util.List<RegisteredServer> fallbackCandidates = plugin.getServer().getAllServers().stream()
                     .filter(server -> !authServerProvider.isAuthServer(server))
+                    .filter(server -> !alreadyChecked.contains(server.getServerInfo().getName()))
                     .toList();
             return pickFirstAvailable(fallbackCandidates);
         });
+    }
+
+    private void logBackendFallbackWarning() {
+        long now = System.nanoTime();
+        long warnAfter = backendFallbackWarnAfterNanos.get();
+        if (now >= warnAfter && backendFallbackWarnAfterNanos.compareAndSet(
+                warnAfter, now + BACKEND_FALLBACK_WARN_INTERVAL_NANOS)) {
+            int suppressed = suppressedBackendFallbackWarnings.getAndSet(0);
+            if (suppressed == 0) {
+                logger.warn("No reachable server from the Velocity try list; attempting fallback");
+            } else {
+                logger.warn(
+                        "No reachable server from the Velocity try list; attempting fallback"
+                                + " ({} repeated checks suppressed)",
+                        suppressed);
+            }
+            return;
+        }
+        suppressedBackendFallbackWarnings.incrementAndGet();
+        if (logger.isDebugEnabled()) {
+            logger.debug("No reachable server from the Velocity try list; fallback check suppressed");
+        }
     }
 
     private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerForRetryAsync(Player player) {
@@ -720,31 +744,77 @@ public class ConnectionManager {
     }
 
     /**
-     * Pings all candidates in parallel; returns the first one whose ping completes successfully,
-     * preserving input order. Used by both phases of {@link #findAvailableBackendServerAsync()}.
+     * Pings candidates concurrently while preserving input order. Selection completes as soon as
+     * the first reachable candidate and every higher-priority result are known; an unrelated slow
+     * lower-priority ping cannot delay the transfer.
      */
     private CompletableFuture<Optional<RegisteredServer>> pickFirstAvailable(
             java.util.List<RegisteredServer> candidates) {
         if (candidates.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        @SuppressWarnings("unchecked")
-        CompletableFuture<Boolean>[] pings = candidates.stream()
-                .map(server -> server.ping()
+        OrderedPingSelection selection = new OrderedPingSelection(candidates);
+        for (int index = 0; index < candidates.size() && !selection.future().isDone(); index++) {
+            final int candidateIndex = index;
+            try {
+                candidates.get(index).ping()
                         .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
-                        .handle((ignored, ex) -> ex == null))
-                .toArray(CompletableFuture[]::new);
-
-        return CompletableFuture.allOf(pings).thenApply(ignored -> {
-            for (int i = 0; i < candidates.size(); i++) {
-                if (Boolean.TRUE.equals(pings[i].getNow(false))) {
-                    RegisteredServer available = candidates.get(i);
-                    logger.debug("Found available server: {}", available.getServerInfo().getName());
-                    return Optional.of(available);
-                }
+                        .whenComplete((ignored, failure) ->
+                                selection.record(candidateIndex, failure == null));
+            } catch (RuntimeException failure) {
+                selection.record(candidateIndex, false);
             }
-            return Optional.empty();
-        });
+        }
+        return selection.future();
+    }
+
+    private final class OrderedPingSelection {
+        private final java.util.List<RegisteredServer> candidates;
+        private final AtomicReferenceArray<Boolean> results;
+        private final CompletableFuture<Optional<RegisteredServer>> future = new CompletableFuture<>();
+        private final ReentrantLock lock = new ReentrantLock();
+        private int nextResult;
+
+        private OrderedPingSelection(java.util.List<RegisteredServer> candidates) {
+            this.candidates = candidates;
+            results = new AtomicReferenceArray<>(candidates.size());
+        }
+
+        private void record(int index, boolean available) {
+            RegisteredServer selected = null;
+            boolean shouldComplete = false;
+            lock.lock();
+            try {
+                if (future.isDone() || results.get(index) != null) {
+                    return;
+                }
+                results.set(index, available);
+                while (nextResult < candidates.size()) {
+                    Boolean result = results.get(nextResult);
+                    if (result == null) {
+                        break;
+                    }
+                    if (result) {
+                        selected = candidates.get(nextResult);
+                        shouldComplete = true;
+                        break;
+                    }
+                    nextResult++;
+                }
+                if (nextResult == candidates.size()) {
+                    shouldComplete = true;
+                }
+            } finally {
+                lock.unlock();
+            }
+            if (shouldComplete && future.complete(Optional.ofNullable(selected)) && selected != null) {
+                logger.debug("Found available server: {}", selected.getServerInfo().getName());
+            }
+        }
+
+        private CompletableFuture<Optional<RegisteredServer>> future() {
+            return future;
+        }
     }
 
     /**
@@ -979,21 +1049,14 @@ public class ConnectionManager {
             return;
         }
         
-        // Anuluj poprzedni pending transfer jeśli istnieje (rapid reconnect protection)
-        cancelPendingTransfer(playerUuid);
-        
         if (logger.isDebugEnabled()) {
             logger.debug("Auto-transfer: gracz {} jest zweryfikowany - planowanie transferu na backend", 
                     player.getUsername());
         }
         
-        // Delay dla ViaVersion synchronizacji (300ms)
-        // Zapisz task aby móc go anulować przy rozłączeniu
-        ScheduledTask task = plugin.getServer().getScheduler()
-                .buildTask(plugin, () -> {
-                    // Usuń z pending przed wykonaniem
-                    pendingTransfers.remove(playerUuid);
-                    
+        // Delay dla ViaVersion synchronizacji (300ms), z jednoznaczną własnością tasku.
+        scheduleOwnedTask(pendingTransfers, playerUuid,
+                AUTO_TRANSFER_DELAY_MS, TimeUnit.MILLISECONDS, () -> {
                     // Sprawdź czy gracz nadal jest aktywny i na auth server
                     if (!player.isActive()) {
                         logger.debug("Auto-transfer: player {} is no longer active", player.getUsername());
@@ -1015,11 +1078,31 @@ public class ConnectionManager {
                                     player.getUsername());
                         }
                     });
-                })
-                .delay(AUTO_TRANSFER_DELAY_MS, TimeUnit.MILLISECONDS)
-                .schedule();
-        
-        pendingTransfers.put(playerUuid, task);
+                });
+    }
+
+    private void scheduleOwnedTask(
+            ConcurrentMap<UUID, ScheduledTask> registry,
+            UUID playerUuid,
+            long delay,
+            TimeUnit unit,
+            Runnable action) {
+        taskLifecycleLock.lock();
+        try {
+            if (closed.get()) {
+                return;
+            }
+            ScheduledTaskRegistry.replace(registry, playerUuid, callback ->
+                    plugin.getServer().getScheduler().buildTask(plugin, callback)
+                            .delay(delay, unit)
+                            .schedule(), () -> {
+                if (!closed.get()) {
+                    action.run();
+                }
+            });
+        } finally {
+            taskLifecycleLock.unlock();
+        }
     }
 
     /**
@@ -1029,32 +1112,20 @@ public class ConnectionManager {
      * @param playerUuid UUID gracza
      */
     public void cancelPendingTransfer(UUID playerUuid) {
-        ScheduledTask pending = pendingTransfers.remove(playerUuid);
-        if (pending != null) {
-            pending.cancel();
-            if (logger.isDebugEnabled()) {
-                logger.debug("Anulowano pending transfer dla gracza UUID: {}", playerUuid);
-            }
+        if (ScheduledTaskRegistry.cancel(pendingTransfers, playerUuid) && logger.isDebugEnabled()) {
+            logger.debug("Anulowano pending transfer dla gracza UUID: {}", playerUuid);
         }
     }
 
     private void cancelBackendWaitTask(UUID playerUuid) {
-        ScheduledTask task = backendWaitTasks.remove(playerUuid);
-        if (task != null) {
-            task.cancel();
-            if (logger.isDebugEnabled()) {
-                logger.debug("Anulowano backend wait task dla gracza UUID: {}", playerUuid);
-            }
+        if (ScheduledTaskRegistry.cancel(backendWaitTasks, playerUuid) && logger.isDebugEnabled()) {
+            logger.debug("Anulowano backend wait task dla gracza UUID: {}", playerUuid);
         }
     }
 
     private void cancelTimeoutRetryTask(UUID playerUuid) {
-        ScheduledTask task = timeoutRetryTasks.remove(playerUuid);
-        if (task != null) {
-            task.cancel();
-            if (logger.isDebugEnabled()) {
-                logger.debug("Anulowano timeout retry task dla gracza UUID: {}", playerUuid);
-            }
+        if (ScheduledTaskRegistry.cancel(timeoutRetryTasks, playerUuid) && logger.isDebugEnabled()) {
+            logger.debug("Anulowano timeout retry task dla gracza UUID: {}", playerUuid);
         }
     }
 
@@ -1085,17 +1156,17 @@ public class ConnectionManager {
      * Anuluje wszystkie pending transfers i czyści wszystkie mapy stanu.
      */
     public void shutdown() {
-        // Anuluj wszystkie pending transfers
-        pendingTransfers.values().forEach(ScheduledTask::cancel);
-        pendingTransfers.clear();
-        
-        // Anuluj wszystkie backend wait tasks
-        backendWaitTasks.values().forEach(ScheduledTask::cancel);
-        backendWaitTasks.clear();
-
-        // Anuluj wszystkie timeout retry tasks
-        timeoutRetryTasks.values().forEach(ScheduledTask::cancel);
-        timeoutRetryTasks.clear();
+        taskLifecycleLock.lock();
+        try {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            ScheduledTaskRegistry.cancelAll(pendingTransfers);
+            ScheduledTaskRegistry.cancelAll(backendWaitTasks);
+            ScheduledTaskRegistry.cancelAll(timeoutRetryTasks);
+        } finally {
+            taskLifecycleLock.unlock();
+        }
         
         // Wyczyść wszystkie mapy stanu
         retryAttempts.clear();

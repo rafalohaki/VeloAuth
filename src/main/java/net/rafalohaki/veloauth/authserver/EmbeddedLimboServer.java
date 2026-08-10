@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.authserver;
 import net.kyori.adventure.text.Component;
 import org.geysermc.mcprotocollib.auth.GameProfile;
 import org.geysermc.mcprotocollib.network.BuiltinFlags;
+import org.geysermc.mcprotocollib.network.NetworkConstants;
 import org.geysermc.mcprotocollib.network.Session;
 import org.geysermc.mcprotocollib.network.event.server.ServerAdapter;
 import org.geysermc.mcprotocollib.network.event.server.SessionAddedEvent;
@@ -271,12 +272,11 @@ final class EmbeddedLimboServer implements AutoCloseable {
         private boolean loginReceived;
         private boolean keepAlivePending;
         private int keepAliveChallenge;
-        private ScheduledFuture<?> handshakeTimeoutTask;
-        private ScheduledFuture<?> loginTimeoutTask;
+        private ScheduledFuture<?> phaseTimeoutTask;
         private ScheduledFuture<?> keepAliveTask;
 
         void start(Session session) {
-            handshakeTimeoutTask = session.getChannel().eventLoop().schedule(
+            phaseTimeoutTask = session.getChannel().eventLoop().schedule(
                     () -> timeout(session), config.handshakeTimeout().toMillis(), TimeUnit.MILLISECONDS);
         }
 
@@ -297,7 +297,7 @@ final class EmbeddedLimboServer implements AutoCloseable {
                 reject(session);
                 return;
             }
-            cancel(handshakeTimeoutTask);
+            cancelPhaseTimeout();
             MinecraftProtocol protocol = session.getPacketProtocol();
             if (handshake.protocolVersion() != PROTOCOL_VERSION) {
                 reject(session);
@@ -310,7 +310,7 @@ final class EmbeddedLimboServer implements AutoCloseable {
             }
 
             protocol.setOutboundState(ProtocolState.LOGIN);
-            loginTimeoutTask = session.getChannel().eventLoop().schedule(
+            phaseTimeoutTask = session.getChannel().eventLoop().schedule(
                     () -> timeout(session), config.loginTimeout().toMillis(), TimeUnit.MILLISECONDS);
             session.switchInboundState(() -> protocol.setInboundState(ProtocolState.LOGIN));
         }
@@ -362,7 +362,12 @@ final class EmbeddedLimboServer implements AutoCloseable {
             MinecraftProtocol protocol = session.getPacketProtocol();
             protocol.setOutboundState(ProtocolState.GAME);
             session.switchInboundState(() -> protocol.setInboundState(ProtocolState.GAME));
-            cancel(loginTimeoutTask);
+            cancelPhaseTimeout();
+            if (session.getChannel().pipeline().get(NetworkConstants.READ_TIMEOUT_NAME) != null) {
+                // GAME liveness is owned by the protocol keepalive below. Removing MCProtocolLib's
+                // duplicate read timeout also releases its persistent per-channel scheduled task.
+                session.getChannel().pipeline().remove(NetworkConstants.READ_TIMEOUT_NAME);
+            }
             playersInGame.incrementAndGet();
             session.send(JOIN_GAME);
             session.send(initialPosition(session));
@@ -392,7 +397,7 @@ final class EmbeddedLimboServer implements AutoCloseable {
 
         private void tickKeepAlive(Session session) {
             if (!session.isConnected()) {
-                cancel(keepAliveTask);
+                cancelKeepAlive();
                 return;
             }
             if (keepAlivePending) {
@@ -422,12 +427,21 @@ final class EmbeddedLimboServer implements AutoCloseable {
 
         @Override
         public void disconnected(DisconnectedEvent event) {
-            cancel(handshakeTimeoutTask);
-            cancel(loginTimeoutTask);
-            cancel(keepAliveTask);
+            cancelPhaseTimeout();
+            cancelKeepAlive();
             if (enteredGame.compareAndSet(true, false)) {
                 playersInGame.decrementAndGet();
             }
+        }
+
+        private void cancelPhaseTimeout() {
+            cancel(phaseTimeoutTask);
+            phaseTimeoutTask = null;
+        }
+
+        private void cancelKeepAlive() {
+            cancel(keepAliveTask);
+            keepAliveTask = null;
         }
 
         private void cancel(ScheduledFuture<?> task) {

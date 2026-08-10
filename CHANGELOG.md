@@ -15,6 +15,8 @@ All notable user-visible changes to VeloAuth are documented in this file.
 - Embedded runtime status, compatibility and topology details in `/vauth report` and startup logs.
 - Privacy-safe bStats custom charts for online client protocol versions, auth topology, database
   family, language bucket and premium/Floodgate/2FA feature adoption.
+- An opt-in embedded listener/framing benchmark with configurable held connections and login
+  concurrency for repeatable before/after capacity checks.
 
 ### Changed
 
@@ -29,6 +31,14 @@ All notable user-visible changes to VeloAuth are documented in this file.
 - Embedded limbo presents its chunk-free holding state as `minecraft:the_end` for a darker
   authentication backdrop. It does not create a world or change the backend dimension after
   transfer.
+- Embedded limbo now uses spectator Join Game state so idle vanilla clients remain suspended in
+  the void instead of continuously falling. The backend replaces that temporary game mode during
+  the normal server switch.
+- Ordered backend selection now completes as soon as the highest-priority reachable result is
+  known and avoids pinging `try` candidates again during the immediate all-server fallback.
+- The repeated diagnostic warning for switching from the Velocity `try` list to registered-server
+  fallback is globally aggregated to one warning per 30 seconds; retry timing and player messages
+  are unchanged.
 - bStats Velocity was updated to 3.2.1, its lifecycle is closed explicitly, and fresh generated
   configs now explain telemetry privacy, global opt-out, embedded forwarding and restart semantics.
 
@@ -58,6 +68,14 @@ All notable user-visible changes to VeloAuth are documented in this file.
   Failed preflights fall back to the previous active or build-pinned runtime in the same startup.
 - Concurrent proxy shutdown can no longer resurrect a partially initialized embedded provider,
   listener or protocol classloader after it has entered the closed state.
+- A stale auth/transfer retry callback can no longer remove or execute over a newer per-player task
+  after rapid reconnect, rescheduling or cancellation.
+- Connection and authentication task registries now close atomically with plugin shutdown, so a
+  late asynchronous completion cannot publish new work after cleanup.
+- GAME sessions no longer retain both MCProtocolLib's read-timeout timer and VeloAuth's keepalive
+  timer; handshake/login remain timeout-protected and an unanswered keepalive still disconnects.
+- Removed the duplicate premium-cache cleanup thread; `AuthCache` already maintains the same cache
+  on its bounded scheduler.
 
 ### Security
 

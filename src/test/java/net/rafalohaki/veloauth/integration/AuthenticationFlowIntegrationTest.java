@@ -134,7 +134,9 @@ class AuthenticationFlowIntegrationTest {
         when(proxyServer.getScheduler()).thenReturn(mock(com.velocitypowered.api.scheduler.Scheduler.class));
         com.velocitypowered.api.scheduler.Scheduler.TaskBuilder taskBuilder =
                 mock(com.velocitypowered.api.scheduler.Scheduler.TaskBuilder.class);
-        when(proxyServer.getScheduler().buildTask(any(), any(Runnable.class))).thenReturn(taskBuilder);
+        when(proxyServer.getScheduler().buildTask(
+                any(), org.mockito.ArgumentMatchers.<java.util.function.Consumer<
+                        com.velocitypowered.api.scheduler.ScheduledTask>>any())).thenReturn(taskBuilder);
         when(taskBuilder.schedule()).thenReturn(mock(com.velocitypowered.api.scheduler.ScheduledTask.class));
     }
 

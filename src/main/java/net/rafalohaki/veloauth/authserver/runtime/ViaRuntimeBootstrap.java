@@ -21,6 +21,8 @@ import com.viaversion.viaversion.protocol.version.BaseVersionProvider;
 import com.viaversion.viaversion.protocols.base.ClientboundLoginPackets;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPipeline;
+import io.netty.util.Attribute;
+import io.netty.util.AttributeKey;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
@@ -30,11 +32,9 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
@@ -54,6 +54,8 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
     private static final String ENCODER_NAME = "veloauth-via-encoder";
     private static final String DECODER_NAME = "veloauth-via-decoder";
     private static final String VELOCITY_FORWARDING_CHANNEL = "velocity:player_info";
+    private static final AttributeKey<UserConnection> CONNECTION_KEY =
+            AttributeKey.valueOf(ViaRuntimeBootstrap.class, "user-connection");
     private static final Duration MAPPING_TIMEOUT = Duration.ofSeconds(30);
     private static final ReentrantLock SYSTEM_PROPERTY_LOCK = new ReentrantLock();
 
@@ -61,7 +63,6 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
     private final int maximumProtocol;
     private final String maximumVersionName;
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final Map<Channel, UserConnection> connections = new ConcurrentHashMap<>();
 
     /** Initializes the private ViaVersion manager and waits for every required mapping. */
     public ViaRuntimeBootstrap(Path configDirectory, org.slf4j.Logger logger, String pluginVersion) {
@@ -127,10 +128,17 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
         }
 
         UserConnection connection = ViaChannelInitializer.createUserConnection(channel, false);
-        connections.put(channel, connection);
-        channel.closeFuture().addListener(ignored -> connections.remove(channel, connection));
-        pipeline.addBefore(MC_PROTOCOL_CODEC, DECODER_NAME, new ViaDecodeHandler(connection));
-        pipeline.addBefore(MC_PROTOCOL_CODEC, ENCODER_NAME, new ViaEncodeHandler(connection));
+        Attribute<UserConnection> attribute = channel.attr(CONNECTION_KEY);
+        if (!attribute.compareAndSet(null, connection)) {
+            throw new IllegalStateException("Embedded protocol connection is already registered");
+        }
+        try {
+            pipeline.addBefore(MC_PROTOCOL_CODEC, DECODER_NAME, new ViaDecodeHandler(connection));
+            pipeline.addBefore(MC_PROTOCOL_CODEC, ENCODER_NAME, new ViaEncodeHandler(connection));
+        } catch (RuntimeException | LinkageError failure) {
+            attribute.compareAndSet(connection, null);
+            throw failure;
+        }
     }
 
     /** Returns the protocol negotiated by ViaVersion for this connection. */
@@ -170,7 +178,7 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
 
     private UserConnection requireConnection(Channel channel) {
         java.util.Objects.requireNonNull(channel, "channel");
-        UserConnection connection = connections.get(channel);
+        UserConnection connection = channel.attr(CONNECTION_KEY).get();
         if (connection == null) {
             throw new IllegalStateException("Embedded protocol connection is not registered");
         }
@@ -182,7 +190,6 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        connections.clear();
         destroyManager();
     }
 

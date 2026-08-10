@@ -2,12 +2,35 @@ package net.rafalohaki.veloauth.authserver;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import org.geysermc.mcprotocollib.network.packet.Packet;
+import org.geysermc.mcprotocollib.network.packet.PacketRegistry;
+import org.geysermc.mcprotocollib.protocol.data.ProtocolState;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 class LegacyProtocolCodecTest {
+
+    @Test
+    void ignoredGamePackets_RepeatedMovement_ShouldReuseStatelessPacket() {
+        PacketRegistry registry = LegacyProtocolCodec.CODEC.getCodec(ProtocolState.GAME);
+        ByteBuf firstPayload = Unpooled.wrappedBuffer(new byte[25]);
+        ByteBuf secondPayload = Unpooled.wrappedBuffer(new byte[25]);
+        try {
+            Packet first = registry.createServerboundPacket(0x04, firstPayload);
+            Packet second = registry.createServerboundPacket(0x04, secondPayload);
+
+            assertSame(first, second,
+                    "Ignored movement packets must not allocate one empty object per client tick");
+            assertEquals(0, firstPayload.readableBytes());
+            assertEquals(0, secondPayload.readableBytes());
+        } finally {
+            firstPayload.release();
+            secondPayload.release();
+        }
+    }
 
     @Test
     void keepAlive_Minecraft18Wire_ShouldUseVarIntInBothDirections() {

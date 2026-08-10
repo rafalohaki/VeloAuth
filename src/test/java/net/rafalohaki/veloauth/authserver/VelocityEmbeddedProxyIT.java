@@ -8,6 +8,7 @@ import org.geysermc.mcprotocollib.network.event.session.SessionAdapter;
 import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.GameMode;
 import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundRegistryDataPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
@@ -105,6 +106,9 @@ class VelocityEmbeddedProxyIT {
         assertEquals(Key.key("minecraft", "the_end"),
                 loginPacket.get().getCommonPlayerSpawnInfo().getWorldName(),
                 "Velocity should preserve embedded limbo's End world identifier");
+        assertEquals(GameMode.SPECTATOR,
+                loginPacket.get().getCommonPlayerSpawnInfo().getGameMode(),
+                "Velocity should preserve embedded limbo's suspended spectator state");
         assertTrue(loginPacket.get().isEnforcesSecureChat(),
                 "Velocity should preserve embedded limbo's secure-chat marker");
         assertTrue(terrainLoadingStarted.await(10, TimeUnit.SECONDS),

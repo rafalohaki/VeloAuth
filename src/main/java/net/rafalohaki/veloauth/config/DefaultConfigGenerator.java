@@ -160,7 +160,9 @@ final class DefaultConfigGenerator {
                     # forwarding secret; VeloAuth never reads, copies or logs that secret.
                     # Modern forwarding itself cannot carry Java 1.8-1.12 clients.
                     port: 0
-                    # Hard limits for the unauthenticated public edge.
+                    # Hard limits for the unauthenticated holding path. This is a safety cap,
+                    # not certified host capacity: through Velocity, budget roughly three socket
+                    # descriptors per waiting player and load-test before raising the default.
                     max-connections: 512
                     handshake-timeout-seconds: 10
                     login-timeout-seconds: 15""";

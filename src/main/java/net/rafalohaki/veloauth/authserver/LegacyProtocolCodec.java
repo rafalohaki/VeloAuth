@@ -18,6 +18,7 @@ final class LegacyProtocolCodec {
     static final int PROTOCOL_VERSION = 47;
     static final String MINECRAFT_VERSION = "1.8.x";
     private static final int END_DIMENSION_ID = 1;
+    private static final int SPECTATOR_GAME_MODE_ID = 3;
     private static final int LAST_SERVERBOUND_GAME_PACKET = 0x19;
 
     static final PacketCodec CODEC = PacketCodec.builder()
@@ -64,9 +65,15 @@ final class LegacyProtocolCodec {
 
         registry.registerServerboundPacket(KeepAlive.class, KeepAlive::new);
         for (int packetId = 1; packetId <= LAST_SERVERBOUND_GAME_PACKET; packetId++) {
-            registry.registerServerboundPacket(IgnoredServerboundPacket.class, IgnoredServerboundPacket::new);
+            registry.registerServerboundPacket(
+                    IgnoredServerboundPacket.class, LegacyProtocolCodec::ignoredServerboundPacket);
         }
         return registry;
+    }
+
+    private static IgnoredServerboundPacket ignoredServerboundPacket(ByteBuf input) {
+        input.skipBytes(input.readableBytes());
+        return IgnoredServerboundPacket.INSTANCE;
     }
 
     record Handshake(int protocolVersion, String hostname, int port, Intent intent)
@@ -245,7 +252,8 @@ final class LegacyProtocolCodec {
         @Override
         public void serialize(ByteBuf output) {
             output.writeInt(entityId);
-            output.writeByte(2); // Adventure mode.
+            // Spectator keeps vanilla clients suspended in a chunkless void without server ticks.
+            output.writeByte(SPECTATOR_GAME_MODE_ID);
             output.writeByte(END_DIMENSION_ID);
             output.writeByte(0); // Peaceful.
             output.writeByte(1); // Advertised maximum players.
@@ -273,11 +281,8 @@ final class LegacyProtocolCodec {
         }
     }
 
-    private record IgnoredServerboundPacket() implements MinecraftPacket {
-        private IgnoredServerboundPacket(ByteBuf input) {
-            this();
-            input.skipBytes(input.readableBytes());
-        }
+    private enum IgnoredServerboundPacket implements MinecraftPacket {
+        INSTANCE;
 
         @Override
         public void serialize(ByteBuf output) {

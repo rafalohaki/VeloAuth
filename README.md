@@ -26,7 +26,7 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🧩 **Self-Contained Limbo** - New installations can use the built-in 1.8-base limbo with staged ViaVersion snapshot updates for newer Java clients; no separate server, forwarding secret, or ViaVersion plugin is required
 - 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
 - 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are hidden while authorization and the matching login session are active; expired sessions expose the recovery commands again
-- 🚀 **High Performance** - Three-layer premium resolution cache: in-memory → database → external API, with configurable positive and negative TTLs
+- 🚀 **High Performance** - Bounded three-layer premium cache, non-blocking ordered backend selection and ownership-safe per-player tasks keep proxy event loops free
 - 🔐 **Optional 2FA (TOTP)** - Opt-in RFC 6238 second factor compatible with Google Authenticator, Authy, Aegis. See [2FA.md](2FA.md) for the operator + player handbook.
 - 🔄 **Conflict Resolution** - Smart handling of premium/cracked nickname conflicts
 - 📊 **Admin Tools** - Complete conflict management with `/vauth conflicts`
@@ -156,7 +156,9 @@ to a real backend.
 The chunk-free holding state is presented to clients as `minecraft:the_end`, giving the temporary
 authentication screen a darker backdrop without creating or saving an End world. This is not a
 configuration option and affects only embedded limbo: after authentication the backend sends its
-own dimension and world state normally.
+own dimension, game mode and world state normally. Embedded Join Game uses spectator mode so an
+idle vanilla client remains suspended instead of producing continuous fall movement. The limbo
+still has no blocks, world ticks, physics, fall damage or persisted gameplay state.
 
 ```toml
 [servers]
@@ -198,6 +200,9 @@ auth-server:
     # For modern forwarding, Velocity owns the existing forwarding secret and answers
     # VeloAuth's velocity:player_info query; do not copy any secret into this config.
     port: 0
+    # This is a holding-session cap, not a promise that every host can absorb the same-size burst.
+    # Through Velocity, budget roughly three socket descriptors per waiting player and stage-test
+    # heap, ViaVersion path length, OS limits and event-loop latency before raising this value.
     max-connections: 512
     handshake-timeout-seconds: 10
     login-timeout-seconds: 15
@@ -262,6 +267,20 @@ The script pins the resolved timestamp, URL and hashes into
 `META-INF/veloauth/embedded-runtime.properties`, runs Maven/JaCoCo/PMD/CPD and uses the resulting JAR
 in a real Velocity smoke test. `--resolve-only` tests repository resolution, while `--skip-smoke`
 is intended only for local diagnostics. The ordinary `mvnd clean verify` remains reproducible.
+
+For a repeatable local direct-listener baseline, run:
+
+```bash
+./scripts/benchmark-embedded-limbo.sh
+```
+
+`VELOAUTH_BENCHMARK_CONNECTIONS` controls held connections and
+`VELOAUTH_BENCHMARK_CONCURRENCY` controls the login burst. Framing uses
+`VELOAUTH_BENCHMARK_FRAMES` measured operations after `VELOAUTH_BENCHMARK_WARMUP` warm-up
+operations. The benchmark intentionally isolates native protocol 47 and includes test-client
+overhead, so it is useful for before/after regression checks but does not certify the full Velocity
++ ViaVersion topology. Production capacity still requires a real-proxy load test with
+representative protocol versions, file-descriptor monitoring, JFR, heap/RSS, GC and event-loop lag.
 
 To retain an existing standalone limbo, use:
 
@@ -620,7 +639,9 @@ The normal suite also performs a native 1.8 login, bidirectional protocol-47 kee
 translated status handshakes for representative 1.12.2, 1.16.5, 1.20.1 and 1.21.4 clients, and a
 complete MCProtocolLib 26.2 login held through the first keepalive. That latest-client path also
 requires the translated End registry/type/world identifiers, ViaVersion's level-loading event and a
-spawn above the unloaded void, preventing the client from remaining on "Loading terrain". The real
+spectator spawn above the unloaded void, preventing gravity-driven idle movement and the client from
+remaining on "Loading terrain". Regression tests also cover the GAME read-timeout handoff, ordered
+early backend selection, per-player task ownership and shutdown-safe task publication. The real
 Velocity smoke proves pinned startup, snapshot staging, activation on restart and a third restart
 that rejects a tampered pending manifest while retaining client availability through the same
 keepalive boundary. It also submits a rejected `/login` attempt and verifies that the cracked client

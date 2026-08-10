@@ -371,19 +371,6 @@ public class AuthCache {
         }
     }
 
-    /**
-     * Premium-cache-only maintenance kick. Scheduled independently from
-     * {@link #cleanupExpiredEntries} so the premium cache can be tuned on a different
-     * cadence (premium TTL is hours, the other caches are minutes).
-     */
-    public void cleanExpiredPremiumEntries() {
-        try {
-            premiumCache.cleanUp();
-        } catch (RuntimeException e) {
-            logger.error("Error during premium cache cleanup", e);
-        }
-    }
-
     // ===== Metrics & Shutdown =====
 
     private void logCacheAccessMetric(String messageKey, Object... args) {

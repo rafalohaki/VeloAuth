@@ -34,7 +34,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -43,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -181,6 +185,106 @@ class ConnectionManagerLifecycleIntegrationTest {
     }
 
     @Test
+    void findAvailableBackend_FirstReachable_ShouldNotWaitForLowerPriorityPing() throws Exception {
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        RegisteredServer firstBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer slowBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerPing firstPing = org.mockito.Mockito.mock(ServerPing.class);
+        CompletableFuture<ServerPing> slowPing = new CompletableFuture<>();
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of("first", "slow"));
+        when(proxyServer.getServer("first")).thenReturn(Optional.of(firstBackend));
+        when(proxyServer.getServer("slow")).thenReturn(Optional.of(slowBackend));
+        when(firstBackend.getServerInfo()).thenReturn(
+                new ServerInfo("first", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(slowBackend.getServerInfo()).thenReturn(
+                new ServerInfo("slow", InetSocketAddress.createUnresolved("127.0.0.1", 25567)));
+        when(firstBackend.ping()).thenReturn(CompletableFuture.completedFuture(firstPing));
+        when(slowBackend.ping()).thenReturn(slowPing);
+
+        Optional<RegisteredServer> selected = connectionManager
+                .findAvailableBackendServerForInitialConnectionAsync()
+                .get(500, TimeUnit.MILLISECONDS);
+
+        assertSame(firstBackend, selected.orElse(null),
+                "A reachable first-choice backend must not wait for lower-priority timeouts");
+        assertFalse(slowPing.isDone());
+    }
+
+    @Test
+    void findAvailableBackend_LowerPriorityReachable_ShouldWaitForEarlierResult() {
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        RegisteredServer firstBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer secondBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        CompletableFuture<ServerPing> firstPing = new CompletableFuture<>();
+        ServerPing secondPing = org.mockito.Mockito.mock(ServerPing.class);
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of("first", "second"));
+        when(proxyServer.getServer("first")).thenReturn(Optional.of(firstBackend));
+        when(proxyServer.getServer("second")).thenReturn(Optional.of(secondBackend));
+        when(firstBackend.getServerInfo()).thenReturn(
+                new ServerInfo("first", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(secondBackend.getServerInfo()).thenReturn(
+                new ServerInfo("second", InetSocketAddress.createUnresolved("127.0.0.1", 25567)));
+        when(firstBackend.ping()).thenReturn(firstPing);
+        when(secondBackend.ping()).thenReturn(CompletableFuture.completedFuture(secondPing));
+
+        CompletableFuture<Optional<RegisteredServer>> selection = connectionManager
+                .findAvailableBackendServerForInitialConnectionAsync();
+        assertFalse(selection.isDone(),
+                "A lower-priority backend cannot win before the earlier candidate resolves");
+
+        firstPing.completeExceptionally(new IllegalStateException("offline"));
+
+        assertSame(secondBackend, selection.join().orElse(null));
+    }
+
+    @Test
+    void findAvailableBackend_Fallback_ShouldNotPingTryCandidateTwice() {
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        RegisteredServer unavailableTryBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer fallbackBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerPing fallbackPing = org.mockito.Mockito.mock(ServerPing.class);
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of("offline"));
+        when(proxyServer.getServer("offline")).thenReturn(Optional.of(unavailableTryBackend));
+        when(proxyServer.getAllServers()).thenReturn(List.of(unavailableTryBackend, fallbackBackend));
+        when(unavailableTryBackend.getServerInfo()).thenReturn(
+                new ServerInfo("offline", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(fallbackBackend.getServerInfo()).thenReturn(
+                new ServerInfo("fallback", InetSocketAddress.createUnresolved("127.0.0.1", 25567)));
+        when(unavailableTryBackend.ping()).thenReturn(
+                CompletableFuture.failedFuture(new IllegalStateException("offline")));
+        when(fallbackBackend.ping()).thenReturn(CompletableFuture.completedFuture(fallbackPing));
+
+        Optional<RegisteredServer> selected = connectionManager
+                .findAvailableBackendServerForInitialConnectionAsync().join();
+
+        assertSame(fallbackBackend, selected.orElse(null));
+        verify(unavailableTryBackend, times(1)).ping();
+    }
+
+    @Test
+    void findAvailableBackend_RepeatedOutage_ShouldThrottleFallbackWarnings() {
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        RegisteredServer unavailableBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of("offline"));
+        when(proxyServer.getServer("offline")).thenReturn(Optional.of(unavailableBackend));
+        when(proxyServer.getAllServers()).thenReturn(List.of(unavailableBackend));
+        when(unavailableBackend.getServerInfo()).thenReturn(
+                new ServerInfo("offline", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(unavailableBackend.ping()).thenReturn(
+                CompletableFuture.failedFuture(new IllegalStateException("offline")));
+
+        connectionManager.findAvailableBackendServerForInitialConnectionAsync().join();
+        connectionManager.findAvailableBackendServerForInitialConnectionAsync().join();
+
+        verify(logger, times(1)).warn(
+                "No reachable server from the Velocity try list; attempting fallback");
+    }
+
+    @Test
     void backendWaitSchedulerCallback_shouldNotBlockWhileForcedHostPingIsPending() throws Exception {
         UUID playerUuid = UUID.randomUUID();
         Player player = org.mockito.Mockito.mock(Player.class);
@@ -190,8 +294,9 @@ class ConnectionManagerLifecycleIntegrationTest {
         Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
         ScheduledTask scheduledTask = org.mockito.Mockito.mock(ScheduledTask.class);
         CompletableFuture<ServerPing> pendingPing = new CompletableFuture<>();
-        org.mockito.ArgumentCaptor<Runnable> callbackCaptor =
-                org.mockito.ArgumentCaptor.forClass(Runnable.class);
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Consumer<ScheduledTask>> callbackCaptor =
+                org.mockito.ArgumentCaptor.forClass(Consumer.class);
 
         when(player.getUniqueId()).thenReturn(playerUuid);
         when(player.getUsername()).thenReturn("AsyncRetryPlayer");
@@ -214,7 +319,8 @@ class ConnectionManagerLifecycleIntegrationTest {
         scheduleRetry.setAccessible(true);
         scheduleRetry.invoke(connectionManager, player, 1);
 
-        CompletableFuture<Void> callback = CompletableFuture.runAsync(callbackCaptor.getValue());
+        CompletableFuture<Void> callback = CompletableFuture.runAsync(
+                () -> callbackCaptor.getValue().accept(scheduledTask));
         try {
             assertDoesNotThrow(() -> callback.get(500, TimeUnit.MILLISECONDS),
                     "Velocity scheduler callback must return before an unresolved ping completes");
@@ -224,6 +330,37 @@ class ConnectionManagerLifecycleIntegrationTest {
             pendingPing.complete(org.mockito.Mockito.mock(ServerPing.class));
             callback.get(2, TimeUnit.SECONDS);
         }
+    }
+
+    @Test
+    void shutdown_LateAsyncSchedule_ShouldNotPublishNewTask() throws Exception {
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        ConcurrentMap<UUID, ScheduledTask> lateTasks = new ConcurrentHashMap<>();
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+
+        connectionManager.shutdown();
+
+        Method scheduleOwnedTask = ConnectionManager.class.getDeclaredMethod(
+                "scheduleOwnedTask",
+                ConcurrentMap.class,
+                UUID.class,
+                long.class,
+                TimeUnit.class,
+                Runnable.class);
+        scheduleOwnedTask.setAccessible(true);
+        scheduleOwnedTask.invoke(
+                connectionManager,
+                lateTasks,
+                UUID.randomUUID(),
+                1L,
+                TimeUnit.SECONDS,
+                (Runnable) () -> {
+                    throw new AssertionError("A task must not run after shutdown");
+                });
+
+        assertTrue(lateTasks.isEmpty());
+        verify(scheduler, never()).buildTask(
+                any(), org.mockito.ArgumentMatchers.<Consumer<ScheduledTask>>any());
     }
 
     @SuppressWarnings("unchecked")
