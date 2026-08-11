@@ -1354,10 +1354,11 @@ class ConnectionManagerLifecycleIntegrationTest {
         connectionManager.beginTransferSession(player);
         connectionManager.setForcedHostTarget(player, "forced");
         Object state = getMap("transferStates").get(playerUuid);
-        Method scheduleRetry = ConnectionManager.class
+        Object backendTransferCoordinator = getBackendTransferCoordinator();
+        Method scheduleRetry = backendTransferCoordinator.getClass()
                 .getDeclaredMethod("scheduleBackendWaitRetry", Player.class, state.getClass(), int.class);
         scheduleRetry.setAccessible(true);
-        scheduleRetry.invoke(connectionManager, player, state, 1);
+        scheduleRetry.invoke(backendTransferCoordinator, player, state, 1);
 
         CompletableFuture<Void> callback = CompletableFuture.runAsync(
                 () -> callbackCaptor.getValue().accept(scheduledTask));
@@ -1424,6 +1425,12 @@ class ConnectionManagerLifecycleIntegrationTest {
 
     private Object getBackendSelector() throws Exception {
         Field field = ConnectionManager.class.getDeclaredField("backendSelector");
+        field.setAccessible(true);
+        return field.get(connectionManager);
+    }
+
+    private Object getBackendTransferCoordinator() throws Exception {
+        Field field = ConnectionManager.class.getDeclaredField("backendTransferCoordinator");
         field.setAccessible(true);
         return field.get(connectionManager);
     }

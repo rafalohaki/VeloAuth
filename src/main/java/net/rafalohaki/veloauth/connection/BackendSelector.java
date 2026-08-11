@@ -258,7 +258,7 @@ final class BackendSelector {
                 logger.debug("Found available server: {}", serverName);
                 return true;
             }
-        } catch (RuntimeException failure) {
+        } catch (Exception failure) {
             logger.debug("Server {} unavailable: {}", serverName, failure.getMessage());
         }
         return false;
