@@ -1114,6 +1114,45 @@ class ConnectionManagerLifecycleIntegrationTest {
     }
 
     @Test
+    void fallbackBackendPingCompletion_AfterShutdown_ReturnsEmpty() {
+        FallbackSelectionFixture fixture = preparePendingFallbackSelection();
+
+        CompletableFuture<Optional<RegisteredServer>> selection =
+                connectionManager.findAvailableBackendServerForInitialConnectionAsync();
+        verify(fixture.fallbackBackend()).ping();
+        connectionManager.shutdown();
+        fixture.pendingPing().complete(org.mockito.Mockito.mock(ServerPing.class));
+
+        assertTrue(selection.join().isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void fallbackBackendPingCompletion_AfterOwnerReplacement_ReturnsEmpty() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        FallbackSelectionFixture fixture = preparePendingFallbackSelection();
+        connectionManager.beginTransferSession(oldPlayer);
+        Object oldState = getMap("transferStates").get(playerUuid);
+        Method selectionMethod = ConnectionManager.class.getDeclaredMethod(
+                "findAvailableBackendServerAsync", oldState.getClass());
+        selectionMethod.setAccessible(true);
+
+        CompletableFuture<Optional<RegisteredServer>> selection =
+                (CompletableFuture<Optional<RegisteredServer>>) selectionMethod.invoke(
+                        connectionManager, oldState);
+        verify(fixture.fallbackBackend()).ping();
+        connectionManager.beginTransferSession(newPlayer);
+        fixture.pendingPing().complete(org.mockito.Mockito.mock(ServerPing.class));
+
+        assertTrue(selection.join().isEmpty());
+        assertSame(newPlayer, getStateOwner(playerUuid));
+    }
+
+    @Test
     void findAvailableBackendForInitialConnectionShouldPreserveTryOrderAndExcludeAuthServer() {
         ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
         RegisteredServer firstBackend = org.mockito.Mockito.mock(RegisteredServer.class);
@@ -1375,6 +1414,25 @@ class ConnectionManagerLifecycleIntegrationTest {
         }
     }
 
+    private FallbackSelectionFixture preparePendingFallbackSelection() {
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        RegisteredServer unavailableTryBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer fallbackBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        CompletableFuture<ServerPing> pendingPing = new CompletableFuture<>();
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of("offline"));
+        when(proxyServer.getServer("offline")).thenReturn(Optional.of(unavailableTryBackend));
+        when(proxyServer.getAllServers()).thenReturn(List.of(unavailableTryBackend, fallbackBackend));
+        when(unavailableTryBackend.getServerInfo()).thenReturn(
+                new ServerInfo("offline", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(fallbackBackend.getServerInfo()).thenReturn(
+                new ServerInfo("fallback", InetSocketAddress.createUnresolved("127.0.0.1", 25567)));
+        when(unavailableTryBackend.ping()).thenReturn(
+                CompletableFuture.failedFuture(new IllegalStateException("offline")));
+        when(fallbackBackend.ping()).thenReturn(pendingPing);
+        return new FallbackSelectionFixture(fallbackBackend, pendingPing);
+    }
+
     @SuppressWarnings("unchecked")
     private void putStateTask(UUID playerUuid, String fieldName, ScheduledTask task) throws Exception {
         Object state = getMap("transferStates").get(playerUuid);
@@ -1388,5 +1446,9 @@ class ConnectionManagerLifecycleIntegrationTest {
         public void close() {
             executor.shutdownNow();
         }
+    }
+
+    private record FallbackSelectionFixture(
+            RegisteredServer fallbackBackend, CompletableFuture<ServerPing> pendingPing) {
     }
 }

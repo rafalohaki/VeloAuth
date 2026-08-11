@@ -1047,24 +1047,33 @@ public class ConnectionManager {
                 .flatMap(name -> plugin.getServer().getServer(name).stream())
                 .toList();
 
-        return pickFirstAvailable(tryCandidates, state).thenCompose(found -> {
-            if (isIoOwnerUnavailable(state)) {
-                return CompletableFuture.completedFuture(Optional.empty());
-            }
-            if (found.isPresent()) {
-                return CompletableFuture.completedFuture(found);
-            }
-            // Fallback: parallel ping of every registered server (minus auth).
-            logBackendFallbackWarning();
-            Set<String> alreadyChecked = tryCandidates.stream()
-                    .map(server -> server.getServerInfo().getName())
-                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
-            java.util.List<RegisteredServer> fallbackCandidates = plugin.getServer().getAllServers().stream()
-                    .filter(server -> !authServerProvider.isAuthServer(server))
-                    .filter(server -> !alreadyChecked.contains(server.getServerInfo().getName()))
-                    .toList();
-            return pickFirstAvailable(fallbackCandidates, state);
-        });
+        CompletableFuture<Optional<RegisteredServer>> selection =
+                pickFirstAvailable(tryCandidates, state).thenCompose(found -> {
+                    if (isIoOwnerUnavailable(state)) {
+                        return CompletableFuture.completedFuture(Optional.empty());
+                    }
+                    if (found.isPresent()) {
+                        return CompletableFuture.completedFuture(found);
+                    }
+                    // Fallback: parallel ping of every registered server (minus auth).
+                    logBackendFallbackWarning();
+                    Set<String> alreadyChecked = tryCandidates.stream()
+                            .map(server -> server.getServerInfo().getName())
+                            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                    java.util.List<RegisteredServer> fallbackCandidates = plugin.getServer().getAllServers().stream()
+                            .filter(server -> !authServerProvider.isAuthServer(server))
+                            .filter(server -> !alreadyChecked.contains(server.getServerInfo().getName()))
+                            .toList();
+                    return pickFirstAvailable(fallbackCandidates, state);
+                });
+        return rejectUnavailableSelection(state, selection);
+    }
+
+    private CompletableFuture<Optional<RegisteredServer>> rejectUnavailableSelection(
+            @javax.annotation.Nullable PlayerTransferState state,
+            CompletableFuture<Optional<RegisteredServer>> selection) {
+        return selection.thenApply(found ->
+                isIoOwnerUnavailable(state) ? Optional.empty() : found);
     }
 
     private void logBackendFallbackWarning() {
