@@ -10,9 +10,16 @@ import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -79,6 +86,7 @@ class BStatsChartsTest {
         when(settings.getLanguage()).thenReturn("private-network-name");
         when(settings.getDatabaseStorageType()).thenReturn("private-database-name");
         when(settings.isPremiumCheckEnabled()).thenReturn(false);
+        when(settings.getPremiumSettings()).thenReturn(premiumSettings(false, false));
         when(settings.isFloodgateIntegrationEnabled()).thenReturn(false);
         when(settings.getTwoFactorSettings()).thenReturn(twoFactorSettings);
 
@@ -97,6 +105,7 @@ class BStatsChartsTest {
         when(settings.getDatabaseStorageType()).thenReturn("POSTGRESQL");
         when(settings.isPremiumCheckEnabled()).thenReturn(true);
         when(settings.isPremiumBypassAuthServerEnabled()).thenReturn(true);
+        when(settings.getPremiumSettings()).thenReturn(premiumSettings(true, true));
         when(settings.isFloodgateIntegrationEnabled()).thenReturn(true);
         when(settings.isFloodgateBypassAuthServerEnabled()).thenReturn(false);
         when(settings.getTwoFactorSettings()).thenReturn(twoFactorSettings);
@@ -107,6 +116,64 @@ class BStatsChartsTest {
         assertEquals("verified-bypass", BStatsCharts.premiumRouting(settings));
         assertEquals("auth-server", BStatsCharts.floodgateRouting(settings));
         assertEquals("enabled", BStatsCharts.twoFactorSupport(settings));
+    }
+
+    @Test
+    void premiumRouting_ReloadInterleaving_NeverPublishesTornCategory() throws Exception {
+        Settings settings = mock(Settings.class);
+        Settings.PremiumSettings oldGeneration = premiumSettings(true, false);
+        Settings.PremiumSettings newGeneration = premiumSettings(false, true);
+        AtomicReference<Settings.PremiumSettings> generation =
+                new AtomicReference<>(oldGeneration);
+        CountDownLatch snapshotRead = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+
+        when(settings.isPremiumCheckEnabled()).thenAnswer(ignored -> {
+            boolean captured = generation.get().isCheckEnabled();
+            snapshotRead.countDown();
+            awaitLatch(releaseRead);
+            return captured;
+        });
+        when(settings.isPremiumBypassAuthServerEnabled()).thenAnswer(
+                ignored -> generation.get().isBypassAuthServer());
+        when(settings.getPremiumSettings()).thenAnswer(ignored -> {
+            Settings.PremiumSettings captured = generation.get();
+            snapshotRead.countDown();
+            awaitLatch(releaseRead);
+            return captured;
+        });
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> category = executor.submit(() -> BStatsCharts.premiumRouting(settings));
+            assertTrue(snapshotRead.await(5, TimeUnit.SECONDS),
+                    "bStats did not start reading the old settings generation");
+            generation.set(newGeneration);
+            releaseRead.countDown();
+
+            assertEquals("auth-server", category.get(5, TimeUnit.SECONDS),
+                    "Neither complete generation enables verified bypass");
+        } finally {
+            releaseRead.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private static Settings.PremiumSettings premiumSettings(boolean checkEnabled, boolean bypass) {
+        return new Settings.PremiumSettings(
+                checkEnabled,
+                false,
+                bypass,
+                new Settings.PremiumResolverSettings());
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS), "Timed out waiting for settings interleave");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting for settings interleave", e);
+        }
     }
 
     private static Player playerUsing(ProtocolVersion protocolVersion) {

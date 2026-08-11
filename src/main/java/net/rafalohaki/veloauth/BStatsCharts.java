@@ -81,10 +81,11 @@ final class BStatsCharts {
     }
 
     static String premiumRouting(Settings settings) {
-        if (!settings.isPremiumCheckEnabled()) {
+        Settings.PremiumSettings premiumSettings = settings.getPremiumSettings();
+        if (!premiumSettings.isCheckEnabled()) {
             return DISABLED_CATEGORY;
         }
-        return settings.isPremiumBypassAuthServerEnabled()
+        return premiumSettings.isBypassAuthServer()
                 ? VERIFIED_BYPASS_CATEGORY
                 : AUTH_SERVER_CATEGORY;
     }

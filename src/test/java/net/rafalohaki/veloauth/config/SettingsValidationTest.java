@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -20,10 +21,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -1009,6 +1012,107 @@ class SettingsValidationTest {
                 "alerts",
                 "audit-log",
                 "two-factor"), settings.getPendingRestartChanges());
+    }
+
+    @Test
+    void removedRestartOnlyValueShouldReturnConfiguredCandidateToDefaults() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                connection:
+                  ping-timeout-ms: 3000
+                """);
+        assertTrue(settings.load());
+
+        writeConfigFile(configFile, """
+                connection:
+                  ping-timeout-ms: 4000
+                """);
+        assertTrue(settings.load());
+        assertEquals(3000, settings.getPingTimeoutMillis());
+        assertEquals(Set.of("connection"), settings.getPendingRestartChanges());
+
+        writeConfigFile(configFile, "debug-enabled: true\n");
+        assertTrue(settings.load());
+
+        assertEquals(3000, settings.getPingTimeoutMillis());
+        assertTrue(settings.getPendingRestartChanges().isEmpty(),
+                "Removing the key must configure the default used by a fresh restart");
+
+        Settings restartedSettings = new Settings(tempDir);
+        assertTrue(restartedSettings.load());
+        assertEquals(settings.getPingTimeoutMillis(), restartedSettings.getPingTimeoutMillis());
+    }
+
+    @Test
+    void scalarYamlRootShouldBeRejectedWithoutChangingPublication() {
+        Object publicationBeforeFailure = preparePendingConnectionChange();
+        writeConfigFile(tempDir.resolve("config.yml"), "7\n");
+
+        assertFalse(assertDoesNotThrow(settings::load));
+        assertSame(publicationBeforeFailure, publicationReference(settings),
+                "Malformed roots must preserve active, configured and pending state together");
+    }
+
+    @ParameterizedTest(name = "malformed map section {index} should be rejected transactionally")
+    @MethodSource("malformedMapSections")
+    void scalarYamlSectionShouldBeRejectedWithoutChangingPublication(String malformedConfig) {
+        Object publicationBeforeFailure = preparePendingConnectionChange();
+        writeConfigFile(tempDir.resolve("config.yml"), malformedConfig);
+
+        assertFalse(assertDoesNotThrow(settings::load));
+        assertSame(publicationBeforeFailure, publicationReference(settings),
+                "Malformed sections must preserve active, configured and pending state together");
+    }
+
+    private static Stream<String> malformedMapSections() {
+        return Stream.of(
+                "database: 7\n",
+                "cache: 7\n",
+                "auth-server: 7\n",
+                "picolimbo: 7\n",
+                "connection: 7\n",
+                "security: 7\n",
+                "premium: 7\n",
+                "floodgate: 7\n",
+                "alerts: 7\n",
+                "audit-log: 7\n",
+                "two-factor: 7\n",
+                "report: 7\n",
+                "database:\n  postgresql: 7\n",
+                "auth-server:\n  embedded: 7\n",
+                "security:\n  password-policy: 7\n",
+                "premium:\n  resolver: 7\n",
+                "alerts:\n  discord: 7\n");
+    }
+
+    private Object preparePendingConnectionChange() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                debug-enabled: false
+                connection:
+                  ping-timeout-ms: 3000
+                """);
+        assertTrue(settings.load());
+        writeConfigFile(configFile, """
+                debug-enabled: true
+                connection:
+                  ping-timeout-ms: 4000
+                """);
+        assertTrue(settings.load());
+        assertTrue(settings.isDebugEnabled());
+        assertEquals(3000, settings.getPingTimeoutMillis());
+        assertEquals(Set.of("connection"), settings.getPendingRestartChanges());
+        return publicationReference(settings);
+    }
+
+    private static Object publicationReference(Settings source) {
+        try {
+            Field field = Settings.class.getDeclaredField("publication");
+            field.setAccessible(true);
+            return field.get(source);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Could not inspect Settings publication", e);
+        }
     }
 
     @Test

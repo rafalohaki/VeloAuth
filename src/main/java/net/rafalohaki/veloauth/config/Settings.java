@@ -83,7 +83,7 @@ public class Settings {
             logger.debug("Loading configuration from: {}", configFile);
 
             Publication current = publication;
-            Snapshot loadedSnapshot = SettingsLoader.load(current.configured(), configFile, yamlMapper, logger);
+            Snapshot loadedSnapshot = SettingsLoader.load(configFile, yamlMapper, logger);
             Settings candidate = new Settings(this, loadedSnapshot);
             if (!candidate.validateLoadedConfig()) {
                 return false;

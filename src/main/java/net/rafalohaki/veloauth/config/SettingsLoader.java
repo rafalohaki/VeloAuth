@@ -26,15 +26,14 @@ final class SettingsLoader {
     private SettingsLoader() {}
 
     static Settings.Snapshot load(
-            Settings.Snapshot baseline,
             Path configFile,
             ObjectMapper yamlMapper,
             Logger logger)
             throws IOException {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> config = yamlMapper.readValue(configFile.toFile(), Map.class);
+        Object root = yamlMapper.readValue(configFile.toFile(), Object.class);
+        Map<String, Object> config = requireMap(root, "Config root");
 
-        Builder state = new Builder(baseline);
+        Builder state = new Builder(Settings.Snapshot.defaults());
         loadDatabaseSettings(config, state);
         loadCacheSettings(config, state);
         loadAuthServerSettings(config, state, logger);
@@ -52,29 +51,43 @@ final class SettingsLoader {
         return state.build();
     }
 
+    private static Map<String, Object> mapSectionOrEmpty(
+            Map<String, Object> parent,
+            String key,
+            String path) {
+        if (!parent.containsKey(key)) {
+            return Map.of();
+        }
+        return requireMap(parent.get(key), "Config section '" + path + ":'");
+    }
+
     @SuppressWarnings("unchecked")
+    private static Map<String, Object> requireMap(Object value, String location) {
+        if (!(value instanceof Map<?, ?>)) {
+            throw new IllegalArgumentException(location + " must be a YAML map");
+        }
+        return (Map<String, Object>) value;
+    }
+
     private static void loadAuditLogSettings(Map<String, Object> config, Builder state) {
-        Object section = config.get("audit-log");
-        if (!(section instanceof Map<?, ?>)) {
+        Map<String, Object> auditLog = mapSectionOrEmpty(config, "audit-log", "audit-log");
+        if (auditLog.isEmpty()) {
             return;
         }
-        Map<String, Object> auditLog = (Map<String, Object>) section;
         Settings.AuditLogSettings target = state.auditLogSettings;
         state.auditLogSettings = new Settings.AuditLogSettings(
                 YamlParserUtils.getBoolean(auditLog, YAML_FIELD_ENABLED, target.isEnabled()),
                 YamlParserUtils.getInt(auditLog, "retention-days", target.getRetentionDays()));
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadTwoFactorSettings(Map<String, Object> config, Builder state) {
         Settings.TwoFactorSettings target = state.twoFactorSettings;
-        Object section = config.get("two-factor");
-        if (!(section instanceof Map<?, ?>)) {
+        Map<String, Object> twoFactor = mapSectionOrEmpty(config, "two-factor", "two-factor");
+        if (twoFactor.isEmpty()) {
             state.twoFactorSettings = new Settings.TwoFactorSettings(
                     target.enabled(), target.issuer(), false, target.pendingTimeoutSeconds());
             return;
         }
-        Map<String, Object> twoFactor = (Map<String, Object>) section;
         state.twoFactorSettings = new Settings.TwoFactorSettings(
                 YamlParserUtils.getBoolean(twoFactor, YAML_FIELD_ENABLED, target.isEnabled()),
                 YamlParserUtils.getString(twoFactor, "issuer", target.getIssuer()),
@@ -83,10 +96,9 @@ final class SettingsLoader {
                         twoFactor, "pending-timeout-seconds", target.getPendingTimeoutSeconds()));
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadDatabaseSettings(Map<String, Object> config, Builder state) {
-        Map<String, Object> database = (Map<String, Object>) config.get("database");
-        if (database == null) {
+        Map<String, Object> database = mapSectionOrEmpty(config, "database", "database");
+        if (database.isEmpty()) {
             return;
         }
 
@@ -107,14 +119,12 @@ final class SettingsLoader {
         loadPostgreSqlSettings(database, state);
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadPostgreSqlSettings(Map<String, Object> database, Builder state) {
-        Object postgreSqlSection = database.get("postgresql");
-        if (!(postgreSqlSection instanceof Map<?, ?>)) {
+        Map<String, Object> postgreSql = mapSectionOrEmpty(
+                database, "postgresql", "database.postgresql");
+        if (postgreSql.isEmpty()) {
             return;
         }
-
-        Map<String, Object> postgreSql = (Map<String, Object>) postgreSqlSection;
         Settings.PostgreSQLSettings target = state.postgreSQLSettings;
         state.postgreSQLSettings = new Settings.PostgreSQLSettings(
                 YamlParserUtils.getBoolean(postgreSql, "ssl-enabled", target.isSslEnabled()),
@@ -130,12 +140,11 @@ final class SettingsLoader {
         state.debugEnabled = YamlParserUtils.getBoolean(config, "debug-enabled", state.debugEnabled);
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadReportSettings(Map<String, Object> config, Builder state) {
         // Logs are opt-in. A hot reload that removes the key must not retain a previous true.
         state.reportIncludeLogs = false;
-        Map<String, Object> report = (Map<String, Object>) config.get("report");
-        if (report != null) {
+        Map<String, Object> report = mapSectionOrEmpty(config, "report", "report");
+        if (!report.isEmpty()) {
             state.reportEnabled = YamlParserUtils.getBoolean(report, YAML_FIELD_ENABLED, state.reportEnabled);
             state.reportIncludeLogs = YamlParserUtils.getBoolean(
                     report, "include-logs", state.reportIncludeLogs);
@@ -146,10 +155,9 @@ final class SettingsLoader {
         state.language = YamlParserUtils.getString(config, "language", state.language);
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadCacheSettings(Map<String, Object> config, Builder state) {
-        Map<String, Object> cache = (Map<String, Object>) config.get("cache");
-        if (cache == null) {
+        Map<String, Object> cache = mapSectionOrEmpty(config, "cache", "cache");
+        if (cache.isEmpty()) {
             return;
         }
 
@@ -164,16 +172,18 @@ final class SettingsLoader {
                 "premium-refresh-threshold", state.premiumRefreshThreshold);
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadAuthServerSettings(Map<String, Object> config, Builder state, Logger logger) {
         // Embedded topology is an explicit opt-in. Removing the key on reload must never retain
         // a previously loaded embedded mode or custom embedded network settings.
         state.authServerMode = Settings.AuthServerMode.EXTERNAL.getConfigValue();
         state.embeddedAuthServerSettings = new Settings.EmbeddedAuthServerSettings();
 
-        Object authServerSection = config.get("auth-server");
-        if (authServerSection instanceof Map<?, ?>) {
-            Map<String, Object> authServer = (Map<String, Object>) authServerSection;
+        boolean authServerConfigured = config.containsKey("auth-server");
+        boolean picoLimboConfigured = config.containsKey("picolimbo");
+        Map<String, Object> authServer = mapSectionOrEmpty(
+                config, "auth-server", "auth-server");
+        Map<String, Object> picolimbo = mapSectionOrEmpty(config, "picolimbo", "picolimbo");
+        if (authServerConfigured) {
             state.authServerMode = explicitStringOrDefault(authServer, "mode", state.authServerMode);
             state.authServerName = YamlParserUtils.getString(authServer, "server-name", state.authServerName);
             state.authServerTimeoutSeconds = YamlParserUtils.getInt(authServer,
@@ -182,13 +192,8 @@ final class SettingsLoader {
                     authServer, state.embeddedAuthServerSettings);
             return;
         }
-        if (config.containsKey("auth-server")) {
-            throw new IllegalArgumentException("Config section 'auth-server:' must be a YAML map");
-        }
 
-        Object picoLimboSection = config.get("picolimbo");
-        if (picoLimboSection instanceof Map<?, ?>) {
-            Map<String, Object> picolimbo = (Map<String, Object>) picoLimboSection;
+        if (picoLimboConfigured) {
             logger.warn("Config section 'picolimbo:' is deprecated — rename to 'auth-server:' in config.yml");
             state.authServerName = YamlParserUtils.getString(picolimbo, "server-name", state.authServerName);
             state.authServerTimeoutSeconds = YamlParserUtils.getInt(picolimbo,
@@ -196,20 +201,14 @@ final class SettingsLoader {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static Settings.EmbeddedAuthServerSettings loadEmbeddedAuthServerSettings(
             Map<String, Object> authServer,
             Settings.EmbeddedAuthServerSettings target) {
-        Object embeddedSection = authServer.get("embedded");
-        if (!(embeddedSection instanceof Map<?, ?>)) {
-            if (authServer.containsKey("embedded")) {
-                throw new IllegalArgumentException(
-                        "Config section 'auth-server.embedded:' must be a YAML map");
-            }
+        Map<String, Object> embedded = mapSectionOrEmpty(
+                authServer, "embedded", "auth-server.embedded");
+        if (embedded.isEmpty()) {
             return target;
         }
-
-        Map<String, Object> embedded = (Map<String, Object>) embeddedSection;
         return new Settings.EmbeddedAuthServerSettings(
                 YamlParserUtils.getInt(embedded, "port", target.getPort()),
                 YamlParserUtils.getInt(embedded, "max-connections", target.getMaxConnections()),
@@ -229,10 +228,9 @@ final class SettingsLoader {
         return YamlParserUtils.getString(section, key, defaultValue);
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadConnectionSettings(Map<String, Object> config, Builder state) {
-        Map<String, Object> connection = (Map<String, Object>) config.get("connection");
-        if (connection != null) {
+        Map<String, Object> connection = mapSectionOrEmpty(config, "connection", "connection");
+        if (!connection.isEmpty()) {
             state.connectionTimeoutSeconds = YamlParserUtils.getInt(connection,
                     CONFIG_KEY_TIMEOUT_SECONDS, state.connectionTimeoutSeconds);
             state.pingTimeoutMillis = YamlParserUtils.getInt(connection,
@@ -242,10 +240,9 @@ final class SettingsLoader {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadSecuritySettings(Map<String, Object> config, Builder state) {
-        Map<String, Object> security = (Map<String, Object>) config.get("security");
-        if (security == null) {
+        Map<String, Object> security = mapSectionOrEmpty(config, "security", "security");
+        if (security.isEmpty()) {
             return;
         }
 
@@ -266,13 +263,12 @@ final class SettingsLoader {
         loadPasswordPolicy(security, state);
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadPasswordPolicy(Map<String, Object> security, Builder state) {
-        Object policySection = security.get("password-policy");
-        if (!(policySection instanceof Map<?, ?>)) {
+        Map<String, Object> policy = mapSectionOrEmpty(
+                security, "password-policy", "security.password-policy");
+        if (policy.isEmpty()) {
             return;
         }
-        Map<String, Object> policy = (Map<String, Object>) policySection;
         Settings.PasswordPolicy target = state.passwordPolicy;
         state.passwordPolicy = new Settings.PasswordPolicy(
                 YamlParserUtils.getInt(policy, "min-digits", target.getMinDigits()),
@@ -281,19 +277,18 @@ final class SettingsLoader {
                 YamlParserUtils.getInt(policy, "min-special", target.getMinSpecial()));
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadPremiumSettings(Map<String, Object> config, Builder state, Logger logger) {
         // Security-sensitive opt-in: removing the key or section on reload must restore
         // the conservative behavior instead of inheriting a previous live true value.
         Settings.PremiumSettings current = state.premiumSettings;
         state.premiumSettings = new Settings.PremiumSettings(
                 current.checkEnabled(), false, false, current.resolver());
-        Object premiumSection = config.get("premium");
-        if (premiumSection instanceof Map<?, ?>) {
-            Map<String, Object> premium = (Map<String, Object>) premiumSection;
+        Map<String, Object> premium = mapSectionOrEmpty(config, "premium", "premium");
+        if (!premium.isEmpty()) {
             applyPremiumCoreSettings(premium, state);
             warnAboutLegacyPremiumKeys(premium, logger);
-            applyPremiumResolverSection(premium.get("resolver"), state);
+            applyPremiumResolverSection(
+                    mapSectionOrEmpty(premium, "resolver", "premium.resolver"), state);
         }
 
         if (config.containsKey("premium-resolver")) {
@@ -320,13 +315,12 @@ final class SettingsLoader {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static void applyPremiumResolverSection(Object resolverSection, Builder state) {
-        if (!(resolverSection instanceof Map<?, ?>)) {
+    private static void applyPremiumResolverSection(
+            Map<String, Object> resolver,
+            Builder state) {
+        if (resolver.isEmpty()) {
             return;
         }
-
-        Map<String, Object> resolver = (Map<String, Object>) resolverSection;
         Settings.PremiumSettings premium = state.premiumSettings;
         Settings.PremiumResolverSettings target = premium.getResolver();
         Settings.PremiumResolverSettings configured = new Settings.PremiumResolverSettings(
@@ -352,21 +346,17 @@ final class SettingsLoader {
                 configured);
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadAlertSettings(Map<String, Object> config, Builder state) {
-        Object alertSection = config.get("alerts");
-        if (!(alertSection instanceof Map<?, ?>)) {
+        Map<String, Object> alerts = mapSectionOrEmpty(config, "alerts", "alerts");
+        if (alerts.isEmpty()) {
             return;
         }
-
-        Map<String, Object> alerts = (Map<String, Object>) alertSection;
         Settings.AlertSettings target = state.alertSettings;
         boolean discordEnabled = target.isDiscordEnabled();
         String webhookUrl = target.getDiscordWebhookUrl();
 
-        Object discordSection = alerts.get("discord");
-        if (discordSection instanceof Map<?, ?>) {
-            Map<String, Object> discord = (Map<String, Object>) discordSection;
+        Map<String, Object> discord = mapSectionOrEmpty(alerts, "discord", "alerts.discord");
+        if (!discord.isEmpty()) {
             discordEnabled = YamlParserUtils.getBoolean(
                     discord, YAML_FIELD_ENABLED, target.isDiscordEnabled());
             webhookUrl = YamlParserUtils.getString(
@@ -386,14 +376,11 @@ final class SettingsLoader {
                         alerts, "alert-cooldown-minutes", target.getAlertCooldownMinutes()));
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadFloodgateSettings(Map<String, Object> config, Builder state) {
-        Object floodgateSection = config.get("floodgate");
-        if (!(floodgateSection instanceof Map<?, ?>)) {
+        Map<String, Object> floodgate = mapSectionOrEmpty(config, "floodgate", "floodgate");
+        if (floodgate.isEmpty()) {
             return;
         }
-
-        Map<String, Object> floodgate = (Map<String, Object>) floodgateSection;
         Settings.FloodgateSettings target = state.floodgateSettings;
         state.floodgateSettings = new Settings.FloodgateSettings(
                 YamlParserUtils.getBoolean(floodgate, YAML_FIELD_ENABLED, target.isEnabled()),
