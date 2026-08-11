@@ -24,11 +24,46 @@ final class ScheduledTaskRegistry {
             Runnable action) {
         Objects.requireNonNull(tasks, "tasks");
         Objects.requireNonNull(playerId, "playerId");
+        return replace(new TaskSlot() {
+            @Override
+            public ScheduledTask replace(ScheduledTask task) {
+                return tasks.put(playerId, task);
+            }
+
+            @Override
+            public boolean clear(ScheduledTask task) {
+                return tasks.remove(playerId, task);
+            }
+        }, scheduler, action);
+    }
+
+    static ScheduledTask replace(
+            AtomicReference<ScheduledTask> task,
+            Function<Consumer<ScheduledTask>, ScheduledTask> scheduler,
+            Runnable action) {
+        Objects.requireNonNull(task, "task");
+        return replace(new TaskSlot() {
+            @Override
+            public ScheduledTask replace(ScheduledTask replacement) {
+                return task.getAndSet(replacement);
+            }
+
+            @Override
+            public boolean clear(ScheduledTask expected) {
+                return task.compareAndSet(expected, null);
+            }
+        }, scheduler, action);
+    }
+
+    private static ScheduledTask replace(
+            TaskSlot taskSlot,
+            Function<Consumer<ScheduledTask>, ScheduledTask> scheduler,
+            Runnable action) {
         Objects.requireNonNull(scheduler, "scheduler");
         Objects.requireNonNull(action, "action");
 
         PendingTask pending = new PendingTask();
-        ScheduledTask previous = tasks.put(playerId, pending);
+        ScheduledTask previous = taskSlot.replace(pending);
         if (previous != null) {
             previous.cancel();
         }
@@ -36,18 +71,28 @@ final class ScheduledTaskRegistry {
         ScheduledTask scheduled;
         try {
             scheduled = Objects.requireNonNull(scheduler.apply(ignored -> {
-                if (tasks.remove(playerId, pending)) {
+                if (taskSlot.clear(pending)) {
                     action.run();
                 }
             }), "scheduled task");
         } catch (RuntimeException | LinkageError failure) {
-            tasks.remove(playerId, pending);
+            taskSlot.clear(pending);
             pending.cancel();
             throw failure;
         }
 
         pending.attach(scheduled);
         return scheduled;
+    }
+
+    static boolean cancel(AtomicReference<ScheduledTask> task) {
+        Objects.requireNonNull(task, "task");
+        ScheduledTask scheduled = task.getAndSet(null);
+        if (scheduled == null) {
+            return false;
+        }
+        scheduled.cancel();
+        return true;
     }
 
     static boolean cancel(ConcurrentMap<UUID, ScheduledTask> tasks, UUID playerId) {
@@ -65,6 +110,12 @@ final class ScheduledTaskRegistry {
                 task.cancel();
             }
         });
+    }
+
+    private interface TaskSlot {
+        ScheduledTask replace(ScheduledTask task);
+
+        boolean clear(ScheduledTask task);
     }
 
     private static final class PendingTask implements ScheduledTask {

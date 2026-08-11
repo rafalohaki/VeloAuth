@@ -16,6 +16,7 @@ import java.util.function.Consumer;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -69,6 +70,25 @@ class ScheduledTaskRegistryTest {
         }, actions::incrementAndGet);
 
         assertTrue(tasks.isEmpty());
+        assertEquals(1, actions.get());
+    }
+
+    @Test
+    void replace_StateSlotCallbackRunsLater_ShouldExecuteAndClearOwnedTask() {
+        AtomicReference<ScheduledTask> taskSlot = new AtomicReference<>();
+        ScheduledTask task = mock(ScheduledTask.class);
+        AtomicReference<Consumer<ScheduledTask>> callback = new AtomicReference<>();
+        AtomicInteger actions = new AtomicInteger();
+
+        ScheduledTaskRegistry.replace(taskSlot, scheduledCallback -> {
+            callback.set(scheduledCallback);
+            return task;
+        }, actions::incrementAndGet);
+
+        assertTrue(taskSlot.get() != null);
+        callback.get().accept(task);
+
+        assertNull(taskSlot.get());
         assertEquals(1, actions.get());
     }
 

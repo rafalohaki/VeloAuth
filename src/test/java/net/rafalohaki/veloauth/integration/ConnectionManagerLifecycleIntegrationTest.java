@@ -15,6 +15,7 @@ import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.i18n.Messages;
+import net.rafalohaki.veloauth.model.CachedAuthUser;
 import org.bstats.velocity.Metrics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -141,11 +142,11 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(connectionRequestBuilder.connect()).thenReturn(CompletableFuture.completedFuture(result));
         when(result.isSuccessful()).thenReturn(true);
 
+        connectionManager.beginTransferSession(player);
         connectionManager.setForcedHostTarget(playerUuid, "backend");
-        putTask("pendingTransfers", playerUuid, pendingTransfer);
-        putTask("backendWaitTasks", playerUuid, backendWaitTask);
-        putTask("timeoutRetryTasks", playerUuid, timeoutRetryTask);
-        putValue("timeoutRetryScheduled", playerUuid, Boolean.TRUE);
+        putStateTask(playerUuid, "pendingTransfer", pendingTransfer);
+        putStateTask(playerUuid, "backendWait", backendWaitTask);
+        putStateTask(playerUuid, "timeoutRetry", timeoutRetryTask);
 
         boolean transferred = connectionManager.transferToBackend(player);
 
@@ -153,26 +154,36 @@ class ConnectionManagerLifecycleIntegrationTest {
         verify(pendingTransfer).cancel();
         verify(backendWaitTask).cancel();
         verify(timeoutRetryTask).cancel();
-        assertTrue(getMap("pendingTransfers").isEmpty(), "Pending transfer tasks should be cleared after success");
-        assertTrue(getMap("backendWaitTasks").isEmpty(), "Backend wait tasks should be cleared after success");
-        assertTrue(getMap("timeoutRetryTasks").isEmpty(), "Timeout retry tasks should be cleared after success");
-        assertTrue(getMap("timeoutRetryScheduled").isEmpty(), "Timeout retry flags should be cleared after success");
+        assertTrue(getMap("transferStates").isEmpty(), "Successful transfer should retire its owner generation");
         assertTrue(getMap("forcedHostTargets").isEmpty(), "Forced-host targets should be consumed after success");
     }
 
     @Test
-    void transferToBackend_ConcurrentAttempts_ShouldStartOneConnection() throws Exception {
+    void manualAndAutoTransfer_SameGeneration_StartOneBackendConnection() throws Exception {
         UUID playerUuid = UUID.randomUUID();
         Player player = org.mockito.Mockito.mock(Player.class);
         RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerConnection authConnection = org.mockito.Mockito.mock(ServerConnection.class);
         ConnectionRequestBuilder connectionRequestBuilder = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
         ConnectionRequestBuilder.Result result = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
         CompletableFuture<ConnectionRequestBuilder.Result> pendingConnection = new CompletableFuture<>();
         CountDownLatch firstConnectionStarted = new CountDownLatch(1);
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask autoTransfer = org.mockito.Mockito.mock(ScheduledTask.class);
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Consumer<ScheduledTask>> callbackCaptor =
+                org.mockito.ArgumentCaptor.forClass(Consumer.class);
 
         when(player.getUniqueId()).thenReturn(playerUuid);
         when(player.getUsername()).thenReturn("ConcurrentPlayer");
         when(player.isActive()).thenReturn(true);
+        when(player.getRemoteAddress()).thenReturn(new InetSocketAddress("127.0.0.1", 25565));
+        when(player.getCurrentServer()).thenReturn(Optional.of(authConnection));
+        when(authConnection.getServer()).thenReturn(authServer);
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
         when(backendServer.getServerInfo()).thenReturn(
                 new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
         when(backendServer.ping()).thenReturn(
@@ -184,20 +195,27 @@ class ConnectionManagerLifecycleIntegrationTest {
             return pendingConnection;
         });
         when(result.isSuccessful()).thenReturn(true);
+        when(authCache.getAuthorizedPlayer(playerUuid)).thenReturn(new CachedAuthUser(
+                playerUuid, "ConcurrentPlayer", "127.0.0.1", System.currentTimeMillis(), false, null));
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(autoTransfer);
+        connectionManager.beginTransferSession(player);
         connectionManager.setForcedHostTarget(playerUuid, "backend");
+        connectionManager.autoTransferFromAuthServerToBackend(player);
+        callbackCaptor.getValue().accept(autoTransfer);
+        assertTrue(firstConnectionStarted.await(1, TimeUnit.SECONDS));
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            Future<Boolean> firstAttempt = executor.submit(() -> connectionManager.transferToBackend(player));
-            assertTrue(firstConnectionStarted.await(1, TimeUnit.SECONDS));
-            Future<Boolean> concurrentAttempt = executor.submit(() -> connectionManager.transferToBackend(player));
+            Future<Boolean> manualAttempt = executor.submit(() -> connectionManager.transferToBackend(player));
             try {
-                assertTrue(concurrentAttempt.get(500, TimeUnit.MILLISECONDS),
-                        "A duplicate request should coalesce with the active backend transfer");
+                assertTrue(manualAttempt.get(500, TimeUnit.MILLISECONDS),
+                        "A manual request should coalesce with the active auto-transfer");
                 verify(connectionRequestBuilder, times(1)).connect();
             } finally {
                 pendingConnection.complete(result);
-                assertTrue(firstAttempt.get(2, TimeUnit.SECONDS));
-                concurrentAttempt.get(2, TimeUnit.SECONDS);
+                manualAttempt.get(2, TimeUnit.SECONDS);
             }
         }
     }
@@ -242,6 +260,88 @@ class ConnectionManagerLifecycleIntegrationTest {
                     "A disconnected player must not be routed through auth fallback");
         }
         verify(player, never()).createConnectionRequest(authServer);
+    }
+
+    @Test
+    void directCompletion_OldPlayerAfterReconnect_DoesNotCancelNewAutoTransfer() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerConnection authConnection = org.mockito.Mockito.mock(ServerConnection.class);
+        ConnectionRequestBuilder oldRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder newRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result oldResult = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        ConnectionRequestBuilder.Result newResult = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        CompletableFuture<ConnectionRequestBuilder.Result> oldConnection = new CompletableFuture<>();
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask newAutoTransfer = org.mockito.Mockito.mock(ScheduledTask.class);
+        CountDownLatch oldConnectionStarted = new CountDownLatch(1);
+        CountDownLatch newConnectionStarted = new CountDownLatch(1);
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Consumer<ScheduledTask>> callbackCaptor =
+                org.mockito.ArgumentCaptor.forClass(Consumer.class);
+
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldPlayer");
+        when(oldPlayer.isActive()).thenReturn(true);
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(newPlayer.getUsername()).thenReturn("NewPlayer");
+        when(newPlayer.isActive()).thenReturn(true);
+        when(newPlayer.getRemoteAddress()).thenReturn(new InetSocketAddress("127.0.0.1", 25565));
+        when(newPlayer.getCurrentServer()).thenReturn(Optional.of(authConnection));
+        when(authConnection.getServer()).thenReturn(authServer);
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(backendServer.ping()).thenReturn(
+                CompletableFuture.completedFuture(org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(oldPlayer.createConnectionRequest(backendServer)).thenReturn(oldRequest);
+        when(oldRequest.connect()).thenAnswer(ignored -> {
+            oldConnectionStarted.countDown();
+            return oldConnection;
+        });
+        when(newPlayer.createConnectionRequest(backendServer)).thenReturn(newRequest);
+        when(newRequest.connect()).thenAnswer(ignored -> {
+            newConnectionStarted.countDown();
+            return CompletableFuture.completedFuture(newResult);
+        });
+        when(oldResult.isSuccessful()).thenReturn(true);
+        when(newResult.isSuccessful()).thenReturn(true);
+        when(authCache.getAuthorizedPlayer(playerUuid)).thenReturn(new CachedAuthUser(
+                playerUuid, "NewPlayer", "127.0.0.1", System.currentTimeMillis(), false, null));
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(newAutoTransfer);
+        connectionManager.setForcedHostTarget(playerUuid, "backend");
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Boolean> oldAttempt = executor.submit(() -> connectionManager.transferToBackend(oldPlayer));
+            assertTrue(oldConnectionStarted.await(1, TimeUnit.SECONDS));
+
+            connectionManager.clearRetryAttempts(playerUuid);
+            connectionManager.beginTransferSession(newPlayer);
+            connectionManager.setForcedHostTarget(playerUuid, "backend");
+            connectionManager.autoTransferFromAuthServerToBackend(newPlayer);
+
+            when(oldPlayer.isActive()).thenReturn(false);
+            oldConnection.complete(oldResult);
+            assertFalse(oldAttempt.get(2, TimeUnit.SECONDS));
+            verify(newAutoTransfer, never()).cancel();
+            assertFalse(connectionManager.transferToBackend(oldPlayer),
+                    "A stale concrete player must not reacquire B's UUID generation");
+
+            callbackCaptor.getValue().accept(newAutoTransfer);
+            assertTrue(newConnectionStarted.await(2, TimeUnit.SECONDS));
+        }
+
+        verify(oldRequest, times(1)).connect();
+        verify(newRequest, times(1)).connect();
     }
 
     @Test
@@ -465,5 +565,13 @@ class ConnectionManagerLifecycleIntegrationTest {
 
     private void putValue(String fieldName, UUID playerUuid, Object value) throws Exception {
         getMap(fieldName).put(playerUuid, value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void putStateTask(UUID playerUuid, String fieldName, ScheduledTask task) throws Exception {
+        Object state = getMap("transferStates").get(playerUuid);
+        Field field = state.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        ((java.util.concurrent.atomic.AtomicReference<ScheduledTask>) field.get(state)).set(task);
     }
 }
