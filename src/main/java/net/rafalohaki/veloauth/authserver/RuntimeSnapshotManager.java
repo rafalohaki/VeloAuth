@@ -11,8 +11,6 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.time.Clock;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,25 +20,22 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 
-/** Stages an exact ViaVersion snapshot after startup and activates it only on a later restart. */
+/** Stages an exact maintainer-reviewed ViaVersion runtime for activation on a later restart. */
 final class RuntimeSnapshotManager {
 
     static final String ACTIVE_MANIFEST = "active-runtime.properties";
     static final String PENDING_MANIFEST = "pending-runtime.properties";
+    static final String REVIEWED_TRUST = "veloauth-reviewed-v1";
 
-    private static final String LAST_CHECK_FILE = "last-snapshot-check";
-    private static final Duration MINIMUM_CHECK_INTERVAL = Duration.ofMinutes(15);
     private static final int MAXIMUM_MANIFEST_BYTES = 4096;
     private static final ReentrantLock STORE_LOCK = new ReentrantLock();
 
     private final Path runtimeDirectory;
     private final ViaVersionRepositoryClient repositoryClient;
     private final Logger logger;
-    private final Clock clock;
 
     RuntimeSnapshotManager(Path dataDirectory, Logger logger) {
-        this(dataDirectory.resolve("runtime"), ViaVersionRepositoryClient.official(),
-                logger, Clock.systemUTC());
+        this(dataDirectory.resolve("runtime"), ViaVersionRepositoryClient.official(), logger);
     }
 
     RuntimeSnapshotManager(
@@ -48,24 +43,20 @@ final class RuntimeSnapshotManager {
             URI repository,
             HttpClient httpClient,
             Logger logger,
-            boolean requireHttps,
-            Clock clock) {
+            boolean requireHttps) {
         this(runtimeDirectory,
                 ViaVersionRepositoryClient.create(repository, httpClient, requireHttps),
-                logger,
-                clock);
+                logger);
     }
 
     private RuntimeSnapshotManager(
             Path runtimeDirectory,
             ViaVersionRepositoryClient repositoryClient,
-            Logger logger,
-            Clock clock) {
+            Logger logger) {
         this.runtimeDirectory = Objects.requireNonNull(runtimeDirectory, "runtimeDirectory")
                 .toAbsolutePath().normalize();
         this.repositoryClient = Objects.requireNonNull(repositoryClient, "repositoryClient");
         this.logger = Objects.requireNonNull(logger, "logger");
-        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     List<RuntimeCandidate> startupCandidates() {
@@ -87,8 +78,7 @@ final class RuntimeSnapshotManager {
 
     Path resolve(RuntimeCandidate candidate) {
         Objects.requireNonNull(candidate, "candidate");
-        RuntimeArtifactDescriptor artifact = candidate.artifact();
-        return repositoryClient.resolveArtifact(runtimeDirectory, artifact, logger);
+        return repositoryClient.resolveArtifact(runtimeDirectory, candidate.artifact(), logger);
     }
 
     void recordSuccessful(RuntimeCandidate candidate) {
@@ -102,10 +92,10 @@ final class RuntimeSnapshotManager {
             pruneArtifacts(Set.of(
                     candidate.artifact().artifactName(),
                     RuntimeArtifactDescriptor.pinned().artifactName()));
-            logger.info("Activated staged ViaVersion runtime {} after successful restart validation",
+            logger.info("Activated reviewed ViaVersion runtime {} after successful restart validation",
                     candidate.artifact().version());
         } catch (IOException e) {
-            throw new IllegalStateException("Unable to activate staged embedded protocol runtime", e);
+            throw new IllegalStateException("Unable to activate reviewed embedded protocol runtime", e);
         } finally {
             STORE_LOCK.unlock();
         }
@@ -130,33 +120,34 @@ final class RuntimeSnapshotManager {
         }
     }
 
-    UpdateResult stageLatestSnapshot(String currentRuntimeVersion) {
+    UpdateResult stageReviewedRuntime(String currentRuntimeVersion) {
+        return stageReviewedRuntime(currentRuntimeVersion, RuntimeArtifactDescriptor.reviewed());
+    }
+
+    UpdateResult stageReviewedRuntime(
+            String currentRuntimeVersion,
+            RuntimeArtifactDescriptor candidate) {
         Objects.requireNonNull(currentRuntimeVersion, "currentRuntimeVersion");
+        Objects.requireNonNull(candidate, "candidate");
         STORE_LOCK.lock();
         try {
-            Files.createDirectories(runtimeDirectory);
-            if (isCheckThrottled()) {
-                return UpdateResult.THROTTLED;
-            }
-            recordCheckTime();
-
-            ViaVersionRepositoryClient.ResolvedSnapshot snapshot = repositoryClient.latestSnapshot();
-            String resolvedVersion = snapshot.version();
-            if (!RuntimeArtifactDescriptor.isNewerVersion(resolvedVersion, currentRuntimeVersion)
-                    || manifestHasVersion(PENDING_MANIFEST, resolvedVersion)
-                    || manifestHasVersion(ACTIVE_MANIFEST, resolvedVersion)) {
+            repositoryClient.validateArtifactTransport(candidate.uri());
+            if (!RuntimeArtifactDescriptor.isNewerVersion(
+                    candidate.version(), currentRuntimeVersion)
+                    || manifestHasArtifact(PENDING_MANIFEST, candidate)
+                    || manifestHasArtifact(ACTIVE_MANIFEST, candidate)) {
                 return UpdateResult.CURRENT;
             }
 
-            RuntimeArtifactDescriptor candidate = repositoryClient.resolveDescriptor(snapshot);
+            Files.createDirectories(runtimeDirectory);
             resolve(new RuntimeCandidate(candidate, CandidateSource.PENDING));
             writeManifest(PENDING_MANIFEST, candidate);
             pruneArtifacts(artifactsToKeep(candidate));
-            logger.info("Staged ViaVersion snapshot {} for activation on the next proxy restart",
-                    resolvedVersion);
+            logger.info("Staged maintainer-reviewed ViaVersion runtime {} for the next proxy restart",
+                    candidate.version());
             return UpdateResult.STAGED;
         } catch (IOException e) {
-            throw new IllegalStateException("Unable to check for a ViaVersion snapshot update", e);
+            throw new IllegalStateException("Unable to stage a reviewed ViaVersion runtime", e);
         } finally {
             STORE_LOCK.unlock();
         }
@@ -191,6 +182,9 @@ final class RuntimeSnapshotManager {
             try (InputStream input = Files.newInputStream(manifest)) {
                 properties.load(input);
             }
+            if (!REVIEWED_TRUST.equals(properties.getProperty("trust"))) {
+                throw new IOException("runtime manifest lacks independent maintainer trust");
+            }
             RuntimeArtifactDescriptor descriptor = new RuntimeArtifactDescriptor(
                     properties.getProperty("version"),
                     URI.create(properties.getProperty("url")),
@@ -214,38 +208,16 @@ final class RuntimeSnapshotManager {
         }
     }
 
-    private boolean manifestHasVersion(String fileName, String version) {
-        return readManifest(fileName).map(RuntimeArtifactDescriptor::version)
-                .filter(version::equals).isPresent();
+    private boolean manifestHasArtifact(String fileName, RuntimeArtifactDescriptor artifact) {
+        return readManifest(fileName).filter(artifact::equals).isPresent();
     }
 
     private void writeManifest(String fileName, RuntimeArtifactDescriptor artifact) throws IOException {
-        String content = "version=" + artifact.version() + '\n'
+        String content = "trust=" + REVIEWED_TRUST + '\n'
+                + "version=" + artifact.version() + '\n'
                 + "url=" + artifact.uri() + '\n'
                 + "sha256=" + artifact.sha256() + '\n';
         writeAtomically(runtimeDirectory.resolve(fileName), content);
-    }
-
-    private boolean isCheckThrottled() throws IOException {
-        Path state = runtimeDirectory.resolve(LAST_CHECK_FILE);
-        if (!Files.isRegularFile(state, LinkOption.NOFOLLOW_LINKS)) {
-            return false;
-        }
-        if (Files.size(state) <= 0 || Files.size(state) > 64) {
-            return false;
-        }
-        try {
-            long previous = Long.parseLong(Files.readString(state, StandardCharsets.US_ASCII).trim());
-            long elapsed = clock.millis() - previous;
-            return elapsed >= 0 && elapsed < MINIMUM_CHECK_INTERVAL.toMillis();
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
-    private void recordCheckTime() throws IOException {
-        writeAtomically(runtimeDirectory.resolve(LAST_CHECK_FILE),
-                Long.toString(clock.millis()) + '\n');
     }
 
     private static void writeAtomically(Path target, String content) throws IOException {
@@ -282,8 +254,7 @@ final class RuntimeSnapshotManager {
 
     enum UpdateResult {
         STAGED,
-        CURRENT,
-        THROTTLED
+        CURRENT
     }
 
     enum CandidateSource {

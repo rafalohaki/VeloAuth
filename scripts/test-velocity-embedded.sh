@@ -4,8 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 PLUGIN_JAR_OVERRIDE="${VELOAUTH_PLUGIN_JAR:-}"
+EXPECTED_RUNTIME_VERSION="${VELOAUTH_EXPECTED_RUNTIME_VERSION:-5.11.0}"
 COPY_TEST_MODE="${VELOAUTH_SMOKE_COPY_TEST_MODE:-false}"
 COPY_TEST_DESTINATION="${VELOAUTH_SMOKE_COPY_DESTINATION:-}"
+
+if [[ ! "${EXPECTED_RUNTIME_VERSION}" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+  echo "VELOAUTH_EXPECTED_RUNTIME_VERSION must be a safe non-empty version identifier" >&2
+  exit 1
+fi
 
 if [[ "${COPY_TEST_MODE}" != true && -n "${COPY_TEST_DESTINATION}" ]]; then
   echo "VELOAUTH_SMOKE_COPY_DESTINATION requires VELOAUTH_SMOKE_COPY_TEST_MODE=true" >&2
@@ -45,7 +51,6 @@ SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/veloauth-velocity-smoke.XXXXXX")"
 CONSOLE_PIPE="${SMOKE_DIR}/console.pipe"
 VELOCITY_LOG="${SMOKE_DIR}/velocity-first.log"
 VELOCITY_PID=""
-TEST_RUNTIME_UPDATE="${VELOAUTH_TEST_RUNTIME_UPDATE:-true}"
 
 cleanup() {
   if [[ -n "${VELOCITY_PID}" ]] && kill -0 "${VELOCITY_PID}" 2>/dev/null; then
@@ -166,6 +171,7 @@ auth-server:
   mode: embedded
   timeout-seconds: 60
   embedded:
+    reviewed-runtime-updates: false
     port: 0
     max-connections: 32
     handshake-timeout-seconds: 5
@@ -252,65 +258,36 @@ test_latest_client() {
 
 start_velocity "${SMOKE_DIR}/velocity-first.log"
 test_latest_client
-
-if [[ "${TEST_RUNTIME_UPDATE}" == true ]]; then
-  pending=false
-  for _ in {1..240}; do
-    if [[ -f "${SMOKE_DIR}/plugins/veloauth/runtime/pending-runtime.properties" ]]; then
-      pending=true
-      break
-    fi
-    sleep 0.25
-  done
-  if [[ "${pending}" != true ]]; then
-    echo "Embedded ViaVersion snapshot was not staged after startup" >&2
-    tail -120 "${VELOCITY_LOG}" >&2 || true
-    exit 1
-  fi
-  if ! grep -Fq "managed ViaVersion 5.11.0" "${VELOCITY_LOG}"; then
-    echo "First startup hot-swapped or did not report the pinned runtime" >&2
-    tail -120 "${VELOCITY_LOG}" >&2 || true
-    exit 1
-  fi
-
-  stop_velocity
-  start_velocity "${SMOKE_DIR}/velocity-second.log"
-  if [[ ! -f "${SMOKE_DIR}/plugins/veloauth/runtime/active-runtime.properties" \
-      || -f "${SMOKE_DIR}/plugins/veloauth/runtime/pending-runtime.properties" ]]; then
-    echo "Staged ViaVersion snapshot was not promoted atomically on restart" >&2
-    tail -120 "${VELOCITY_LOG}" >&2 || true
-    exit 1
-  fi
-  if ! grep -Fq "Activated staged ViaVersion runtime" "${VELOCITY_LOG}"; then
-    echo "Second startup did not report snapshot activation" >&2
-    tail -120 "${VELOCITY_LOG}" >&2 || true
-    exit 1
-  fi
-  test_latest_client
-
-  stop_velocity
-  cat >"${SMOKE_DIR}/plugins/veloauth/runtime/pending-runtime.properties" <<'PROPERTIES'
-version=99.0.0-20990101.000000-1
-url=https://untrusted.example/viaversion-common-99.0.0.jar
-sha256=0000000000000000000000000000000000000000000000000000000000000000
-PROPERTIES
-  start_velocity "${SMOKE_DIR}/velocity-third.log"
-  if [[ -f "${SMOKE_DIR}/plugins/veloauth/runtime/pending-runtime.properties" \
-      || ! -f "${SMOKE_DIR}/plugins/veloauth/runtime/active-runtime.properties" ]]; then
-    echo "Tampered pending runtime did not fall back to the active runtime" >&2
-    tail -120 "${VELOCITY_LOG}" >&2 || true
-    exit 1
-  fi
-  if ! grep -Fq "Ignoring invalid embedded protocol runtime manifest" "${VELOCITY_LOG}"; then
-    echo "Third startup did not report rejection of the tampered pending manifest" >&2
-    tail -120 "${VELOCITY_LOG}" >&2 || true
-    exit 1
-  fi
-  test_latest_client
+if [[ -f "${SMOKE_DIR}/plugins/veloauth/runtime/pending-runtime.properties" \
+    || -f "${SMOKE_DIR}/plugins/veloauth/runtime/last-snapshot-check" ]]; then
+  echo "Default embedded startup contacted the mutable snapshot update path" >&2
+  tail -120 "${VELOCITY_LOG}" >&2 || true
+  exit 1
+fi
+if ! grep -Fq "managed ViaVersion ${EXPECTED_RUNTIME_VERSION}" "${VELOCITY_LOG}"; then
+  echo "First startup did not report the build-pinned runtime" >&2
+  tail -120 "${VELOCITY_LOG}" >&2 || true
+  exit 1
 fi
 
 stop_velocity
-echo "${VELOCITY_LABEL} embedded limbo smoke passed with a Minecraft 26.2 client (${FORWARDING_MODE} forwarding)"
-if [[ "${TEST_RUNTIME_UPDATE}" == true ]]; then
-  echo "Embedded ViaVersion staging, restart activation and tampered-pending rollback passed"
+cat >"${SMOKE_DIR}/plugins/veloauth/runtime/pending-runtime.properties" <<'PROPERTIES'
+version=99.0.0-20990101.000000-1
+url=https://repo.viaversion.com/com/viaversion/viaversion-common/99.0.0/viaversion-common-99.0.0.jar
+sha256=0000000000000000000000000000000000000000000000000000000000000000
+PROPERTIES
+start_velocity "${SMOKE_DIR}/velocity-second.log"
+if [[ -f "${SMOKE_DIR}/plugins/veloauth/runtime/pending-runtime.properties" ]]; then
+  echo "Legacy origin-trusted pending runtime was not rejected" >&2
+  tail -120 "${VELOCITY_LOG}" >&2 || true
+  exit 1
 fi
+if ! grep -Fq "Ignoring invalid embedded protocol runtime manifest" "${VELOCITY_LOG}"; then
+  echo "Second startup did not report rejection of the legacy pending manifest" >&2
+  tail -120 "${VELOCITY_LOG}" >&2 || true
+  exit 1
+fi
+test_latest_client
+stop_velocity
+echo "${VELOCITY_LABEL} embedded limbo smoke passed with a Minecraft 26.2 client (${FORWARDING_MODE} forwarding)"
+echo "Pinned startup, default-off updates and legacy-manifest fallback passed"

@@ -684,6 +684,8 @@ class SettingsValidationTest {
         assertEquals(180, settings.getAuthServerTimeoutSeconds());
         assertFalse(settings.isPremiumBypassAuthServerEnabled());
         assertEquals(0, settings.getEmbeddedAuthServerSettings().getPort());
+        assertFalse(settings.getEmbeddedAuthServerSettings().isReviewedRuntimeUpdatesEnabled(),
+                "Existing configs must not opt into remote runtime updates");
         assertEquals(previousReleaseConfig, Files.readString(configFile),
                 "Loading a previous-release config must not rewrite it or inject embedded mode");
     }
@@ -715,6 +717,7 @@ class SettingsValidationTest {
                     max-connections: 750
                     handshake-timeout-seconds: 7
                     login-timeout-seconds: 12
+                    reviewed-runtime-updates: true
                 """);
 
         assertTrue(settings.load());
@@ -724,6 +727,17 @@ class SettingsValidationTest {
         assertEquals(750, embedded.getMaxConnections());
         assertEquals(7, embedded.getHandshakeTimeoutSeconds());
         assertEquals(12, embedded.getLoginTimeoutSeconds());
+        assertTrue(embedded.isReviewedRuntimeUpdatesEnabled());
+    }
+
+    @Test
+    void generatedConfigShouldKeepReviewedRuntimeUpdatesDisabled() throws IOException {
+        assertTrue(settings.load());
+
+        String generatedConfig = Files.readString(tempDir.resolve("config.yml"));
+
+        assertTrue(generatedConfig.contains("reviewed-runtime-updates: false"));
+        assertFalse(settings.getEmbeddedAuthServerSettings().isReviewedRuntimeUpdatesEnabled());
     }
 
     @Test
@@ -785,6 +799,7 @@ class SettingsValidationTest {
                     max-connections: 750
                     handshake-timeout-seconds: 7
                     login-timeout-seconds: 12
+                    reviewed-runtime-updates: true
                 """);
         assertTrue(settings.load());
         assertEquals(Settings.AuthServerMode.EMBEDDED, settings.getAuthServerMode());
@@ -801,6 +816,8 @@ class SettingsValidationTest {
         assertEquals(750, embedded.getMaxConnections());
         assertEquals(7, embedded.getHandshakeTimeoutSeconds());
         assertEquals(12, embedded.getLoginTimeoutSeconds());
+        assertTrue(embedded.isReviewedRuntimeUpdatesEnabled(),
+                "Restart-only runtime trust policy must stay on the active generation");
         assertEquals(Set.of("auth-server"), settings.getPendingRestartChanges());
     }
 

@@ -115,6 +115,8 @@ class AuthServerProviderTest {
         assertTrue(address.getAddress().isLoopbackAddress());
         assertTrue(address.getPort() > 0);
         assertTrue(provider.isReady());
+        assertFalse(provider.isProtocolRuntimeUpdateEnabled(),
+                "Embedded mode must not opt into remote runtime updates by default");
         assertTrue(provider.isAuthServer(registered));
         assertEquals(AuthServerProvider.Preparation.READY,
                 provider.prepare(player(ProtocolVersion.MINECRAFT_1_8)));

@@ -49,7 +49,7 @@ wget https://github.com/rafalohaki/VeloAuth/releases/download/v{{VERSION}}/veloa
 
 - Java 21+
 - Velocity 3.5 API-compatible proxy
-- An external limbo registered in `velocity.toml` (default), or explicitly enabled embedded auth/limbo (1.8 base, 1.8–26.2 pinned fallback, staged ViaVersion updates)
+- An external limbo registered in `velocity.toml` (default), or explicitly enabled embedded auth/limbo (1.8 base, 1.8–26.2 reviewed build pin; remote staging default-off)
 - H2, SQLite, MySQL or PostgreSQL database
 
 ## Features
@@ -64,7 +64,7 @@ wget https://github.com/rafalohaki/VeloAuth/releases/download/v{{VERSION}}/veloa
 - 💎 Premium passwordless auto-login after Velocity online-mode verification
 - 🚦 Optional premium auth-server passthrough (`premium.bypass-auth-server`, default `false`)
 - 🌊 Optional Floodgate bypass
-- 🧩 Loopback-only embedded limbo with staged, restart-validated ViaVersion snapshot updates and a checksum-pinned fallback
+- 🧩 Loopback-only embedded limbo with a checksum-pinned ViaVersion runtime and optional maintainer-reviewed, restart-validated updates
 - 📝 Comprehensive logging and security events
 - 🌍 17 synchronized language bundles
 
@@ -103,11 +103,12 @@ wget https://github.com/rafalohaki/VeloAuth/releases/download/v{{VERSION}}/veloa
    (including two simultaneous registrations of one new nickname),
    premium login, 2FA, Floodgate (if enabled), forced hosts, backend fallback and database reconnect
    behavior before production traffic.
-10. In embedded mode, verify a clean first download, cached offline restart, tamper failure, Java 1.8
-   and newest-supported clients, pending snapshot activation on restart, incompatible-snapshot
-   fallback, automatic loopback port publication and rollback to external mode. Confirm that
-   external mode performs no runtime repository traffic. No forwarding secret or separately
-   installed ViaVersion plugin should be required.
+10. In embedded mode, verify a clean pinned download, cached offline restart, tamper/interruption
+   failure, Java 1.8 and newest-supported clients, explicit reviewed-candidate activation on restart,
+   incompatible-candidate fallback, automatic loopback port publication and rollback to external
+   mode. Confirm `reviewed-runtime-updates: false` performs no update traffic and external mode
+   performs no runtime repository traffic. No forwarding secret or separately installed ViaVersion
+   plugin should be required.
 11. Compare `AUTH`/`PREMIUM_UUIDS` row counts and account samples before and after staging. Confirm
     that UUIDs, hashes, IPs, TOTP values, timestamps and local H2/SQLite paths did not change
     unexpectedly; only eligible `PRESERVE_UUID` flags may be added by the lineage backfill.

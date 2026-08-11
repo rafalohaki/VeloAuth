@@ -215,7 +215,10 @@ final class SettingsLoader {
                 YamlParserUtils.getInt(
                         embedded, "handshake-timeout-seconds", target.getHandshakeTimeoutSeconds()),
                 YamlParserUtils.getInt(
-                        embedded, "login-timeout-seconds", target.getLoginTimeoutSeconds()));
+                        embedded, "login-timeout-seconds", target.getLoginTimeoutSeconds()),
+                YamlParserUtils.getBoolean(
+                        embedded, "reviewed-runtime-updates",
+                        target.isReviewedRuntimeUpdatesEnabled()));
     }
 
     private static String explicitStringOrDefault(

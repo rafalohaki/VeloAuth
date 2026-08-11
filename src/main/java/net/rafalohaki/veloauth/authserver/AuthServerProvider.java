@@ -88,7 +88,8 @@ public final class AuthServerProvider implements AutoCloseable {
                 embedded.getPort(),
                 embedded.getMaxConnections(),
                 Duration.ofSeconds(embedded.getHandshakeTimeoutSeconds()),
-                Duration.ofSeconds(embedded.getLoginTimeoutSeconds()));
+                Duration.ofSeconds(embedded.getLoginTimeoutSeconds()),
+                embedded.isReviewedRuntimeUpdatesEnabled());
         return new AuthServerProvider(
                 proxyServer,
                 logger,
@@ -301,9 +302,9 @@ public final class AuthServerProvider implements AutoCloseable {
                 + (runtime == null ? BuildConstants.EMBEDDED_VIAVERSION_VERSION : runtime.runtimeVersion()) + ')';
     }
 
-    /** Checks and stages a newer snapshot without touching the currently running translator. */
+    /** Stages the maintainer-reviewed candidate without touching the current translator. */
     public void stageProtocolRuntimeUpdate() {
-        if (mode != Settings.AuthServerMode.EMBEDDED) {
+        if (!isProtocolRuntimeUpdateEnabled()) {
             return;
         }
         ProtocolRuntime runtime = protocolRuntime;
@@ -312,16 +313,21 @@ public final class AuthServerProvider implements AutoCloseable {
         }
         try {
             RuntimeSnapshotManager.UpdateResult result = new RuntimeSnapshotManager(dataDirectory, logger)
-                    .stageLatestSnapshot(runtime.runtimeVersion());
-            if (result == RuntimeSnapshotManager.UpdateResult.THROTTLED) {
-                logger.debug("Skipping embedded ViaVersion snapshot check because it ran recently");
-            } else if (result == RuntimeSnapshotManager.UpdateResult.CURRENT) {
-                logger.debug("Embedded ViaVersion runtime {} is current", runtime.runtimeVersion());
+                    .stageReviewedRuntime(runtime.runtimeVersion());
+            if (result == RuntimeSnapshotManager.UpdateResult.CURRENT) {
+                logger.debug("Embedded ViaVersion runtime {} matches the reviewed candidate",
+                        runtime.runtimeVersion());
             }
         } catch (RuntimeException exception) {
-            logger.warn("Unable to stage the latest embedded ViaVersion snapshot; "
+            logger.warn("Unable to stage the maintainer-reviewed embedded ViaVersion runtime; "
                     + "the current verified runtime remains active", exception);
         }
+    }
+
+    /** Returns whether this restart-scoped provider opted into reviewed runtime staging. */
+    public boolean isProtocolRuntimeUpdateEnabled() {
+        return mode == Settings.AuthServerMode.EMBEDDED
+                && embeddedConfig.reviewedRuntimeUpdatesEnabled();
     }
 
     public boolean isReady() {
@@ -444,7 +450,8 @@ public final class AuthServerProvider implements AutoCloseable {
             int port,
             int maxConnections,
             Duration handshakeTimeout,
-            Duration loginTimeout) {
+            Duration loginTimeout,
+            boolean reviewedRuntimeUpdatesEnabled) {
         private EmbeddedConfig {
             Objects.requireNonNull(handshakeTimeout, "handshakeTimeout");
             Objects.requireNonNull(loginTimeout, "loginTimeout");

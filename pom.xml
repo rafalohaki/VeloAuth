@@ -53,14 +53,17 @@
           The embedded protocol runtime is downloaded on first use, verified byte-for-byte and
           loaded from VeloAuth's private runtime directory. The coordinate remains a compile-only
           dependency so the main plugin JAR does not silently redistribute the separately licensed
-          GPL-3.0 ViaVersion implementation. The normal build is pinned; the explicit
-          build-latest-protocol.sh workflow may override the dependency coordinate and immutable
-          runtime provenance together, then must pass the full client matrix.
+          GPL-3.0 ViaVersion implementation. The normal build is pinned. A separately reviewed
+          candidate may be recorded by maintainers for operator-opt-in staging; its digest is
+          embedded in the VeloAuth release and is never accepted from the artifact origin.
         -->
         <viaversion.runtime.dependency-version>5.11.0</viaversion.runtime.dependency-version>
         <viaversion.runtime.version>5.11.0</viaversion.runtime.version>
         <viaversion.runtime.url>https://repo.viaversion.com/com/viaversion/viaversion-common/5.11.0/viaversion-common-5.11.0.jar</viaversion.runtime.url>
         <viaversion.runtime.sha256>a4dd9f63257ed923f73a64ecece31010acd04247db12855383172e1226912b3e</viaversion.runtime.sha256>
+        <viaversion.reviewed.version>${viaversion.runtime.version}</viaversion.reviewed.version>
+        <viaversion.reviewed.url>${viaversion.runtime.url}</viaversion.reviewed.url>
+        <viaversion.reviewed.sha256>${viaversion.runtime.sha256}</viaversion.reviewed.sha256>
         <embedded.build.channel>stable</embedded.build.channel>
         <build.finalName>${project.artifactId}-${project.version}</build.finalName>
     </properties>

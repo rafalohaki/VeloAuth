@@ -19,6 +19,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 
@@ -94,6 +95,46 @@ class RuntimeArtifactManagerTest {
 
         assertThrows(IllegalStateException.class, manager::resolve);
 
+        assertFalse(Files.exists(temporaryDirectory.resolve(RUNTIME_ARTIFACT_NAME)));
+        try (var entries = Files.list(temporaryDirectory)) {
+            assertTrue(entries.noneMatch(path -> path.getFileName().toString().endsWith(".download")));
+        }
+    }
+
+    @Test
+    void resolve_InterruptedDownload_ShouldKeepKnownGoodArtifactAndRemoveTemporaryFile()
+            throws Exception {
+        byte[] artifact = testJar();
+        CountDownLatch requestStarted = new CountDownLatch(1);
+        CountDownLatch releaseResponse = new CountDownLatch(1);
+        URI uri = serveBlocking(artifact, new AtomicInteger(), requestStarted, releaseResponse);
+        RuntimeArtifactManager manager = manager(uri, sha256(artifact), false);
+        Path knownGood = temporaryDirectory.resolve("viaversion-common-8.8.8-known-good.jar");
+        Files.createDirectories(temporaryDirectory);
+        Files.writeString(knownGood, "known-good-fallback");
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicReference<Boolean> interrupted = new AtomicReference<>(false);
+        Thread download = Thread.ofVirtual().start(() -> {
+            try {
+                manager.resolve();
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+                interrupted.set(Thread.currentThread().isInterrupted());
+            }
+        });
+
+        try {
+            assertTrue(requestStarted.await(5, TimeUnit.SECONDS));
+            download.interrupt();
+        } finally {
+            releaseResponse.countDown();
+        }
+        download.join(TimeUnit.SECONDS.toMillis(5));
+
+        assertFalse(download.isAlive());
+        assertTrue(failure.get() instanceof IllegalStateException);
+        assertTrue(interrupted.get(), "Download interruption must be preserved for shutdown");
+        assertTrue(Files.exists(knownGood));
         assertFalse(Files.exists(temporaryDirectory.resolve(RUNTIME_ARTIFACT_NAME)));
         try (var entries = Files.list(temporaryDirectory)) {
             assertTrue(entries.noneMatch(path -> path.getFileName().toString().endsWith(".download")));

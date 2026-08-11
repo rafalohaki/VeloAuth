@@ -176,7 +176,8 @@ class ManagedProtocolRuntimeTest {
     private static void writeManifest(Path manifest, String version, String sha256) throws Exception {
         String baseUrl = "https://repo.viaversion.com/com/viaversion/viaversion-common/";
         Files.writeString(manifest,
-                "version=" + version + '\n'
+                "trust=" + RuntimeSnapshotManager.REVIEWED_TRUST + '\n'
+                        + "version=" + version + '\n'
                         + "url=" + baseUrl + version + "/viaversion-common-" + version + ".jar\n"
                         + "sha256=" + sha256 + '\n');
     }

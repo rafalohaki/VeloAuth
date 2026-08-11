@@ -13,8 +13,9 @@ All notable user-visible changes to VeloAuth are documented in this file.
   `false`; cracked players and unverified premium candidates still use the auth server.
 - Loopback-only embedded auth/limbo with a native Minecraft 1.8 protocol base and a private,
   checksum-verified ViaVersion runtime covering the pinned 1.8-26.2 range.
-- Restart-staged ViaVersion snapshot updates. Candidates are resolved to immutable artifacts,
-  verified before publication and activated only after isolated initialization on a later restart.
+- Optional restart-staged ViaVersion updates from a maintainer-reviewed version, HTTPS URL and
+  SHA-256 embedded in the VeloAuth release; activation still requires isolated initialization on a
+  later restart.
 - Embedded runtime status, compatibility and topology details in `/vauth report` and startup logs.
 - Privacy-safe bStats custom charts for online client protocol versions, auth topology, database
   family, language bucket and premium/Floodgate/2FA feature adoption.
@@ -29,6 +30,9 @@ All notable user-visible changes to VeloAuth are documented in this file.
 
 - Fresh configurations and upgraded configurations without `auth-server.mode` both use `external`.
   Existing explicit `embedded` selections remain embedded; configuration files are not rewritten.
+- Embedded runtime updates no longer follow Maven `latest` metadata or trust a checksum served by
+  the artifact origin. `auth-server.embedded.reviewed-runtime-updates` is a restart-only opt-in and
+  defaults to `false`; the release-pinned runtime and valid reviewed caches continue to work offline.
 - Automatic auth/limbo-to-backend routing now waits `1500` ms by default instead of the historical
   `300` ms. Upgraded files are not rewritten, but the new in-memory default applies when the key is
   absent; operators can set `connection.auto-transfer-delay-ms` explicitly after canary testing.
@@ -77,6 +81,8 @@ All notable user-visible changes to VeloAuth are documented in this file.
   artifact twice.
 - Corrupt, malformed or off-repository runtime manifests are removed before the pinned/active
   fallback is selected.
+- Legacy pending/active manifests from the previous same-origin-checksum update model are rejected
+  unless they carry the new maintainer-reviewed provenance marker.
 - Future timestamped runtime versions with three or four numeric release components are ordered
   monotonically and unknown formats fail closed.
 - A staged ViaVersion runtime now completes a bundled-client loopback login and keepalive before

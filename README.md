@@ -23,7 +23,7 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🔄 **Automatic Nickname Change Detection** - Detects when a premium player renames their Mojang account and updates the database record automatically
 - 🛡️ **Secure Offline Auth** - BCrypt password hashing, brute-force protection, and atomic first-owner registration enforced by the database
 - 📱 **Optional Floodgate Support** - Bedrock and linked Floodgate accounts are detected before Mojang resolution; only UUIDs confirmed by Floodgate can bypass the auth server
-- 🧩 **Optional Self-Contained Limbo** - Explicitly enabled installations can use the built-in 1.8-base limbo with staged ViaVersion snapshot updates for newer Java clients; external limbo remains the default
+- 🧩 **Optional Self-Contained Limbo** - Explicitly enabled installations can use the built-in 1.8-base limbo with a reviewed, checksum-pinned ViaVersion runtime; external limbo remains the default
 - 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
 - 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are hidden while authorization and the matching login session are active; expired sessions expose the recovery commands again
 - 🚀 **High Performance** - Bounded three-layer premium cache, non-blocking ordered backend selection and ownership-safe per-player tasks keep proxy event loops free
@@ -151,9 +151,9 @@ rebuilds the candidate, or replaces release assets.
 - **Database**: MySQL, PostgreSQL, H2, or SQLite
 - **Default external mode:** NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or
   another Velocity-compatible auth server registered in `velocity.toml`
-- **Optional embedded mode:** outbound HTTPS access to `repo.viaversion.com` for the first verified
-  runtime and a small, asynchronous snapshot check after later successful startups; cached startup
-  remains independent of repository availability
+- **Optional embedded mode:** outbound HTTPS access to `repo.viaversion.com` for the first verified,
+  release-pinned runtime. Cached startup remains independent of repository availability. Reviewed
+  runtime staging is a separate restart-only opt-in and never follows mutable `latest` metadata.
 
 ## Quick Setup
 
@@ -294,50 +294,52 @@ restart rather than `/vauth reload`.
 
 Embedded limbo uses a minimal Minecraft 1.8 (protocol 47) server codec. A private ViaVersion runtime
 translates every newer release for which ViaVersion exposes a complete path back to 1.8. The pinned
-fallback in this release supports **1.8 through 26.2**; later support follows the latest usable
-ViaVersion snapshot rather than an MCProtocolLib protocol constant. ViaBackwards is intentionally
+runtime in this release supports **1.8 through 26.2**; later support requires a maintainer-reviewed
+ViaVersion artifact rather than an MCProtocolLib protocol constant. ViaBackwards is intentionally
 not used: it translates older clients to a newer server, the opposite of this 1.8-base topology.
 MCProtocolLib remains the embedded listener/session/framing engine and hosts VeloAuth's custom
 protocol-47 `PacketCodec`; ViaVersion transforms packets inside that already-created Netty channel.
 Because MCProtocolLib always sees the fixed 1.8 codec, a new client release normally requires only a
 new ViaVersion mapping, not an MCProtocolLib update.
 
-In embedded mode, startup first uses the last successfully activated runtime, with the release's
-checksum-pinned ViaVersion `5.11.0` as the final fallback. Only after VeloAuth reports `Ready` does a
-virtual thread check the official repository (at most once per 15 minutes across restart loops). A
-new snapshot is resolved to an immutable timestamped JAR, downloaded without redirects, checked
-against the repository's SHA-256 sidecar, bounded by size, structurally validated, and written to a
-pending manifest. It never replaces the classes serving current players. On the next full restart,
+In embedded mode, startup first uses a previously activated reviewed runtime, with the release's
+checksum-pinned ViaVersion `5.11.0` as the final fallback. `reviewed-runtime-updates: false` is the
+default and performs no remote update check. When an operator explicitly enables that restart-only
+setting, VeloAuth may stage only the exact candidate version, HTTPS URL and SHA-256 embedded by the
+VeloAuth maintainers in the installed release. It does not read Maven `latest` metadata or a
+same-origin checksum sidecar. The artifact download has no redirects, is time/size bounded,
+structurally validated and atomically published; a legacy manifest created by the old origin-trust
+model is rejected.
+
+A staged candidate never replaces classes serving current players. On the next full restart,
 VeloAuth initializes every advertised translation path and completes a real loopback login plus
 keepalive with the bundled client (currently 26.2) before selecting it. Pending remains staged until
 the actual embedded listener is published in Velocity; only then is it promoted. An incompatible,
-corrupt or behaviorally broken candidate is rejected automatically and startup falls back to the
-previous working runtime, then to the build-pinned runtime, in the same restart. A valid cache
-continues to start offline.
+corrupt or behaviorally broken candidate falls back to the previous reviewed runtime and then the
+build-pinned runtime in the same startup. Valid cached candidates continue to start offline.
 Corrupt or off-repository manifests are removed automatically, and concurrent runtime preparation
 is serialized so one proxy process cannot download/publish the same artifact twice.
 
-External mode performs no snapshot check, download, directory creation, or ViaVersion classloading.
+External mode performs no runtime check, download, directory creation, or ViaVersion classloading.
 Neither auth-server mode reads or generates a Velocity forwarding secret, and installing the
 ViaVersion proxy plugin is not required. In embedded mode the proxy-owned modern-forwarding
-handshake uses Velocity's configured secret without exposing it to VeloAuth. Snapshot availability
-cannot precede upstream ViaVersion support; “latest” means the newest snapshot that actually
-publishes and initializes a complete 1.8 translation path. ViaVersion is separately licensed under
+handshake uses Velocity's configured secret without exposing it to VeloAuth. Protocol support cannot
+precede upstream ViaVersion support or maintainer review. ViaVersion is separately licensed under
 GPL-3.0; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-Protocol updates can therefore arrive without a VeloAuth release, but an incompatible future
-ViaVersion API/dependency change or a Velocity/Netty transport change still requires a tested plugin
-release; such a candidate is rejected rather than activated.
 
-Maintainers can also preflight and package the current snapshot without editing `pom.xml`:
+Maintainers can preflight a current snapshot only after obtaining and reviewing its SHA-256 through
+an independent channel:
 
 ```bash
-./scripts/build-latest-protocol.sh
+./scripts/build-latest-protocol.sh --reviewed-sha256 <64-hex-digest>
 ```
 
-The script pins the resolved timestamp, URL and hashes into
+The manual-only script refuses network access without that digest, pins the resolved timestamp, URL
+and hash into
 `META-INF/veloauth/embedded-runtime.properties`, runs Maven/JaCoCo/PMD/CPD and uses the resulting JAR
-in a real Velocity smoke test. `--resolve-only` tests repository resolution, while `--skip-smoke`
-is intended only for local diagnostics. An ordinary `./mvnw clean verify` proves the test, coverage
+in a real Velocity smoke test. CI instead runs `test-protocol-build-resolver.sh`, a local XML fixture
+that downloads and executes no JAR. `--skip-smoke` is intended only for local diagnostics. An
+ordinary `./mvnw clean verify` proves the test, coverage
 and static-analysis gates; it does not by itself prove byte-for-byte reproducibility or publication
 provenance. Those are separate release-candidate gates. The checked-in Maven Wrapper pins Maven
 3.9.16 and verifies the official distribution checksum before use.
@@ -834,8 +836,8 @@ requires the translated End registry/type/world identifiers, ViaVersion's level-
 spectator spawn above the unloaded void, preventing gravity-driven idle movement and the client from
 remaining on "Loading terrain". Regression tests also cover the GAME read-timeout handoff, ordered
 early backend selection, per-player task ownership and shutdown-safe task publication. The real
-Velocity smoke proves pinned startup, snapshot staging, activation on restart and a third restart
-that rejects a tampered pending manifest while retaining client availability through the same
+Velocity smoke proves pinned startup with updates disabled and a second restart that rejects a
+legacy origin-trusted pending manifest while retaining client availability through the same
 keepalive boundary. It also submits a rejected `/login` attempt and verifies that the cracked client
 remains in limbo with authentication commands still usable.
 

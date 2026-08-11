@@ -141,7 +141,7 @@ jobs:
           ./scripts/test-release-artifacts.sh
           ./scripts/test-verify-reproducible-jar.sh
 
-      - name: Verify embedded dependency and protocol fixtures
+      - name: Verify embedded dependency and offline protocol metadata fixtures
         run: |
           ./scripts/verify-embedded-dependencies.sh
           ./scripts/test-protocol-build-resolver.sh
@@ -157,7 +157,7 @@ jobs:
           VELOAUTH_JAVA21_HOME: ${{ env.JAVA_HOME }}
         run: ./scripts/verify-reproducible-jar.sh
 
-      - name: Smoke the embedded topology on Velocity
+      - name: Smoke the pinned embedded topology on Velocity
         run: ./scripts/test-velocity-embedded.sh
 
       - name: Smoke modern forwarding on Velocity-CTD

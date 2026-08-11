@@ -42,6 +42,13 @@ record RuntimeArtifactDescriptor(String version, URI uri, String sha256) {
                 BuildConstants.EMBEDDED_VIAVERSION_SHA256);
     }
 
+    static RuntimeArtifactDescriptor reviewed() {
+        return new RuntimeArtifactDescriptor(
+                BuildConstants.REVIEWED_VIAVERSION_VERSION,
+                URI.create(BuildConstants.REVIEWED_VIAVERSION_URL),
+                BuildConstants.REVIEWED_VIAVERSION_SHA256);
+    }
+
     String artifactName() {
         return "viaversion-common-" + version + ".jar";
     }

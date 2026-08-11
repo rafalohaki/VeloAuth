@@ -244,11 +244,11 @@ public class VeloAuth {
 
     private void scheduleEmbeddedProtocolUpdate() {
         AuthServerProvider provider = authServerProvider;
-        if (provider == null || provider.mode() != Settings.AuthServerMode.EMBEDDED) {
+        if (provider == null || !provider.isProtocolRuntimeUpdateEnabled()) {
             return;
         }
         if (!VirtualThreadExecutorProvider.submitTask(provider::stageProtocolRuntimeUpdate)) {
-            logger.debug("Embedded protocol snapshot check was skipped during shutdown");
+            logger.debug("Reviewed embedded protocol runtime check was skipped during shutdown");
         }
     }
 

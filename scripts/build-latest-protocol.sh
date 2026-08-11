@@ -4,24 +4,27 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 VIAVERSION_REPOSITORY_URL="${VIAVERSION_REPOSITORY_URL:-https://repo.viaversion.com}"
-RESOLVER_TEST_MODE="${VELOAUTH_PROTOCOL_RESOLVER_TEST_MODE:-false}"
-RESOLVE_ONLY=false
+REVIEWED_SHA256="${VELOAUTH_REVIEWED_VIAVERSION_SHA256:-}"
 SKIP_SMOKE=false
 MAX_METADATA_BYTES=$((1024 * 1024))
 MAX_ARTIFACT_BYTES=$((32 * 1024 * 1024))
 WORK_DIR=""
 
 usage() {
-  echo "Usage: $0 [--resolve-only] [--skip-smoke]" >&2
-  echo "  no option      resolve current snapshots, build, verify and smoke-test" >&2
-  echo "  --resolve-only resolve and validate immutable snapshot artifacts only" >&2
-  echo "  --skip-smoke   run the complete Maven gate without the real Velocity smoke" >&2
+  echo "Usage: $0 --reviewed-sha256 <digest> [--skip-smoke]" >&2
+  echo "  --reviewed-sha256  independently reviewed digest required before network access" >&2
+  echo "  --skip-smoke       run the complete Maven gate without the real Velocity smoke" >&2
 }
 
-for argument in "$@"; do
-  case "${argument}" in
-    --resolve-only)
-      RESOLVE_ONLY=true
+while (($#)); do
+  case "$1" in
+    --reviewed-sha256)
+      shift
+      if (($# == 0)); then
+        usage
+        exit 2
+      fi
+      REVIEWED_SHA256="$1"
       ;;
     --skip-smoke)
       SKIP_SMOKE=true
@@ -32,11 +35,19 @@ for argument in "$@"; do
       ;;
     *)
       usage
-      echo "Unknown option: ${argument}" >&2
+      echo "Unknown option: $1" >&2
       exit 2
       ;;
   esac
+  shift
 done
+
+REVIEWED_SHA256="$(printf '%s' "${REVIEWED_SHA256}" | tr '[:upper:]' '[:lower:]')"
+if [[ ! "${REVIEWED_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+  usage
+  echo "A 64-character independently reviewed SHA-256 digest is required" >&2
+  exit 2
+fi
 
 cleanup() {
   if [[ -n "${WORK_DIR}" && -d "${WORK_DIR}" \
@@ -65,10 +76,6 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/veloauth-protocol-latest.XXXXXX")"
 
 normalize_repository_url() {
   local repository_url="${1%/}"
-  if [[ "${RESOLVER_TEST_MODE}" == true && "${repository_url}" == file://* ]]; then
-    printf '%s\n' "${repository_url}"
-    return
-  fi
   if [[ "${repository_url}" != https://* ]]; then
     echo "Protocol repositories must use HTTPS" >&2
     exit 1
@@ -91,14 +98,11 @@ fetch_url() {
     --max-filesize "${maximum_bytes}"
     --output "${destination}"
   )
-  if [[ "${source_url}" == https://* ]]; then
-    curl --proto '=https' --tlsv1.2 "${curl_options[@]}" "${source_url}"
-  elif [[ "${RESOLVER_TEST_MODE}" == true && "${source_url}" == file://* ]]; then
-    curl "${curl_options[@]}" "${source_url}"
-  else
+  if [[ "${source_url}" != https://* ]]; then
     echo "Refusing non-HTTPS protocol artifact URL: ${source_url}" >&2
     exit 1
   fi
+  curl --proto '=https' --tlsv1.2 "${curl_options[@]}" "${source_url}"
 
   local downloaded_bytes
   downloaded_bytes="$(wc -c < "${destination}" | tr -d '[:space:]')"
@@ -207,22 +211,13 @@ resolve_protocol_artifacts() {
     "com/viaversion/viaversion/platform/ViaChannelInitializer.class" \
     "com/viaversion/viaversion/protocols/v1_8to1_9/Protocol1_8To1_9.class"
   VIAVERSION_SHA256="$(sha256_file "${VIAVERSION_JAR}")"
+  if [[ "${VIAVERSION_SHA256}" != "${REVIEWED_SHA256}" ]]; then
+    echo "Resolved ViaVersion bytes do not match the independently reviewed digest" >&2
+    exit 1
+  fi
 }
 
 resolve_protocol_artifacts
-
-if [[ "${RESOLVE_ONLY}" == true ]]; then
-  printf 'VIAVERSION_DEPENDENCY_VERSION=%s\n' "${VIAVERSION_DEPENDENCY_VERSION}"
-  printf 'VIAVERSION_RESOLVED_VERSION=%s\n' "${VIAVERSION_RESOLVED_VERSION}"
-  printf 'VIAVERSION_SHA256=%s\n' "${VIAVERSION_SHA256}"
-  printf 'VIAVERSION_URL=%s\n' "${VIAVERSION_URL}"
-  exit 0
-fi
-
-if [[ "${RESOLVER_TEST_MODE}" == true ]]; then
-  echo "Test repository overrides are permitted only with --resolve-only" >&2
-  exit 1
-fi
 
 if command -v mvnd >/dev/null 2>&1; then
   MAVEN=(mvnd)
@@ -268,7 +263,7 @@ if [[ "$(sha256_file "${LOCAL_VIAVERSION_JAR}")" != "${VIAVERSION_SHA256}" ]]; t
 fi
 
 PROJECT_VERSION="$(evaluate_maven_expression project.version)"
-OUTPUT_NAME="veloauth-${PROJECT_VERSION}-protocol-latest"
+OUTPUT_NAME="veloauth-${PROJECT_VERSION}-protocol-reviewed"
 OUTPUT_JAR="${PROJECT_DIR}/target/${OUTPUT_NAME}.jar"
 
 log "Running the complete Maven quality gate against the resolved snapshot bytes"
@@ -279,12 +274,15 @@ log "Running the complete Maven quality gate against the resolved snapshot bytes
   -Dviaversion.runtime.version="${VIAVERSION_RESOLVED_VERSION}" \
   -Dviaversion.runtime.url="${VIAVERSION_URL}" \
   -Dviaversion.runtime.sha256="${VIAVERSION_SHA256}" \
-  -Dembedded.build.channel=protocol-latest \
+  -Dviaversion.reviewed.version="${VIAVERSION_RESOLVED_VERSION}" \
+  -Dviaversion.reviewed.url="${VIAVERSION_URL}" \
+  -Dviaversion.reviewed.sha256="${VIAVERSION_SHA256}" \
+  -Dembedded.build.channel=protocol-reviewed \
   -Dbuild.finalName="${OUTPUT_NAME}" \
   clean verify pmd:cpd-check
 
 if [[ ! -f "${OUTPUT_JAR}" ]]; then
-  echo "Latest-protocol build did not produce the expected JAR: ${OUTPUT_JAR}" >&2
+  echo "Reviewed-protocol build did not produce the expected JAR: ${OUTPUT_JAR}" >&2
   exit 1
 fi
 
@@ -295,20 +293,23 @@ mkdir -p "${PROVENANCE_DIR}"
   jar --extract --file "${OUTPUT_JAR}" META-INF/veloauth/embedded-runtime.properties
 )
 PROVENANCE_FILE="${PROVENANCE_DIR}/META-INF/veloauth/embedded-runtime.properties"
-grep -Fqx "build.channel=protocol-latest" "${PROVENANCE_FILE}"
+grep -Fqx "build.channel=protocol-reviewed" "${PROVENANCE_FILE}"
 grep -Fqx "mcprotocollib.resolved.version=${MCPROTOCOLLIB_RESOLVED_VERSION}" "${PROVENANCE_FILE}"
 grep -Fqx "mcprotocollib.sha256=${MCPROTOCOLLIB_SHA256}" "${PROVENANCE_FILE}"
 grep -Fqx "viaversion.resolved.version=${VIAVERSION_RESOLVED_VERSION}" "${PROVENANCE_FILE}"
 grep -Fqx "viaversion.sha256=${VIAVERSION_SHA256}" "${PROVENANCE_FILE}"
+grep -Fqx "viaversion.reviewed.version=${VIAVERSION_RESOLVED_VERSION}" "${PROVENANCE_FILE}"
+grep -Fqx "viaversion.reviewed.sha256=${VIAVERSION_SHA256}" "${PROVENANCE_FILE}"
 
 if [[ "${SKIP_SMOKE}" == false ]]; then
-  log "Starting a real Velocity smoke test with the exact latest-protocol JAR"
-  VELOAUTH_PLUGIN_JAR="${OUTPUT_JAR}" VELOAUTH_TEST_RUNTIME_UPDATE=false \
+  log "Starting a real Velocity smoke test with the exact reviewed-protocol JAR"
+  VELOAUTH_PLUGIN_JAR="${OUTPUT_JAR}" \
+    VELOAUTH_EXPECTED_RUNTIME_VERSION="${VIAVERSION_RESOLVED_VERSION}" \
     "${SCRIPT_DIR}/test-velocity-embedded.sh"
 fi
 
 OUTPUT_SHA256="$(sha256_file "${OUTPUT_JAR}")"
-printf 'Latest-protocol VeloAuth build passed: %s\n' "${OUTPUT_JAR}"
+printf 'Reviewed-protocol VeloAuth build passed: %s\n' "${OUTPUT_JAR}"
 printf 'JAR_SHA256=%s\n' "${OUTPUT_SHA256}"
 printf 'MCPROTOCOLLIB_PINNED=%s (%s)\n' "${MCPROTOCOLLIB_RESOLVED_VERSION}" "${MCPROTOCOLLIB_SHA256}"
 printf 'VIAVERSION=%s (%s)\n' "${VIAVERSION_RESOLVED_VERSION}" "${VIAVERSION_SHA256}"

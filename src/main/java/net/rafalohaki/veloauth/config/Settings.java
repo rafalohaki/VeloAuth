@@ -438,20 +438,24 @@ public class Settings {
             int port,
             int maxConnections,
             int handshakeTimeoutSeconds,
-            int loginTimeoutSeconds) {
+            int loginTimeoutSeconds,
+            boolean reviewedRuntimeUpdatesEnabled) {
         static final int DEFAULT_PORT = 0;
         static final int DEFAULT_MAX_CONNECTIONS = 512;
         static final int DEFAULT_HANDSHAKE_TIMEOUT_SECONDS = 10;
         static final int DEFAULT_LOGIN_TIMEOUT_SECONDS = 15;
+        static final boolean DEFAULT_REVIEWED_RUNTIME_UPDATES_ENABLED = false;
 
         public EmbeddedAuthServerSettings() {
             this(DEFAULT_PORT, DEFAULT_MAX_CONNECTIONS,
-                    DEFAULT_HANDSHAKE_TIMEOUT_SECONDS, DEFAULT_LOGIN_TIMEOUT_SECONDS);
+                    DEFAULT_HANDSHAKE_TIMEOUT_SECONDS, DEFAULT_LOGIN_TIMEOUT_SECONDS,
+                    DEFAULT_REVIEWED_RUNTIME_UPDATES_ENABLED);
         }
         public int getPort() { return port; }
         public int getMaxConnections() { return maxConnections; }
         public int getHandshakeTimeoutSeconds() { return handshakeTimeoutSeconds; }
         public int getLoginTimeoutSeconds() { return loginTimeoutSeconds; }
+        public boolean isReviewedRuntimeUpdatesEnabled() { return reviewedRuntimeUpdatesEnabled; }
     }
 
     /**

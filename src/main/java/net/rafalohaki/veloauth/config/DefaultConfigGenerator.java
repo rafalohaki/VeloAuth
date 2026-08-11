@@ -148,10 +148,14 @@ final class DefaultConfigGenerator {
                   # the auth/limbo server indefinitely.
                   timeout-seconds: 300
                   embedded:
-                    # The release fallback supports Java 1.8 through 26.2. After startup VeloAuth
-                    # may checksum-verify and stage a newer usable ViaVersion snapshot; it becomes
-                    # active only after the next full restart. External mode performs no managed
-                    # runtime check, download or classloading.
+                    # The release-pinned, maintainer-reviewed ViaVersion runtime supports Java 1.8
+                    # through 26.2. Remote runtime staging is disabled by default. Opting in permits
+                    # only an exact candidate whose URL and SHA-256 are embedded in this VeloAuth
+                    # release; mutable latest metadata and same-origin checksums are never trusted.
+                    # A staged candidate becomes active only after the next full restart. Disabling
+                    # the option does not roll back a candidate already activated successfully.
+                    # External mode performs no managed runtime check, download or classloading.
+                    reviewed-runtime-updates: false
                     #
                     # The listener always binds to loopback. 0 (recommended) selects a free port;
                     # a fixed value is still loopback-only and must not be exposed publicly.
