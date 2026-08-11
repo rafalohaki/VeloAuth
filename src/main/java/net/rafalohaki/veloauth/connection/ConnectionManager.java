@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -54,23 +55,13 @@ public class ConnectionManager {
     /** Current concrete player owner and generation for each UUID. */
     private final ConcurrentMap<UUID, PlayerTransferState> transferStates = new ConcurrentHashMap<>();
     private final AtomicLong transferGeneration = new AtomicLong();
-    
-    /** Retry attempt counter per player to prevent infinite fallback loops */
+
+    /** Legacy UUID-scoped state retained until listener/public cleanup conversion in Task 4. */
     private final Map<UUID, AtomicInteger> retryAttempts = new ConcurrentHashMap<>();
-    
-    /** One-shot timeout retry flag per player to avoid repeated scheduling */
     private final Map<UUID, Boolean> timeoutRetryScheduled = new ConcurrentHashMap<>();
-
-    /** Timeout retry tasks per player - allows cancellation on disconnect and manual transfers */
     private final ConcurrentMap<UUID, ScheduledTask> timeoutRetryTasks = new ConcurrentHashMap<>();
-    
-    /** Pending transfer tasks per player - allows cancellation on disconnect to prevent race conditions */
     private final ConcurrentMap<UUID, ScheduledTask> pendingTransfers = new ConcurrentHashMap<>();
-    
-    /** Backend wait retry tasks per player - allows cancellation on disconnect */
     private final ConcurrentMap<UUID, ScheduledTask> backendWaitTasks = new ConcurrentHashMap<>();
-
-    /** Owns the concrete backend connection attempt, not merely its scheduling task. */
     private final ConcurrentMap<UUID, Player> backendConnectionOwners = new ConcurrentHashMap<>();
 
     /** Serializes task publication with shutdown so late async completions cannot resurrect work. */
@@ -216,10 +207,7 @@ public class ConnectionManager {
     }
 
     private void cancelStateTasks(PlayerTransferState state) {
-        state.timeoutRetryActive().set(false);
-        ScheduledTaskRegistry.cancel(state.pendingTransfer());
-        ScheduledTaskRegistry.cancel(state.backendWait());
-        ScheduledTaskRegistry.cancel(state.timeoutRetry());
+        state.cancelTasks();
     }
 
     public CompletableFuture<Boolean> transferToAuthServerAsync(Player player) {
@@ -368,6 +356,10 @@ public class ConnectionManager {
      */
     public boolean transferToBackend(Player player) {
         PlayerTransferState state = currentState(player);
+        return state != null && transferToBackend(player, state);
+    }
+
+    private boolean transferToBackend(Player player, PlayerTransferState state) {
         if (closed.get() || state == null || !resetTasksIfCurrent(state, false)) {
             return false;
         }
@@ -386,7 +378,7 @@ public class ConnectionManager {
                 }
                 logger.warn("No available backend servers for {} - starting background retry",
                         player.getUsername());
-                scheduleBackendWaitRetry(player, 0);
+                scheduleBackendWaitRetry(player, state, 0);
                 // Player stays on auth server; background retry is the success path.
                 // Caller should NOT treat this as a hard failure requiring auth rollback.
                 return true;
@@ -443,11 +435,6 @@ public class ConnectionManager {
         }
     }
 
-    private boolean executeBackendTransfer(Player player, RegisteredServer targetServer, String serverName) {
-        PlayerTransferState state = currentState(player);
-        return state != null && executeBackendTransfer(player, state, targetServer, serverName);
-    }
-
     private boolean claimBackendConnection(PlayerTransferState state) {
         if (isStale(state)
                 || !state.backendConnectionActive().compareAndSet(false, true)) {
@@ -461,28 +448,9 @@ public class ConnectionManager {
     }
 
     private void releaseBackendConnection(PlayerTransferState state) {
-        state.backendConnectionActive().set(false);
-    }
-
-    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Velocity Player identity owns the attempt.
-    private boolean claimBackendConnection(Player player) {
-        UUID playerUuid = player.getUniqueId();
-        while (true) {
-            Player currentOwner = backendConnectionOwners.putIfAbsent(playerUuid, player);
-            if (currentOwner == null) {
-                return true;
-            }
-            if (currentOwner == player || currentOwner.isActive()) {
-                return false;
-            }
-            if (backendConnectionOwners.replace(playerUuid, currentOwner, player)) {
-                return true;
-            }
+        if (!isStale(state)) {
+            state.backendConnectionActive().set(false);
         }
-    }
-
-    private void releaseBackendConnection(Player player) {
-        backendConnectionOwners.remove(player.getUniqueId(), player);
     }
 
     private boolean validatePlayerActive(Player player, String serverName) {
@@ -605,37 +573,57 @@ public class ConnectionManager {
         if (!resetTasksIfCurrent(state, false)) {
             return false;
         }
+        if (isStale(state)) {
+            return false;
+        }
         state.retryAttempts().incrementAndGet();
+        if (isStale(state)) {
+            return false;
+        }
         if (logger.isInfoEnabled()) {
             logger.info("Attempting fallback for player {} (attempt {}/{}): send to auth server then retry backend {}",
                     player.getUsername(), attempts + 1, MAX_RETRY_ATTEMPTS, serverName);
         }
 
-        scheduleAuthServerFallback(player, authServer, targetServer, serverName);
+        scheduleAuthServerFallback(player, state, authServer, targetServer, serverName);
         return true;
     }
 
-    private void scheduleAuthServerFallback(Player player, RegisteredServer authServer,
-                                           RegisteredServer targetServer, String serverName) {
+    private void scheduleAuthServerFallback(Player player, PlayerTransferState state,
+                                            RegisteredServer authServer,
+                                            RegisteredServer targetServer, String serverName) {
+        if (isStale(state)) {
+            return;
+        }
         player.createConnectionRequest(authServer)
                 .connect()
                 .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                 .whenComplete((limboResult, ex) ->
-                        handleAuthServerFallbackResult(player, targetServer, serverName, limboResult, ex));
+                        handleAuthServerFallbackResult(
+                                player, state, targetServer, serverName, limboResult, ex));
     }
 
-    private void handleAuthServerFallbackResult(Player player, RegisteredServer targetServer, String serverName,
-                                               com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result limboResult, Throwable ex) {
-        if (ex != null || limboResult == null || !limboResult.isSuccessful()) {
-            logFallbackFailure(player, limboResult, ex);
-            sendErrorMessage(player);
+    private void handleAuthServerFallbackResult(
+            Player player, PlayerTransferState state,
+            RegisteredServer targetServer, String serverName,
+            com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result limboResult, Throwable ex) {
+        if (isStale(state)) {
             return;
         }
-        scheduleBackendRetryAfterLimbo(player, targetServer, serverName);
+        if (ex != null || limboResult == null || !limboResult.isSuccessful()) {
+            logFallbackFailure(player, state, limboResult, ex);
+            sendErrorMessageIfCurrent(player, state);
+            return;
+        }
+        scheduleBackendRetryAfterLimbo(player, state, targetServer, serverName);
     }
 
-    private void logFallbackFailure(Player player,
-                                   com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result limboResult, Throwable ex) {
+    private void logFallbackFailure(
+            Player player, PlayerTransferState state,
+            com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result limboResult, Throwable ex) {
+        if (isStale(state)) {
+            return;
+        }
         String reason;
         if (ex != null) {
             reason = ex.getMessage();
@@ -647,17 +635,20 @@ public class ConnectionManager {
         logger.warn("Fallback to auth server for {} failed: {}", player.getUsername(), reason);
     }
 
-    private void scheduleBackendRetryAfterLimbo(Player player, RegisteredServer targetServer, String serverName) {
-        UUID playerUuid = player.getUniqueId();
-
-        scheduleOwnedTask(pendingTransfers, playerUuid,
+    private void scheduleBackendRetryAfterLimbo(
+            Player player, PlayerTransferState state,
+            RegisteredServer targetServer, String serverName) {
+        scheduleOwnedTask(state, state.pendingTransfer(),
                 settings.getAutoTransferDelayMillis(), TimeUnit.MILLISECONDS, () -> {
-            if (!player.isActive() || !isPlayerOnAuthServer(player)) {
+            if (isStale(state) || !player.isActive() || !isPlayerOnAuthServer(player)) {
                 return;
             }
             // Retry blokuje na join() — wykonaj na virtual thread, nie na wątku schedulera
-            VirtualThreadExecutorProvider.submitTask(() ->
-                    executeBackendRetryAfterLimbo(player, targetServer, serverName));
+            VirtualThreadExecutorProvider.submitTask(() -> {
+                if (!isStale(state)) {
+                    executeBackendRetryAfterLimbo(player, state, targetServer, serverName);
+                }
+            });
         });
     }
 
@@ -665,35 +656,43 @@ public class ConnectionManager {
      * Schedules periodic retries when no backend server is available after authentication.
      * Player stays on auth/limbo server and gets notified. Retries every 5 seconds up to 5 minutes.
      */
-    private void scheduleBackendWaitRetry(Player player, int attempt) {
-        UUID playerUuid = player.getUniqueId();
-
-        if (attempt == 0) {
-            sendIfNotEmpty(player, "connection.waiting_for_server", NamedTextColor.YELLOW);
-        }
-
-        if (attempt >= MAX_BACKEND_WAIT_RETRIES) {
-            ScheduledTaskRegistry.cancel(backendWaitTasks, playerUuid);
-            logger.warn("Backend wait timeout for {} after {} attempts", player.getUsername(), attempt);
-            sendIfNotEmpty(player, "connection.error.no_servers", NamedTextColor.RED);
+    private void scheduleBackendWaitRetry(Player player, PlayerTransferState state, int attempt) {
+        if (isStale(state)) {
             return;
         }
 
-        scheduleOwnedTask(backendWaitTasks, playerUuid,
+        if (attempt == 0) {
+            sendIfNotEmptyIfCurrent(
+                    player, state, "connection.waiting_for_server", NamedTextColor.YELLOW);
+        }
+
+        if (attempt >= MAX_BACKEND_WAIT_RETRIES) {
+            if (isStale(state)) {
+                return;
+            }
+            ScheduledTaskRegistry.cancel(state.backendWait());
+            logger.warn("Backend wait timeout for {} after {} attempts", player.getUsername(), attempt);
+            sendIfNotEmptyIfCurrent(
+                    player, state, "connection.error.no_servers", NamedTextColor.RED);
+            return;
+        }
+
+        scheduleOwnedTask(state, state.backendWait(),
                 BACKEND_WAIT_INTERVAL_SECONDS, TimeUnit.SECONDS, () -> {
-            if (!player.isActive() || !isPlayerOnAuthServer(player)) {
+            if (isStale(state) || !player.isActive() || !isPlayerOnAuthServer(player)) {
                 return;
             }
 
-            findAvailableBackendServerForRetryAsync(player)
+            findAvailableBackendServerForRetryAsync(player, state)
                     .whenComplete((server, throwable) ->
-                            handleBackendWaitSelection(player, attempt, server, throwable));
+                            handleBackendWaitSelection(player, state, attempt, server, throwable));
         });
     }
 
-    private void handleBackendWaitSelection(Player player, int attempt,
-                                            Optional<RegisteredServer> server, Throwable throwable) {
-        if (!player.isActive() || !isPlayerOnAuthServer(player)) {
+    private void handleBackendWaitSelection(
+            Player player, PlayerTransferState state, int attempt,
+            Optional<RegisteredServer> server, Throwable throwable) {
+        if (isStale(state) || !player.isActive() || !isPlayerOnAuthServer(player)) {
             return;
         }
         if (throwable != null) {
@@ -705,15 +704,19 @@ public class ConnectionManager {
             String targetName = target.getServerInfo().getName();
             logger.info("Backend server available for {} after waiting - transferring to {}",
                     player.getUsername(), targetName);
-            sendIfNotEmpty(player, "connection.connecting", NamedTextColor.GREEN);
-            VirtualThreadExecutorProvider.submitTask(() ->
-                    executeBackendTransfer(player, target, targetName));
+            sendIfNotEmptyIfCurrent(player, state, "connection.connecting", NamedTextColor.GREEN);
+            VirtualThreadExecutorProvider.submitTask(() -> {
+                if (!isStale(state)) {
+                    executeBackendTransfer(player, state, target, targetName);
+                }
+            });
             return;
         }
         if (attempt % BACKEND_WAIT_REMINDER_INTERVAL == BACKEND_WAIT_REMINDER_INTERVAL - 1) {
-            sendIfNotEmpty(player, "connection.waiting_for_server", NamedTextColor.YELLOW);
+            sendIfNotEmptyIfCurrent(
+                    player, state, "connection.waiting_for_server", NamedTextColor.YELLOW);
         }
-        scheduleBackendWaitRetry(player, attempt + 1);
+        scheduleBackendWaitRetry(player, state, attempt + 1);
     }
 
     /**
@@ -724,36 +727,51 @@ public class ConnectionManager {
      * without forking the plugin. This is the deliberate opt-out mechanism — empty value
      * means "do not send", any non-empty value sends as before.
      */
-    private void sendIfNotEmpty(Player player, String messageKey, NamedTextColor color) {
+    private void sendIfNotEmptyIfCurrent(
+            Player player, PlayerTransferState state, String messageKey, NamedTextColor color) {
+        if (isStale(state)) {
+            return;
+        }
         String resolved = messages.get(messageKey);
-        if (resolved == null || resolved.isEmpty()) {
+        if (resolved == null || resolved.isEmpty() || isStale(state)) {
             return;
         }
         player.sendMessage(messages.componentFromResolvedText(resolved, color));
     }
 
-    private void executeBackendRetryAfterLimbo(Player player, RegisteredServer targetServer, String serverName) {
-        if (!claimBackendConnection(player)) {
+    private void executeBackendRetryAfterLimbo(
+            Player player, PlayerTransferState state,
+            RegisteredServer targetServer, String serverName) {
+        if (isStale(state) || !claimBackendConnection(state)) {
             logger.debug("Backend transfer already active for {} - skipping limbo retry",
                     player.getUsername());
             return;
         }
         try {
+            if (isStale(state)) {
+                return;
+            }
             var retry = player.createConnectionRequest(targetServer)
                     .connect()
                     .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                     .join();
             if (!retry.isSuccessful()) {
+                if (isStale(state)) {
+                    return;
+                }
                 logger.warn("Retry to connect {} to {} after auth server failed: {}",
                         player.getUsername(), serverName, KickReasonRenderer.renderPlain(retry));
-                sendErrorMessage(player);
+                sendErrorMessageIfCurrent(player, state);
             }
         } catch (java.util.concurrent.CompletionException retryEx) {
+            if (isStale(state)) {
+                return;
+            }
             logger.error("Error while retrying backend transfer for {}: {}",
                     player.getUsername(), retryEx.getMessage(), retryEx);
-            sendErrorMessage(player);
+            sendErrorMessageIfCurrent(player, state);
         } finally {
-            releaseBackendConnection(player);
+            releaseBackendConnection(state);
         }
     }
 
@@ -763,7 +781,8 @@ public class ConnectionManager {
         if (isStale(state)) {
             return false;
         }
-        if (e.getCause() instanceof TimeoutException && handleTimeoutRetry(player, targetServer, serverName, attempts)) {
+        if (e.getCause() instanceof TimeoutException
+                && handleTimeoutRetry(player, state, targetServer, serverName, attempts)) {
             return true;
         }
         logger.error("Error transferring player {} to server {}", player.getUsername(), serverName, e);
@@ -802,49 +821,64 @@ public class ConnectionManager {
      * Handles connection timeout by scheduling a single async retry with a short delay.
      * Shows friendly message to player instead of error stack trace.
      */
-    private boolean handleTimeoutRetry(Player player, RegisteredServer targetServer, String serverName, int attempts) {
-        if (!validateTimeoutRetryConditions(player, attempts)) {
+    private boolean handleTimeoutRetry(
+            Player player, PlayerTransferState state,
+            RegisteredServer targetServer, String serverName, int attempts) {
+        if (!validateTimeoutRetryConditions(player, state, attempts)) {
             return false;
         }
 
-        retryAttempts.computeIfAbsent(player.getUniqueId(), k -> new AtomicInteger(0)).incrementAndGet();
+        state.retryAttempts().incrementAndGet();
+        if (isStale(state)) {
+            return false;
+        }
         player.sendMessage(messages.component("connection.retry", NamedTextColor.YELLOW));
 
-        scheduleTimeoutRetry(player, targetServer, serverName);
+        scheduleTimeoutRetry(player, state, targetServer, serverName);
         return true;
     }
 
-    private boolean validateTimeoutRetryConditions(Player player, int attempts) {
-        if (!player.isActive()) {
+    private boolean validateTimeoutRetryConditions(
+            Player player, PlayerTransferState state, int attempts) {
+        if (isStale(state) || !player.isActive() || attempts >= MAX_RETRY_ATTEMPTS) {
             return false;
         }
-        if (timeoutRetryScheduled.putIfAbsent(player.getUniqueId(), Boolean.TRUE) != null) {
+        if (!state.timeoutRetryActive().compareAndSet(false, true)) {
             return false;
         }
-        if (attempts >= MAX_RETRY_ATTEMPTS) {
-            timeoutRetryScheduled.remove(player.getUniqueId());
+        if (isStale(state)) {
             return false;
         }
         return true;
     }
 
-    private void scheduleTimeoutRetry(Player player, RegisteredServer targetServer, String serverName) {
-        UUID playerUuid = player.getUniqueId();
-
-        scheduleOwnedTask(timeoutRetryTasks, playerUuid, 400, TimeUnit.MILLISECONDS,
-                () -> executeTimeoutRetry(player, targetServer, serverName));
+    private void scheduleTimeoutRetry(
+            Player player, PlayerTransferState state,
+            RegisteredServer targetServer, String serverName) {
+        scheduleOwnedTask(state, state.timeoutRetry(), 400, TimeUnit.MILLISECONDS,
+                () -> executeTimeoutRetry(player, state, targetServer, serverName));
     }
 
-    private void executeTimeoutRetry(Player player, RegisteredServer targetServer, String serverName) {
+    private void executeTimeoutRetry(
+            Player player, PlayerTransferState state,
+            RegisteredServer targetServer, String serverName) {
         try {
-            if (!player.isActive() || !isPlayerOnAuthServer(player)) {
-                timeoutRetryScheduled.remove(player.getUniqueId());
+            if (isStale(state)) {
                 return;
             }
-            if (!claimBackendConnection(player)) {
-                timeoutRetryScheduled.remove(player.getUniqueId());
+            if (!player.isActive() || !isPlayerOnAuthServer(player)) {
+                state.timeoutRetryActive().set(false);
+                return;
+            }
+            if (!claimBackendConnection(state)) {
+                if (!isStale(state)) {
+                    state.timeoutRetryActive().set(false);
+                }
                 logger.debug("Backend transfer already active for {} - skipping timeout retry",
                         player.getUsername());
+                return;
+            }
+            if (isStale(state)) {
                 return;
             }
             player.createConnectionRequest(targetServer)
@@ -852,38 +886,47 @@ public class ConnectionManager {
                     .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
                     .whenComplete((result, ex) -> {
                         try {
-                            handleTimeoutRetryResult(player, serverName, result, ex);
+                            handleTimeoutRetryResult(player, state, serverName, result, ex);
                         } finally {
-                            releaseBackendConnection(player);
+                            releaseBackendConnection(state);
                         }
                     });
         } catch (RuntimeException retryEx) {
-            releaseBackendConnection(player);
-            timeoutRetryScheduled.remove(player.getUniqueId());
+            releaseBackendConnection(state);
+            if (isStale(state)) {
+                return;
+            }
+            state.timeoutRetryActive().set(false);
             logger.error("Error scheduling retry after timeout for {}: {}", player.getUsername(), retryEx.getMessage());
         }
     }
 
-    private void handleTimeoutRetryResult(Player player, String serverName,
-                                          com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result result, Throwable ex) {
-        timeoutRetryScheduled.remove(player.getUniqueId());
+    private void handleTimeoutRetryResult(
+            Player player, PlayerTransferState state, String serverName,
+            com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result result, Throwable ex) {
+        if (isStale(state)) {
+            return;
+        }
+        state.timeoutRetryActive().set(false);
 
         if (ex != null) {
             logger.warn("Retry after timeout failed for {} -> {}: {}", player.getUsername(), serverName, ex.getMessage());
-            sendErrorMessage(player);
+            sendErrorMessageIfCurrent(player, state);
             return;
         }
 
         if (result != null && result.isSuccessful()) {
-            resetTransferState(player.getUniqueId(), false);
-            retryAttempts.remove(player.getUniqueId());
+            if (!resetTasksIfCurrent(state, false)) {
+                return;
+            }
+            state.retryAttempts().set(0);
             if (logger.isDebugEnabled()) {
                 logger.debug("Retry after timeout succeeded for {} -> {}", player.getUsername(), serverName);
             }
         } else {
             String reason = KickReasonRenderer.renderPlain(result);
             logger.warn("Retry after timeout not successful for {} -> {}: {}", player.getUsername(), serverName, reason);
-            sendErrorMessage(player);
+            sendErrorMessageIfCurrent(player, state);
         }
     }
 
@@ -968,8 +1011,15 @@ public class ConnectionManager {
         }
     }
 
-    private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerForRetryAsync(Player player) {
-        return resolveForcedHostTargetAsync(player).thenCompose(forcedTarget -> {
+    private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerForRetryAsync(
+            Player player, PlayerTransferState state) {
+        if (isStale(state)) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        return resolveForcedHostTargetAsync(player, state).thenCompose(forcedTarget -> {
+            if (isStale(state)) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
             if (forcedTarget.isPresent()) {
                 return CompletableFuture.completedFuture(forcedTarget);
             }
@@ -1066,12 +1116,18 @@ public class ConnectionManager {
      * @return Optional with the target server if available and online
      */
     private Optional<RegisteredServer> resolveForcedHostTarget(Player player, PlayerTransferState state) {
+        if (isStale(state)) {
+            return Optional.empty();
+        }
         Optional<ForcedHostTarget> resolvedTarget = findStoredForcedHostTarget(player, state);
         if (resolvedTarget.isEmpty()) {
             return Optional.empty();
         }
         ForcedHostTarget target = resolvedTarget.get();
         if (isServerAvailable(target.server(), target.name())) {
+            if (isStale(state)) {
+                return Optional.empty();
+            }
             logger.debug("Forced host target '{}' for {} is available - using it",
                     target.name(), player.getUsername());
             return Optional.of(target.server());
@@ -1079,14 +1135,16 @@ public class ConnectionManager {
 
         // Server is registered but currently offline — keep the entry so the next retry
         // (scheduleBackendWaitRetry or transferToBackend) can try it again once it comes back up.
-        logger.warn("Forced host target '{}' for {} is offline - falling back to try list (will retry forced host on next attempt)",
-                target.name(), player.getUsername());
+        if (!isStale(state)) {
+            logger.warn("Forced host target '{}' for {} is offline - falling back to try list (will retry forced host on next attempt)",
+                    target.name(), player.getUsername());
+        }
         return Optional.empty();
     }
 
-    private CompletableFuture<Optional<RegisteredServer>> resolveForcedHostTargetAsync(Player player) {
-        PlayerTransferState state = currentState(player);
-        if (state == null) {
+    private CompletableFuture<Optional<RegisteredServer>> resolveForcedHostTargetAsync(
+            Player player, PlayerTransferState state) {
+        if (isStale(state)) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
         Optional<ForcedHostTarget> resolvedTarget = findStoredForcedHostTarget(player, state);
@@ -1096,10 +1154,14 @@ public class ConnectionManager {
         ForcedHostTarget target = resolvedTarget.get();
         return target.server().ping()
                 .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
-                .handle((ignored, throwable) -> handleForcedHostPingResult(player, target, throwable));
+                .handle((ignored, throwable) ->
+                        handleForcedHostPingResult(player, state, target, throwable));
     }
 
     private Optional<ForcedHostTarget> findStoredForcedHostTarget(Player player, PlayerTransferState state) {
+        if (isStale(state)) {
+            return Optional.empty();
+        }
         String targetName = state.forcedHostTarget().get();
         if (targetName == null) {
             return Optional.empty();
@@ -1110,7 +1172,9 @@ public class ConnectionManager {
             logger.debug("Forced host target for {} is auth server '{}' - ignoring",
                     player.getUsername(), targetName);
             // The auth-server target would loop. Drop it so retries use the try-list directly.
-            state.forcedHostTarget().compareAndSet(targetName, null);
+            if (!isStale(state)) {
+                state.forcedHostTarget().compareAndSet(targetName, null);
+            }
             return Optional.empty();
         }
 
@@ -1119,14 +1183,19 @@ public class ConnectionManager {
             logger.warn("Forced host target '{}' for {} is not registered - falling back to try list",
                     targetName, player.getUsername());
             // An unknown server cannot recover without a new captured target; avoid repeat log spam.
-            state.forcedHostTarget().compareAndSet(targetName, null);
+            if (!isStale(state)) {
+                state.forcedHostTarget().compareAndSet(targetName, null);
+            }
             return Optional.empty();
         }
         return Optional.of(new ForcedHostTarget(targetName, server.get()));
     }
 
-    private Optional<RegisteredServer> handleForcedHostPingResult(Player player, ForcedHostTarget target,
-                                                                  Throwable throwable) {
+    private Optional<RegisteredServer> handleForcedHostPingResult(
+            Player player, PlayerTransferState state, ForcedHostTarget target, Throwable throwable) {
+        if (isStale(state)) {
+            return Optional.empty();
+        }
         if (throwable == null) {
             logger.debug("Forced host target '{}' for {} is available - using it",
                     target.name(), player.getUsername());
@@ -1275,17 +1344,21 @@ public class ConnectionManager {
      * Wywoływane przez AuthListener.onServerConnected gdy gracz jest już w cache autoryzacji.
      * Używa opóźnienia dla poprawnej synchronizacji ViaVersion/ViaFabric.
      * <p>
-     * Task jest zapisywany w {@link #pendingTransfers} i może być anulowany przez
+     * Task jest zapisywany w stanie konkretnego połączenia i może być anulowany przez
      * {@link #cancelPendingTransfer(UUID)} przy rozłączeniu gracza, zapobiegając race conditions.
      *
      * @param player Gracz do transferu
      */
     public void autoTransferFromAuthServerToBackend(Player player) {
+        PlayerTransferState state = currentState(player);
+        if (state == null || isStale(state)) {
+            return;
+        }
         UUID playerUuid = player.getUniqueId();
         String playerIp = getPlayerIp(player);
         CachedAuthUser cachedUser = authCache.getAuthorizedPlayer(playerUuid);
         
-        if (cachedUser == null || !cachedUser.matchesIp(playerIp)) {
+        if (cachedUser == null || !cachedUser.matchesIp(playerIp) || isStale(state)) {
             // Gracz nie jest zweryfikowany w cache - nic nie rób
             if (logger.isDebugEnabled()) {
                 logger.debug("Auto-transfer: gracz {} nie jest zweryfikowany w cache", player.getUsername());
@@ -1299,9 +1372,12 @@ public class ConnectionManager {
         }
         
         // Configured compatibility buffer plus concrete connection-attempt ownership.
-        scheduleOwnedTask(pendingTransfers, playerUuid,
+        scheduleOwnedTask(state, state.pendingTransfer(),
                 settings.getAutoTransferDelayMillis(), TimeUnit.MILLISECONDS, () -> {
                     // Sprawdź czy gracz nadal jest aktywny i na auth server
+                    if (isStale(state)) {
+                        return;
+                    }
                     if (!player.isActive()) {
                         logger.debug("Auto-transfer: player {} is no longer active", player.getUsername());
                         return;
@@ -1314,7 +1390,13 @@ public class ConnectionManager {
                     
                     // Wykonaj transfer na virtual thread aby nie blokować scheduler
                     VirtualThreadExecutorProvider.submitTask(() -> {
-                        boolean success = transferToBackend(player);
+                        if (isStale(state)) {
+                            return;
+                        }
+                        boolean success = transferToBackend(player, state);
+                        if (isStale(state) && !success) {
+                            return;
+                        }
                         if (success) {
                             logger.debug("Auto-transfer: gracz {} przeniesiony na backend", player.getUsername());
                         } else {
@@ -1326,24 +1408,27 @@ public class ConnectionManager {
     }
 
     private void scheduleOwnedTask(
-            ConcurrentMap<UUID, ScheduledTask> registry,
-            UUID playerUuid,
+            PlayerTransferState state,
+            AtomicReference<ScheduledTask> taskSlot,
             long delay,
             TimeUnit unit,
             Runnable action) {
         taskLifecycleLock.lock();
         try {
-            if (closed.get()) {
+            if (isStale(state)) {
                 return;
             }
-            ScheduledTaskRegistry.replace(registry, playerUuid, callback ->
+            ScheduledTaskRegistry.replace(taskSlot, callback ->
                     plugin.getServer().getScheduler().buildTask(plugin, callback)
                             .delay(delay, unit)
                             .schedule(), () -> {
-                if (!closed.get()) {
+                if (!isStale(state)) {
                     action.run();
                 }
             });
+            if (isStale(state)) {
+                ScheduledTaskRegistry.cancel(taskSlot);
+            }
         } finally {
             taskLifecycleLock.unlock();
         }

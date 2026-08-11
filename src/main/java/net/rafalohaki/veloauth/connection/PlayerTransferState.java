@@ -67,4 +67,11 @@ final class PlayerTransferState {
     AtomicReference<ScheduledTask> timeoutRetry() {
         return timeoutRetry;
     }
+
+    void cancelTasks() {
+        timeoutRetryActive.set(false);
+        ScheduledTaskRegistry.cancel(pendingTransfer);
+        ScheduledTaskRegistry.cancel(backendWait);
+        ScheduledTaskRegistry.cancel(timeoutRetry);
+    }
 }

@@ -36,17 +36,17 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
@@ -401,6 +401,237 @@ class ConnectionManagerLifecycleIntegrationTest {
     }
 
     @Test
+    void authFallbackCompletion_OldGeneration_DoesNotReplaceNewPendingTransfer() {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerConnection backendConnection = org.mockito.Mockito.mock(ServerConnection.class);
+        ConnectionRequestBuilder backendRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder authRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result backendFailure = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        ConnectionRequestBuilder.Result authSuccess = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        CompletableFuture<ConnectionRequestBuilder.Result> authFallback = new CompletableFuture<>();
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask newPendingTransfer = org.mockito.Mockito.mock(ScheduledTask.class);
+        ScheduledTask staleRetry = org.mockito.Mockito.mock(ScheduledTask.class);
+
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldFallbackPlayer");
+        when(oldPlayer.isActive()).thenReturn(true);
+        when(oldPlayer.getCurrentServer()).thenReturn(Optional.of(backendConnection));
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(newPlayer.getUsername()).thenReturn("NewFallbackPlayer");
+        when(newPlayer.getRemoteAddress()).thenReturn(new InetSocketAddress("127.0.0.1", 25565));
+        when(backendConnection.getServer()).thenReturn(backendServer);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(backendServer.ping()).thenReturn(
+                CompletableFuture.completedFuture(org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(oldPlayer.createConnectionRequest(backendServer)).thenReturn(backendRequest);
+        when(oldPlayer.createConnectionRequest(authServer)).thenReturn(authRequest);
+        when(backendRequest.connect()).thenReturn(CompletableFuture.completedFuture(backendFailure));
+        when(authRequest.connect()).thenReturn(authFallback);
+        when(backendFailure.isSuccessful()).thenReturn(false);
+        when(authSuccess.isSuccessful()).thenReturn(true);
+        when(authCache.getAuthorizedPlayer(playerUuid)).thenReturn(new CachedAuthUser(
+                playerUuid, "NewFallbackPlayer", "127.0.0.1", System.currentTimeMillis(), false, null));
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), org.mockito.ArgumentMatchers.<Consumer<ScheduledTask>>any()))
+                .thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(newPendingTransfer, staleRetry);
+
+        connectionManager.beginTransferSession(oldPlayer);
+        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        assertTrue(connectionManager.transferToBackend(oldPlayer));
+        connectionManager.beginTransferSession(newPlayer);
+        connectionManager.autoTransferFromAuthServerToBackend(newPlayer);
+
+        authFallback.complete(authSuccess);
+
+        verify(newPendingTransfer, never()).cancel();
+        verify(taskBuilder, times(1)).schedule();
+    }
+
+    @Test
+    void timeoutRetryCompletion_OldGeneration_DoesNotMutateNewTimeoutChain() {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerConnection authConnection = org.mockito.Mockito.mock(ServerConnection.class);
+        ConnectionRequestBuilder oldInitialRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder oldRetryRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder newInitialRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder newRetryRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result oldRetrySuccess = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        ConnectionRequestBuilder.Result newRetrySuccess = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        CompletableFuture<ConnectionRequestBuilder.Result> oldRetry = new CompletableFuture<>();
+        CompletableFuture<ConnectionRequestBuilder.Result> newRetry = new CompletableFuture<>();
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask oldTimeoutTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        ScheduledTask newTimeoutTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Consumer<ScheduledTask>> callbackCaptor =
+                org.mockito.ArgumentCaptor.forClass(Consumer.class);
+
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldTimeoutPlayer");
+        when(oldPlayer.isActive()).thenReturn(true);
+        when(oldPlayer.getCurrentServer()).thenReturn(Optional.of(authConnection));
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(newPlayer.getUsername()).thenReturn("NewTimeoutPlayer");
+        when(newPlayer.isActive()).thenReturn(true);
+        when(newPlayer.getCurrentServer()).thenReturn(Optional.of(authConnection));
+        when(authConnection.getServer()).thenReturn(authServer);
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(backendServer.ping()).thenReturn(
+                CompletableFuture.completedFuture(org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(oldPlayer.createConnectionRequest(backendServer)).thenReturn(oldInitialRequest, oldRetryRequest);
+        when(newPlayer.createConnectionRequest(backendServer)).thenReturn(newInitialRequest, newRetryRequest);
+        when(oldInitialRequest.connect()).thenReturn(
+                CompletableFuture.failedFuture(new java.util.concurrent.TimeoutException("old initial timeout")));
+        when(oldRetryRequest.connect()).thenReturn(oldRetry);
+        when(newInitialRequest.connect()).thenReturn(
+                CompletableFuture.failedFuture(new java.util.concurrent.TimeoutException("new initial timeout")));
+        when(newRetryRequest.connect()).thenReturn(newRetry);
+        when(oldRetrySuccess.isSuccessful()).thenReturn(true);
+        when(newRetrySuccess.isSuccessful()).thenReturn(true);
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(400L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(oldTimeoutTask, newTimeoutTask);
+
+        connectionManager.beginTransferSession(oldPlayer);
+        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        assertTrue(connectionManager.transferToBackend(oldPlayer));
+        callbackCaptor.getAllValues().get(0).accept(oldTimeoutTask);
+
+        connectionManager.clearRetryAttempts(playerUuid);
+        connectionManager.beginTransferSession(newPlayer);
+        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        assertTrue(connectionManager.transferToBackend(newPlayer));
+        oldRetry.complete(oldRetrySuccess);
+
+        verify(newTimeoutTask, never()).cancel();
+        callbackCaptor.getAllValues().get(1).accept(newTimeoutTask);
+        verify(newRetryRequest).connect();
+        newRetry.complete(newRetrySuccess);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void backendWaitSelection_OldGeneration_DoesNotConnectOrReschedule() {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer forcedBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerConnection authConnection = org.mockito.Mockito.mock(ServerConnection.class);
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        CompletableFuture<ServerPing> oldWaitSelection = new CompletableFuture<>();
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask oldWaitTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        ScheduledTask newWaitTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        ScheduledTask staleReschedule = org.mockito.Mockito.mock(ScheduledTask.class);
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Consumer<ScheduledTask>> callbackCaptor =
+                org.mockito.ArgumentCaptor.forClass(Consumer.class);
+
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldWaitPlayer");
+        when(oldPlayer.isActive()).thenReturn(true);
+        when(oldPlayer.getCurrentServer()).thenReturn(Optional.of(authConnection));
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(newPlayer.getUsername()).thenReturn("NewWaitPlayer");
+        when(newPlayer.isActive()).thenReturn(true);
+        when(newPlayer.getCurrentServer()).thenReturn(Optional.of(authConnection));
+        when(authConnection.getServer()).thenReturn(authServer);
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(forcedBackend.getServerInfo()).thenReturn(
+                new ServerInfo("forced", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(forcedBackend.ping()).thenReturn(
+                CompletableFuture.failedFuture(new IllegalStateException("initial outage")),
+                oldWaitSelection);
+        when(proxyServer.getServer("forced")).thenReturn(Optional.of(forcedBackend));
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of());
+        when(proxyServer.getAllServers()).thenReturn(List.of());
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(5L), eq(TimeUnit.SECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(oldWaitTask, newWaitTask, staleReschedule);
+
+        connectionManager.beginTransferSession(oldPlayer);
+        connectionManager.setForcedHostTarget(playerUuid, "forced");
+        assertTrue(connectionManager.transferToBackend(oldPlayer));
+        callbackCaptor.getAllValues().get(0).accept(oldWaitTask);
+
+        connectionManager.beginTransferSession(newPlayer);
+        assertTrue(connectionManager.transferToBackend(newPlayer));
+        oldWaitSelection.completeExceptionally(new IllegalStateException("still offline"));
+
+        verify(newWaitTask, never()).cancel();
+        verify(oldPlayer, never()).createConnectionRequest(forcedBackend);
+        verify(taskBuilder, times(2)).schedule();
+    }
+
+    @Test
+    void autoTransfer_RepeatedTriggers_ReplaceOnlySameOwnerTask() {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask oldFirstTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        ScheduledTask oldReplacementTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        ScheduledTask newTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        ScheduledTask staleOldTask = org.mockito.Mockito.mock(ScheduledTask.class);
+
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldAutoPlayer");
+        when(oldPlayer.getRemoteAddress()).thenReturn(new InetSocketAddress("127.0.0.1", 25565));
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(newPlayer.getUsername()).thenReturn("NewAutoPlayer");
+        when(newPlayer.getRemoteAddress()).thenReturn(new InetSocketAddress("127.0.0.1", 25565));
+        when(authCache.getAuthorizedPlayer(playerUuid)).thenReturn(new CachedAuthUser(
+                playerUuid, "AutoPlayer", "127.0.0.1", System.currentTimeMillis(), false, null));
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), org.mockito.ArgumentMatchers.<Consumer<ScheduledTask>>any()))
+                .thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(oldFirstTask, oldReplacementTask, newTask, staleOldTask);
+
+        connectionManager.beginTransferSession(oldPlayer);
+        connectionManager.autoTransferFromAuthServerToBackend(oldPlayer);
+        connectionManager.autoTransferFromAuthServerToBackend(oldPlayer);
+        verify(oldFirstTask).cancel();
+
+        connectionManager.beginTransferSession(newPlayer);
+        connectionManager.autoTransferFromAuthServerToBackend(newPlayer);
+        connectionManager.autoTransferFromAuthServerToBackend(oldPlayer);
+
+        verify(oldReplacementTask).cancel();
+        verify(newTask, never()).cancel();
+        verify(taskBuilder, times(3)).schedule();
+    }
+
+    @Test
     void findAvailableBackendForInitialConnectionShouldPreserveTryOrderAndExcludeAuthServer() {
         ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
         RegisteredServer firstBackend = org.mockito.Mockito.mock(RegisteredServer.class);
@@ -559,10 +790,12 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(taskBuilder.schedule()).thenReturn(scheduledTask);
 
         connectionManager.setForcedHostTarget(playerUuid, "forced");
+        connectionManager.beginTransferSession(player);
+        Object state = getMap("transferStates").get(playerUuid);
         Method scheduleRetry = ConnectionManager.class
-                .getDeclaredMethod("scheduleBackendWaitRetry", Player.class, int.class);
+                .getDeclaredMethod("scheduleBackendWaitRetry", Player.class, state.getClass(), int.class);
         scheduleRetry.setAccessible(true);
-        scheduleRetry.invoke(connectionManager, player, 1);
+        scheduleRetry.invoke(connectionManager, player, state, 1);
 
         CompletableFuture<Void> callback = CompletableFuture.runAsync(
                 () -> callbackCaptor.getValue().accept(scheduledTask));
@@ -580,30 +813,35 @@ class ConnectionManagerLifecycleIntegrationTest {
     @Test
     void shutdown_LateAsyncSchedule_ShouldNotPublishNewTask() throws Exception {
         Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
-        ConcurrentMap<UUID, ScheduledTask> lateTasks = new ConcurrentHashMap<>();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        UUID playerUuid = UUID.randomUUID();
+        AtomicReference<ScheduledTask> lateTask = new AtomicReference<>();
+        when(player.getUniqueId()).thenReturn(playerUuid);
         when(proxyServer.getScheduler()).thenReturn(scheduler);
+        connectionManager.beginTransferSession(player);
+        Object state = getMap("transferStates").get(playerUuid);
 
         connectionManager.shutdown();
 
         Method scheduleOwnedTask = ConnectionManager.class.getDeclaredMethod(
                 "scheduleOwnedTask",
-                ConcurrentMap.class,
-                UUID.class,
+                state.getClass(),
+                AtomicReference.class,
                 long.class,
                 TimeUnit.class,
                 Runnable.class);
         scheduleOwnedTask.setAccessible(true);
         scheduleOwnedTask.invoke(
                 connectionManager,
-                lateTasks,
-                UUID.randomUUID(),
+                state,
+                lateTask,
                 1L,
                 TimeUnit.SECONDS,
                 (Runnable) () -> {
                     throw new AssertionError("A task must not run after shutdown");
                 });
 
-        assertTrue(lateTasks.isEmpty());
+        assertNull(lateTask.get());
         verify(scheduler, never()).buildTask(
                 any(), org.mockito.ArgumentMatchers.<Consumer<ScheduledTask>>any());
     }
