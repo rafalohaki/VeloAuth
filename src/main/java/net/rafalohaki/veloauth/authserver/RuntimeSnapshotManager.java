@@ -2,8 +2,8 @@ package net.rafalohaki.veloauth.authserver;
 
 import org.slf4j.Logger;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
@@ -215,13 +215,18 @@ final class RuntimeSnapshotManager {
             return java.util.Optional.empty();
         }
         try {
-            if (Files.size(manifest) <= 0 || Files.size(manifest) > MAXIMUM_MANIFEST_BYTES) {
+            if (Files.size(manifest) <= 0) {
                 throw new IOException("runtime manifest has an invalid size");
             }
             Properties properties = new Properties();
-            try (InputStream input = Files.newInputStream(manifest)) {
-                properties.load(input);
+            byte[] content;
+            try (var input = Files.newInputStream(manifest)) {
+                content = RuntimeIo.readBounded(
+                        input,
+                        MAXIMUM_MANIFEST_BYTES,
+                        "runtime manifest has an invalid size");
             }
+            properties.load(new ByteArrayInputStream(content));
             if (!MANIFEST_KEYS.equals(properties.stringPropertyNames())
                     || !MANIFEST_FORMAT.equals(properties.getProperty("format"))) {
                 throw new IOException("runtime manifest has an unsupported format");

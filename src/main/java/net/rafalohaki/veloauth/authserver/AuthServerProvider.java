@@ -176,8 +176,10 @@ public final class AuthServerProvider implements AutoCloseable {
             }
         } catch (RuntimeException | LinkageError exception) {
             state.compareAndSet(State.STARTING, State.FAILED);
-            closeUnpublishedServer(unpublishedServer);
-            closeUnpublishedRuntime(unopenedRuntime);
+            RuntimeIo.closeSafely(
+                    unpublishedServer, logger, "unpublished embedded auth server");
+            RuntimeIo.closeSafely(
+                    unopenedRuntime, logger, "unpublished embedded protocol runtime");
             lifecycleLock.lock();
             try {
                 rollbackPartialStart();
@@ -368,28 +370,6 @@ public final class AuthServerProvider implements AutoCloseable {
         closeProtocolRuntime();
     }
 
-    private void closeUnpublishedServer(EmbeddedLimboServer server) {
-        if (server == null) {
-            return;
-        }
-        try {
-            server.close();
-        } catch (RuntimeException | LinkageError exception) {
-            logger.warn("Failed to close unpublished embedded auth server", exception);
-        }
-    }
-
-    private void closeUnpublishedRuntime(ProtocolRuntime runtime) {
-        if (runtime == null) {
-            return;
-        }
-        try {
-            runtime.close();
-        } catch (RuntimeException | LinkageError exception) {
-            logger.warn("Failed to close unpublished embedded protocol runtime", exception);
-        }
-    }
-
     private void unregisterOwnedServer() {
         ServerInfo serverInfo = ownedServerInfo;
         ownedServerInfo = null;
@@ -411,27 +391,13 @@ public final class AuthServerProvider implements AutoCloseable {
     private void closeEmbeddedServer() {
         EmbeddedLimboServer current = embeddedServer;
         embeddedServer = null;
-        if (current == null) {
-            return;
-        }
-        try {
-            current.close();
-        } catch (RuntimeException | LinkageError exception) {
-            logger.warn("Failed to close embedded auth server", exception);
-        }
+        RuntimeIo.closeSafely(current, logger, "embedded auth server");
     }
 
     private void closeProtocolRuntime() {
         ProtocolRuntime current = protocolRuntime;
         protocolRuntime = null;
-        if (current == null) {
-            return;
-        }
-        try {
-            current.close();
-        } catch (RuntimeException | LinkageError exception) {
-            logger.warn("Failed to close embedded protocol runtime", exception);
-        }
+        RuntimeIo.closeSafely(current, logger, "embedded protocol runtime");
     }
 
     public enum Preparation {

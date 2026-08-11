@@ -3,7 +3,6 @@ package net.rafalohaki.veloauth.authserver;
 import io.netty.channel.Channel;
 import org.slf4j.Logger;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -23,6 +22,7 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
     private static final String PRIVATE_BOOTSTRAP_PREFIX =
             "net.rafalohaki.veloauth.authserver.runtime.";
     private static final String PRIVATE_VIA_PREFIX = "com.viaversion.";
+    private static final int MAXIMUM_BOOTSTRAP_CLASS_BYTES = 1024 * 1024;
     private static final ReentrantLock RUNTIME_INITIALIZATION_LOCK = new ReentrantLock();
 
     private final RuntimeClassLoader classLoader;
@@ -381,9 +381,10 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
                 if (input == null) {
                     throw new ClassNotFoundException(name);
                 }
-                ByteArrayOutputStream output = new ByteArrayOutputStream();
-                input.transferTo(output);
-                byte[] bytecode = output.toByteArray();
+                byte[] bytecode = RuntimeIo.readBounded(
+                        input,
+                        MAXIMUM_BOOTSTRAP_CLASS_BYTES,
+                        "Embedded protocol runtime bootstrap class exceeds its maximum size");
                 return defineClass(name, bytecode, 0, bytecode.length);
             } catch (IOException e) {
                 throw new ClassNotFoundException(name, e);

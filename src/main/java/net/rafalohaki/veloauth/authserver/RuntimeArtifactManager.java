@@ -9,7 +9,6 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -89,7 +88,11 @@ final class RuntimeArtifactManager {
                 if (declaredLength > MAXIMUM_ARTIFACT_BYTES) {
                     throw new IOException("Protocol runtime exceeds the maximum allowed size");
                 }
-                copyBounded(body, temporary);
+                RuntimeIo.copyBounded(
+                        body,
+                        temporary,
+                        MAXIMUM_ARTIFACT_BYTES,
+                        "Protocol runtime exceeds the maximum allowed size");
             }
 
             RuntimeIo.applyOwnerOnlyPermissions(temporary);
@@ -104,22 +107,6 @@ final class RuntimeArtifactManager {
             return target;
         } finally {
             Files.deleteIfExists(temporary);
-        }
-    }
-
-    private static void copyBounded(InputStream input, Path target) throws IOException {
-        byte[] buffer = new byte[16 * 1024];
-        long total = 0;
-        try (var output = Files.newOutputStream(target,
-                StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            int read;
-            while ((read = input.read(buffer)) != -1) {
-                total += read;
-                if (total > MAXIMUM_ARTIFACT_BYTES) {
-                    throw new IOException("Protocol runtime exceeds the maximum allowed size");
-                }
-                output.write(buffer, 0, read);
-            }
         }
     }
 
