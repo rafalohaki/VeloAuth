@@ -146,13 +146,14 @@ an external release gate. If confirmed, bump the candidate to 1.5.1 everywhere b
 
 1. Stop the proxy and take restorable backups of the authentication database, backend player data,
    `config.yml`, `lang/`, and `velocity.toml`. Keep the previous 1.4 JAR and external-limbo profile.
-2. Test a copy first. Inventory passwordless legacy rows and distinguish the lineage-safe candidates:
-   `HASH` is null/blank and `PREMIUMUUID` is null or equal to `AUTH.UUID`. A passwordless row with a
-   different premium UUID is deliberately not auto-marked; hashed offline accounts are controls.
+2. Test a copy first. Inventory passwordless legacy rows and distinguish the lineage-safe eligible
+   shape: `HASH` is null/blank and `PREMIUMUUID` is null or equal to `AUTH.UUID`. A passwordless row
+   with a different premium UUID is deliberately ineligible; hashed offline accounts are controls.
 3. Start 1.5 against the copy and review the `VA-1501 legacy UUID preservation candidates=...,
-   marked=...` log. The idempotent backfill sets only `PRESERVE_UUID=true` for safe candidates and
-   records schema provenance version 2 after success. It does not rewrite account UUIDs, hashes,
-   IPs, TOTP values, registration dates or login dates.
+   marked=...` log. Those per-run counts include only eligible rows whose `PRESERVE_UUID` is null or
+   false; an already-true eligible row is not an outstanding candidate on a rerun. The idempotent
+   backfill sets only `PRESERVE_UUID=true` and records schema provenance version 2 after success. It
+   does not rewrite account UUIDs, hashes, IPs, TOTP values, registration dates or login dates.
 4. Existing configurations without `auth-server.mode` and freshly generated configurations both
    use `external`; an existing explicit `embedded` selection remains embedded. Files are not
    rewritten. The absent-key automatic-transfer delay changes from the historical 300 ms to 1500 ms;
@@ -658,9 +659,11 @@ changes automatically. Always test the exact lineage on a database and backend-p
 1. Stop LimboAuth on your backend servers
 2. Install VeloAuth on Velocity
 3. Configure VeloAuth to use the same database as LimboAuth
-4. Before startup, inventory passwordless rows. Only rows where `HASH` is null/blank and
-   `PREMIUMUUID` is null or equal to `AUTH.UUID` are lineage-safe automatic candidates
-5. Start Velocity and verify the migration candidate/marked counts before allowing players to connect
+4. Before startup, inventory passwordless rows. The lineage-safe eligible shape has `HASH` null/blank
+   and `PREMIUMUUID` null or equal to `AUTH.UUID`
+5. Start Velocity and verify the migration candidate/marked counts before allowing players to
+   connect. Only eligible rows whose `PRESERVE_UUID` is null or false are outstanding candidates on
+   that run; already-true rows are excluded on rerun
 
 Players who previously used LimboAuth's `/premium` keep the historical `AUTH.UUID` exposed to
 backend servers, while the Mojang-verified UUID is stored separately in `AUTH.PREMIUMUUID`.

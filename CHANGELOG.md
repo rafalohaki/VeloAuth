@@ -87,9 +87,10 @@ All notable user-visible changes to VeloAuth are documented in this file.
 - Removed the duplicate premium-cache cleanup thread; `AuthCache` already maintains the same cache
   on its bounded scheduler.
 - LimboAuth and early VeloAuth premium rows now receive the lineage-safe `PRESERVE_UUID` backfill
-  even when older schema provenance already exists. Only passwordless rows whose `PREMIUMUUID` is
-  null or equal to `AUTH.UUID` are marked; account UUIDs, hashes, IPs, TOTP data and timestamps are
-  not rewritten.
+  even when older schema provenance already exists. The eligible shape is a passwordless row whose
+  `PREMIUMUUID` is null or equal to `AUTH.UUID`; each run counts and marks only eligible rows whose
+  `PRESERVE_UUID` is null or false, so already-true rows are not repeat candidates. Account UUIDs,
+  hashes, IPs, TOTP data and timestamps are not rewritten.
 - Concurrent manual login, automatic transfer and retry callbacks now share one identity-owned
   backend connection slot, preventing duplicate Velocity `connect()` attempts for one player.
 - Backend results, auth fallback, timeout and wait callbacks from a replaced player connection can

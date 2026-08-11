@@ -6,11 +6,43 @@ DEFAULT_PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 TEST_MODE="${VELOAUTH_RELEASE_IDENTITY_TEST_MODE:-false}"
 PROJECT_OVERRIDE="${VELOAUTH_RELEASE_IDENTITY_PROJECT_DIR:-}"
 MAVEN_OVERRIDE="${VELOAUTH_RELEASE_IDENTITY_MAVEN:-}"
+TEMP_PARENT=""
+TEMP_PREFIX=""
+TEMP_DIR=""
 
 fail() {
   echo "$1" >&2
   exit 1
 }
+
+cleanup_temp_dir() {
+  local exit_status=$?
+  trap - EXIT
+  trap '' HUP INT TERM
+  if [[ -z "${TEMP_DIR}" ]]; then
+    exit "${exit_status}"
+  fi
+
+  local temp_suffix="${TEMP_DIR#"${TEMP_PREFIX}"}"
+  if [[ -z "${TEMP_PREFIX}" || "${TEMP_DIR}" != "${TEMP_PREFIX}${temp_suffix}" \
+      || ${#temp_suffix} -ne 6 || "${temp_suffix}" == */* || ! -d "${TEMP_DIR}" \
+      || -L "${TEMP_DIR}" || ! -O "${TEMP_DIR}" ]]; then
+    echo "Refusing to remove unsafe release identity temp directory: ${TEMP_DIR}" >&2
+    [[ ${exit_status} -ne 0 ]] || exit_status=1
+    exit "${exit_status}"
+  fi
+
+  if ! rm -rf -- "${TEMP_DIR}"; then
+    echo "Failed to remove release identity temp directory: ${TEMP_DIR}" >&2
+    [[ ${exit_status} -ne 0 ]] || exit_status=1
+  fi
+  exit "${exit_status}"
+}
+
+trap cleanup_temp_dir EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [[ "${TEST_MODE}" != true && ( -n "${PROJECT_OVERRIDE}" || -n "${MAVEN_OVERRIDE}" ) ]]; then
   fail "Test-only release identity overrides require VELOAUTH_RELEASE_IDENTITY_TEST_MODE=true"
@@ -44,9 +76,12 @@ require_command() {
 }
 
 require_command awk
+require_command chmod
 require_command find
 require_command javap
+require_command mktemp
 require_command python3
+require_command rm
 
 MAVEN_OUTPUT="$(
   "${MAVEN[@]}" -f "${PROJECT_DIR}/pom.xml" help:evaluate \
@@ -130,8 +165,38 @@ POM_VERSION="$(printf '%s\n' "${ARTIFACT_METADATA}" | sed -n '4p')"
 [[ "${POM_VERSION}" == "${PROJECT_VERSION}" ]] \
   || fail "Packaged Maven version mismatch: expected ${PROJECT_VERSION}, found ${POM_VERSION:-<empty>}"
 
+TEMP_PARENT="$(cd -- "${TMPDIR:-/tmp}" && pwd -P)" \
+  || fail "Unable to resolve the temporary directory"
+TEMP_PREFIX="${TEMP_PARENT%/}/veloauth-release-identity."
+TEMP_DIR="$(mktemp -d "${TEMP_PREFIX}XXXXXX")" \
+  || fail "Unable to create a release identity temp directory"
+chmod 700 "${TEMP_DIR}" || fail "Unable to make the release identity temp directory private"
+BUILD_CONSTANTS_FILE="${TEMP_DIR}/BuildConstants.class"
+python3 - "${CANDIDATE_JAR}" "${BUILD_CONSTANTS_FILE}" <<'PY' \
+  || fail "Failed to inspect packaged BuildConstants"
+import sys
+import zipfile
+
+artifact = sys.argv[1]
+target = sys.argv[2]
+entry_name = "net/rafalohaki/veloauth/BuildConstants.class"
+try:
+    with zipfile.ZipFile(artifact) as archive:
+        entries = [entry for entry in archive.infolist() if entry.filename == entry_name]
+        if len(entries) != 1 or entries[0].is_dir():
+            raise ValueError(f"expected exactly one file entry named {entry_name}")
+        if not 0 < entries[0].file_size <= 1_048_576:
+            raise ValueError(f"invalid {entry_name} size")
+        content = archive.read(entries[0])
+    with open(target, "xb") as stream:
+        stream.write(content)
+except (OSError, ValueError, zipfile.BadZipFile) as error:
+    print(f"Unreadable packaged BuildConstants: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+
 JAVAP_OUTPUT="$(
-  javap -classpath "${CANDIDATE_JAR}" -constants net.rafalohaki.veloauth.BuildConstants
+  javap -constants "${BUILD_CONSTANTS_FILE}"
 )" || fail "Failed to inspect packaged BuildConstants"
 BUILD_CONSTANTS_VERSION="$(
   printf '%s\n' "${JAVAP_OUTPUT}" \

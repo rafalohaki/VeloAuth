@@ -71,6 +71,16 @@ class ReleaseIdentityTest {
     }
 
     @Test
+    void verifier_ConsistentFixtureUnderColonPath_Succeeds() throws Exception {
+        Fixture fixture = createFixture(VERSION, "identity fixture [safe]: colon", validBuildConstants());
+
+        VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
+
+        assertEquals(0, result.exitCode(), result.output());
+        assertTrue(result.output().contains("Verified release identity 1.5.0 (v1.5.0)"), result.output());
+    }
+
+    @Test
     void verifier_MismatchedTag_FailsWithSpecificDiagnostic() throws Exception {
         Fixture fixture = createFixture(VERSION);
 
@@ -90,6 +100,27 @@ class ReleaseIdentityTest {
         assertEquals(1, result.exitCode(), result.output());
         assertTrue(result.output().contains(
                 "velocity-plugin.json version mismatch: expected 1.5.0, found 1.4.0"), result.output());
+    }
+
+    @Test
+    void verifier_MissingBuildConstants_FailsClosed() throws Exception {
+        Fixture fixture = createFixture(VERSION, "identity fixture [safe] missing class", null);
+
+        VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
+
+        assertEquals(1, result.exitCode(), result.output());
+        assertTrue(result.output().contains("Failed to inspect packaged BuildConstants"), result.output());
+    }
+
+    @Test
+    void verifier_MalformedBuildConstants_FailsClosed() throws Exception {
+        Fixture fixture = createFixture(VERSION, "identity fixture [safe] malformed class",
+                "not a Java class".getBytes(StandardCharsets.UTF_8));
+
+        VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
+
+        assertEquals(1, result.exitCode(), result.output());
+        assertTrue(result.output().contains("Failed to inspect packaged BuildConstants"), result.output());
     }
 
     @Test
@@ -174,9 +205,15 @@ class ReleaseIdentityTest {
     }
 
     private Fixture createFixture(String pluginMetadataVersion) throws Exception {
-        Path root = tempDir.resolve("identity fixture [safe]");
+        return createFixture(pluginMetadataVersion, "identity fixture [safe]", validBuildConstants());
+    }
+
+    private Fixture createFixture(
+            String pluginMetadataVersion, String rootName, byte[] buildConstantsContent) throws Exception {
+        Path root = tempDir.resolve(rootName);
         Path target = root.resolve("target");
         Files.createDirectories(target);
+        Path temporary = Files.createDirectory(root.resolve("temporary"));
         Files.writeString(root.resolve("pom.xml"), """
                 <project xmlns="http://maven.apache.org/POM/4.0.0">
                   <modelVersion>4.0.0</modelVersion>
@@ -207,15 +244,23 @@ class ReleaseIdentityTest {
         assertTrue(fakeMaven.toFile().setExecutable(true), "Fixture Maven command must be executable");
 
         Path jar = target.resolve("veloauth-1.5.0.jar");
-        writeFixtureJar(jar, pluginMetadataVersion);
+        writeFixtureJar(jar, pluginMetadataVersion, buildConstantsContent);
         String sha256 = sha256(jar);
         Path checksum = Path.of(jar + ".sha256");
         Files.writeString(checksum, sha256 + "  " + jar.getFileName() + "\n", StandardCharsets.UTF_8);
-        return new Fixture(root, fakeMaven, jar, checksum,
+        return new Fixture(root, temporary, fakeMaven, jar, checksum,
                 Path.of(jar + ".manifest.json"), sha256);
     }
 
-    private void writeFixtureJar(Path jarPath, String pluginMetadataVersion) throws IOException {
+    private static byte[] validBuildConstants() throws IOException {
+        try (InputStream input = BuildConstants.class.getResourceAsStream("BuildConstants.class")) {
+            assertNotNull(input, "Compiled BuildConstants.class fixture must be available");
+            return input.readAllBytes();
+        }
+    }
+
+    private void writeFixtureJar(
+            Path jarPath, String pluginMetadataVersion, byte[] buildConstantsContent) throws IOException {
         try (JarOutputStream jar = new JarOutputStream(Files.newOutputStream(jarPath))) {
             writeJarEntry(jar, "velocity-plugin.json", """
                     {"id":"veloauth","name":"VeloAuth","version":"%s",
@@ -226,9 +271,8 @@ class ReleaseIdentityTest {
                     groupId=net.rafalohaki.veloauth
                     version=1.5.0
                     """.getBytes(StandardCharsets.ISO_8859_1));
-            try (InputStream input = BuildConstants.class.getResourceAsStream("BuildConstants.class")) {
-                assertNotNull(input, "Compiled BuildConstants.class fixture must be available");
-                writeJarEntry(jar, BUILD_CONSTANTS_CLASS, input.readAllBytes());
+            if (buildConstantsContent != null) {
+                writeJarEntry(jar, BUILD_CONSTANTS_CLASS, buildConstantsContent);
             }
         }
     }
@@ -246,7 +290,12 @@ class ReleaseIdentityTest {
         processBuilder.environment().put("VELOAUTH_RELEASE_IDENTITY_TEST_MODE", "true");
         processBuilder.environment().put("VELOAUTH_RELEASE_IDENTITY_PROJECT_DIR", fixture.root().toString());
         processBuilder.environment().put("VELOAUTH_RELEASE_IDENTITY_MAVEN", fixture.maven().toString());
-        return runProcess(processBuilder);
+        processBuilder.environment().put("TMPDIR", fixture.temporary().toString());
+        VerificationResult result = runProcess(processBuilder);
+        try (var entries = Files.list(fixture.temporary())) {
+            assertEquals(0, entries.count(), "Verifier must clean every task-owned temporary directory");
+        }
+        return result;
     }
 
     private static VerificationResult runProcess(ProcessBuilder processBuilder) throws Exception {
@@ -334,7 +383,7 @@ class ReleaseIdentityTest {
     }
 
     private record Fixture(
-            Path root, Path maven, Path jar, Path checksum, Path manifest, String sha256) {
+            Path root, Path temporary, Path maven, Path jar, Path checksum, Path manifest, String sha256) {
     }
 
     private record VerificationResult(int exitCode, String output) {

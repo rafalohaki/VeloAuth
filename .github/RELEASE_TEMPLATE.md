@@ -38,9 +38,10 @@ wget https://github.com/rafalohaki/VeloAuth/releases/download/v{{VERSION}}/veloa
    version; if it did, choose a new version before tagging.
 2. Back up the VeloAuth database, backend player data, `config.yml`, external language files and
    `velocity.toml`; retain the previous 1.4 JAR and external-limbo profile.
-3. On a database copy, inventory LimboAuth/pre-1.4 passwordless rows. The automatic lineage-safe
-   candidates have null/blank `HASH` and `PREMIUMUUID` null/equal to `AUTH.UUID`; rows with a distinct
-   premium UUID and hashed offline accounts must not be auto-marked.
+3. On a database copy, inventory LimboAuth/pre-1.4 passwordless rows. The lineage-safe eligible shape
+   has null/blank `HASH` and `PREMIUMUUID` null/equal to `AUTH.UUID`; rows with a distinct premium UUID
+   and hashed offline accounts must not be auto-marked. Candidate/marked counts on a run further
+   require `PRESERVE_UUID` null/false, so already-true eligible rows are not rerun candidates.
 4. Run `mvnd clean verify pmd:cpd-check`,
    `./scripts/verify-release-identity.sh v{{VERSION}}`,
    `./scripts/verify-embedded-dependencies.sh`, `./scripts/test-velocity-embedded.sh`,
