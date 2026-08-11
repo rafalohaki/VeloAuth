@@ -68,6 +68,36 @@ class ReportGeneratorTest {
                 "Support metadata should show the effective premium routing policy");
     }
 
+    @Test
+    void generate_restartOnlyReload_exposesPendingGroupWithoutMisreportingActiveValue() throws Exception {
+        Path dataDirectory = createProxyLayout("normal log line");
+        Path configFile = dataDirectory.resolve("config.yml");
+        Files.writeString(configFile, """
+                connection:
+                  ping-timeout-ms: 3000
+                """);
+        Settings settings = new Settings(dataDirectory);
+        assertTrue(settings.load());
+        Files.writeString(configFile, """
+                connection:
+                  ping-timeout-ms: 4000
+                """);
+        assertTrue(settings.load());
+        VeloAuth plugin = pluginMock(dataDirectory);
+
+        ReportGenerator.ReportContent report = new ReportGenerator(plugin, settings).generate();
+
+        assertTrue(report.body().contains("Pending restart changes"));
+        assertTrue(report.body().contains("connection"));
+        assertTrue(report.metadata().stream().anyMatch(entry ->
+                entry.key().equals("ping_timeout_ms") && Integer.valueOf(3000).equals(entry.value())),
+                "Report metadata must describe the active connection settings");
+        assertTrue(report.metadata().stream().anyMatch(entry ->
+                entry.key().equals("pending_restart_changes")
+                        && "connection".equals(entry.value())),
+                "Report metadata must identify the valid configured change waiting for restart");
+    }
+
     private Path createProxyLayout(String logLine) throws Exception {
         Path dataDirectory = tempDir.resolve("plugins").resolve("veloauth");
         Files.createDirectories(dataDirectory);

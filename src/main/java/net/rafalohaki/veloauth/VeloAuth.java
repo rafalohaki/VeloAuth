@@ -38,6 +38,7 @@ import org.slf4j.Logger;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -465,9 +466,9 @@ public class VeloAuth {
     /**
      * Phase 3.5: Two-Factor (TOTP) services. Always instantiated — even when
      * {@code two-factor.enabled=false} — because {@code TotpService} is a stateless
-     * verifier and {@code PendingTotpStore} is cheap. The runtime check on
-     * {@link Settings.TwoFactorSettings#isEnabled()} lives at the call sites, so
-     * flipping the master switch off is the operator's intended kill-switch.
+     * verifier and {@code PendingTotpStore} is cheap. The complete two-factor tree is
+     * restart-scoped: call sites read the active startup snapshot, and reload records edits as
+     * pending until the next full proxy restart.
      */
     private void initializeTwoFactor() {
         Settings.TwoFactorSettings twoFactorSettings = settings.getTwoFactorSettings();
@@ -895,11 +896,11 @@ public class VeloAuth {
                 if (logger.isInfoEnabled()) {
                     logger.info(messages.get("config.reloaded_success"));
                 }
-                logger.warn("Changes to the following settings require a full server restart to take effect: "
-                        + "database, auth-server, premium-resolver, floodgate, brute-force, conflict-mode-ttl, cache, "
-                        + "session-timeout, premium-cache, connection pool, and rate-limiter settings. "
-                        + "Only premium core routing flags, bcrypt-cost, password-length, "
-                        + "ip-limit-registrations, debug, report, and language apply immediately.");
+                Set<String> pendingRestartChanges = settings.getPendingRestartChanges();
+                if (!pendingRestartChanges.isEmpty()) {
+                    logger.warn("Valid configuration changes pending a full restart: {}",
+                            String.join(", ", pendingRestartChanges));
+                }
                 logStartupInfo(0); // Pass 0 as duration for reload
                 return languageReloaded; // Return true only if both succeeded
             } else {

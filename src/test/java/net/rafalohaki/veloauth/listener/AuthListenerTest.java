@@ -124,9 +124,27 @@ class AuthListenerTest {
         when(logger.isDebugEnabled()).thenReturn(false);
         when(logger.isInfoEnabled()).thenReturn(false);
         when(settings.isPremiumCheckEnabled()).thenReturn(true);
+        when(settings.isAllowCrackedOnPremiumNicks()).thenReturn(false);
         when(settings.isPremiumBypassAuthServerEnabled()).thenReturn(false);
         when(settings.isFloodgateIntegrationEnabled()).thenReturn(false);
         when(settings.isFloodgateBypassAuthServerEnabled()).thenReturn(false);
+        when(settings.getFloodgateUsernamePrefix()).thenReturn(".");
+        when(settings.captureOperationSettings()).thenAnswer(ignored -> new Settings.OperationSettings(
+                new Settings.PasswordSettings(10, 3, 8, 72, new Settings.PasswordPolicy()),
+                new Settings.BruteForceSettings(5, 5, 168),
+                new Settings.PremiumSettings(
+                        settings.isPremiumCheckEnabled(),
+                        settings.isAllowCrackedOnPremiumNicks(),
+                        settings.isPremiumBypassAuthServerEnabled(),
+                        new Settings.PremiumResolverSettings()),
+                new Settings.FloodgateSettings(
+                        settings.isFloodgateIntegrationEnabled(),
+                        settings.getFloodgateUsernamePrefix(),
+                        settings.isFloodgateBypassAuthServerEnabled()),
+                new Settings.TwoFactorSettings(),
+                new Settings.ConnectionSettings(30, 3000, 1500),
+                new Settings.ReportSettings(true, false),
+                Set.of()));
         when(settings.getAuthServerName()).thenReturn("auth");
         when(connectionManager.getAuthServerName()).thenReturn("auth");
         when(connectionManager.resolveAuthServer()).thenAnswer(ignored -> proxyServer.getServer("auth"));
@@ -452,7 +470,7 @@ class AuthListenerTest {
     }
 
     @Test
-    void onServerPreConnect_premiumBypassRevokedWhileSelectingBackend_deniesFailSecure() {
+    void onServerPreConnect_premiumBypassReloadedWhileSelectingBackendUsesCapturedGeneration() {
         Player player = org.mockito.Mockito.mock(Player.class);
         RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
         RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
@@ -464,6 +482,8 @@ class AuthListenerTest {
         when(player.isActive()).thenReturn(true);
         when(authServer.getServerInfo()).thenReturn(
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
         when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
                 .thenReturn(pendingBackend);
         activateConnection(player);
@@ -474,8 +494,8 @@ class AuthListenerTest {
 
         assertNotNull(task);
         await(task);
-        assertFalse(event.getResult().isAllowed(),
-                "A bypass disabled during asynchronous selection must not route around auth");
+        assertSame(backendServer, event.getResult().getServer().orElse(null),
+                "One connection decision must use one captured settings generation");
     }
 
     @Test

@@ -132,6 +132,7 @@ class SimpleMessagesKeysTest {
             // Admin reload messages
             "admin.reload.success",
             "admin.reload.failed",
+            "admin.reload.pending_restart",
             // Kick messages
             "general.kick.message",
             // 2FA / TOTP keys (RFC 6238)

@@ -26,20 +26,27 @@ public final class ValidationUtils {
      * @return ValidationResult with validation status and message
      */
     public static ValidationResult validatePassword(String password, Settings settings, Messages messages) {
+        return validatePassword(password, settings.getPasswordSettings(), messages);
+    }
+
+    static ValidationResult validatePassword(
+            String password,
+            Settings.PasswordSettings passwordSettings,
+            Messages messages) {
         if (password == null || password.isEmpty()) {
             return ValidationResult.error(messages.get("validation.password.empty"));
         }
 
-        if (password.length() < settings.getMinPasswordLength()) {
+        if (password.length() < passwordSettings.minLength()) {
             return ValidationResult.error(messages.get(
                     "validation.password.too_short",
-                    settings.getMinPasswordLength()));
+                    passwordSettings.minLength()));
         }
 
-        if (password.length() > settings.getMaxPasswordLength()) {
+        if (password.length() > passwordSettings.maxLength()) {
             return ValidationResult.error(messages.get(
                     "validation.password.too_long",
-                    settings.getMaxPasswordLength()));
+                    passwordSettings.maxLength()));
         }
 
         int byteLength = password.getBytes(StandardCharsets.UTF_8).length;
@@ -49,7 +56,7 @@ public final class ValidationUtils {
                     byteLength));
         }
 
-        return validateComplexity(password, settings.getPasswordPolicy(), messages);
+        return validateComplexity(password, passwordSettings.policy(), messages);
     }
 
     private static ValidationResult validateComplexity(String password,

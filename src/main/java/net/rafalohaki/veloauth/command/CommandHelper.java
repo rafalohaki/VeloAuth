@@ -162,8 +162,16 @@ public final class CommandHelper {
      */
     public static boolean requireValidPassword(
             Player player, String password, Settings settings, Messages messages) {
+        return requireValidPassword(player, password, settings.getPasswordSettings(), messages);
+    }
+
+    static boolean requireValidPassword(
+            Player player,
+            String password,
+            Settings.PasswordSettings passwordSettings,
+            Messages messages) {
         ValidationUtils.ValidationResult result =
-                ValidationUtils.validatePassword(password, settings, messages);
+                ValidationUtils.validatePassword(password, passwordSettings, messages);
         if (!result.valid()) {
             player.sendMessage(messages.componentFromResolvedText(
                     result.getErrorMessage(), NamedTextColor.RED));

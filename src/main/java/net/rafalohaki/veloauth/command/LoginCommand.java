@@ -155,9 +155,9 @@ class LoginCommand implements SimpleCommand {
     }
 
     /**
-     * True iff the player has a TOTP secret AND the two-factor feature is currently enabled
-     * by configuration. The master switch is checked here on purpose: an operator who sets
-     * {@code two-factor.enabled=false} expects existing tokens to stop being enforced.
+     * True iff the player has a TOTP secret and the active startup snapshot enables two-factor.
+     * Reloaded two-factor edits remain pending until a full proxy restart, so one running process
+     * cannot change enforcement semantics underneath an authentication flow.
      */
     private boolean shouldRequireTotp(RegisteredPlayer dbPlayer) {
         if (!ctx.settings().getTwoFactorSettings().isEnabled()) {

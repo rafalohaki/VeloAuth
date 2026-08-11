@@ -29,7 +29,11 @@ public final class ReportService {
      * @return {@link ReportResult} with the public URL on success or an error message on failure
      */
     public ReportResult generateAndUpload() {
-        ReportGenerator.ReportContent content = generator.generate();
+        return generateAndUpload(generator.captureOperationSettings());
+    }
+
+    public ReportResult generateAndUpload(Settings.OperationSettings operationSettings) {
+        ReportGenerator.ReportContent content = generator.generate(operationSettings);
         McLogsClient.UploadResult upload = McLogsClient.upload(content.body(), content.metadata());
         if (upload.success()) {
             return ReportResult.success(upload.url());

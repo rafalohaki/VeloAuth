@@ -9,6 +9,7 @@ class TestValidationSettings extends Settings {
     private final int minLen;
     private final int maxLen;
     private final PasswordPolicy policy;
+    private boolean reportEnabled = true;
 
     TestValidationSettings(Path dataDirectory, int minLen, int maxLen) {
         this(dataDirectory, minLen, maxLen, 0, 0, 0, 0);
@@ -35,5 +36,28 @@ class TestValidationSettings extends Settings {
     @Override
     public PasswordPolicy getPasswordPolicy() {
         return policy;
+    }
+
+    @Override
+    public PasswordSettings getPasswordSettings() {
+        return new PasswordSettings(10, 3, minLen, maxLen, policy);
+    }
+
+    @Override
+    public OperationSettings captureOperationSettings() {
+        OperationSettings base = super.captureOperationSettings();
+        return new OperationSettings(
+                getPasswordSettings(),
+                base.bruteForce(),
+                base.premium(),
+                base.floodgate(),
+                base.twoFactor(),
+                base.connection(),
+                new ReportSettings(reportEnabled, base.report().includeLogs()),
+                base.pendingRestartChanges());
+    }
+
+    void setReportEnabledForTesting(boolean enabled) {
+        reportEnabled = enabled;
     }
 }

@@ -167,17 +167,24 @@ public class AuthListener {
         return "UUID mismatch";
     }
 
-    private boolean isFloodgatePlayer(Player player) {
-        return settings.isFloodgateIntegrationEnabled()
+    private static boolean isFloodgatePlayer(
+            Player player,
+            Settings.FloodgateSettings floodgateSettings) {
+        return floodgateSettings.isEnabled()
                 && FloodgateDetector.isBedrockPlayer(player.getUniqueId());
     }
 
-    private boolean shouldBypassAuthServer(Player player) {
-        return settings.isFloodgateBypassAuthServerEnabled() && isFloodgatePlayer(player);
+    private static boolean shouldBypassAuthServer(
+            Player player,
+            Settings.FloodgateSettings floodgateSettings) {
+        return floodgateSettings.isBypassAuthServer()
+                && isFloodgatePlayer(player, floodgateSettings);
     }
 
-    private boolean isFloodgatePreLogin(String username) {
-        return settings.isFloodgateIntegrationEnabled()
+    private static boolean isFloodgatePreLogin(
+            String username,
+            Settings.FloodgateSettings floodgateSettings) {
+        return floodgateSettings.isEnabled()
                 && FloodgateDetector.isBedrockUsername(username);
     }
 
@@ -243,6 +250,9 @@ public class AuthListener {
     @Subscribe(priority = Short.MAX_VALUE)
     public EventTask onPreLogin(PreLoginEvent event) {
         String username = event.getUsername();
+        Settings.OperationSettings operationSettings = settings.captureOperationSettings();
+        Settings.PremiumSettings premiumSettings = operationSettings.premium();
+        Settings.FloodgateSettings floodgateSettings = operationSettings.floodgate();
         String pendingLoginKey = createPendingLoginKey(event, username);
         PendingLoginAttempt pendingLoginAttempt = acquirePendingLogin(pendingLoginKey, event.getConnection());
         if (logger.isDebugEnabled()) {
@@ -262,26 +272,30 @@ public class AuthListener {
             return null;
         }
 
-        if (settings.isFloodgateIntegrationEnabled()) {
-            return EventTask.resumeWhenComplete(handleFloodgateAwarePreLoginAsync(event, username)
+        if (floodgateSettings.isEnabled()) {
+            return EventTask.resumeWhenComplete(handleFloodgateAwarePreLoginAsync(
+                    event, username, premiumSettings, floodgateSettings)
                     .whenComplete((result, throwable) ->
                             releasePendingLogin(pendingLoginKey, pendingLoginAttempt)));
         }
 
-        if (!settings.isPremiumCheckEnabled()) {
+        if (!premiumSettings.isCheckEnabled()) {
             logger.debug("Premium check disabled in config - forcing offline mode for {}", username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
             releasePendingLogin(pendingLoginKey, pendingLoginAttempt);
             return null;
         }
 
-        return EventTask.resumeWhenComplete(handlePremiumDetectionAsync(event, username)
+        return EventTask.resumeWhenComplete(handlePremiumDetectionAsync(event, username, premiumSettings)
                 .whenComplete((result, throwable) -> releasePendingLogin(pendingLoginKey, pendingLoginAttempt)));
     }
 
     private CompletableFuture<Void> handleFloodgateAwarePreLoginAsync(
-            PreLoginEvent event, String username) {
-        return isFloodgatePreLoginAsync(username)
+            PreLoginEvent event,
+            String username,
+            Settings.PremiumSettings premiumSettings,
+            Settings.FloodgateSettings floodgateSettings) {
+        return isFloodgatePreLoginAsync(username, floodgateSettings)
                 .thenCompose(floodgatePlayer -> {
                     // Floodgate has already authenticated the Bedrock connection and registered
                     // it during the encrypted handshake. This scan can be O(n), so it stays off
@@ -293,21 +307,23 @@ public class AuthListener {
                         event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
                         return CompletableFuture.completedFuture(null);
                     }
-                    if (!settings.isPremiumCheckEnabled()) {
+                    if (!premiumSettings.isCheckEnabled()) {
                         logger.debug("Premium check disabled in config - forcing offline mode for {}", username);
                         event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
                         return CompletableFuture.completedFuture(null);
                     }
-                    return handlePremiumDetectionAsync(event, username);
+                    return handlePremiumDetectionAsync(event, username, premiumSettings);
                 });
     }
 
-    private CompletableFuture<Boolean> isFloodgatePreLoginAsync(String username) {
-        if (!settings.isFloodgateIntegrationEnabled()) {
+    private CompletableFuture<Boolean> isFloodgatePreLoginAsync(
+            String username,
+            Settings.FloodgateSettings floodgateSettings) {
+        if (!floodgateSettings.isEnabled()) {
             return CompletableFuture.completedFuture(false);
         }
         return CompletableFuture.supplyAsync(
-                () -> isFloodgatePreLogin(username),
+                () -> isFloodgatePreLogin(username, floodgateSettings),
                 VirtualThreadExecutorProvider.getVirtualExecutor());
     }
 
@@ -408,10 +424,14 @@ public class AuthListener {
      * @param username Player username
      * @return CompletableFuture that completes when event result is set
      */
-    private CompletableFuture<Void> handlePremiumDetectionAsync(PreLoginEvent event, String username) {
+    private CompletableFuture<Void> handlePremiumDetectionAsync(
+            PreLoginEvent event,
+            String username,
+            Settings.PremiumSettings premiumSettings) {
         InetAddress sourceAddress = PlayerAddressUtils.getAddressFromPreLogin(event);
         return preLoginHandler.resolvePremiumStatusAsync(username, sourceAddress)
-                .thenCompose(result -> handlePremiumResolutionResult(event, username, result))
+                .thenCompose(result -> handlePremiumResolutionResult(
+                        event, username, result, premiumSettings))
                 .exceptionally(throwable -> {
                     logger.error(SECURITY_MARKER,
                             "[ASYNC] Error during premium detection for {} - denying login for safety",
@@ -423,14 +443,18 @@ public class AuthListener {
     }
 
     private CompletableFuture<Void> handlePremiumResolutionResult(
-            PreLoginEvent event, String username, PreLoginHandler.PremiumResolutionResult result) {
+            PreLoginEvent event,
+            String username,
+            PreLoginHandler.PremiumResolutionResult result,
+            Settings.PremiumSettings premiumSettings) {
         if (result == null) {
             denyLoginOnApiFailure(event, username);
             return CompletableFuture.completedFuture(null);
         }
 
         return databaseManager.findPlayerByNicknameOrPremiumUuidReadOnly(username, result.premiumUuid())
-                .thenAccept(dbResult -> applyPremiumDetectionResult(event, username, result, dbResult));
+                .thenAccept(dbResult -> applyPremiumDetectionResult(
+                        event, username, result, dbResult, premiumSettings));
     }
 
     private void denyLoginOnApiFailure(PreLoginEvent event, String username) {
@@ -444,7 +468,8 @@ public class AuthListener {
             PreLoginEvent event,
             String username,
             PreLoginHandler.PremiumResolutionResult result,
-            DbResult<RegisteredPlayer> dbResult) {
+            DbResult<RegisteredPlayer> dbResult,
+            Settings.PremiumSettings premiumSettings) {
         if (dbResult == null || dbResult.isDatabaseError()) {
             handlePremiumLookupDatabaseError(event, username, result.premium(), dbResult);
             return;
@@ -455,7 +480,7 @@ public class AuthListener {
         }
 
         boolean playerExistsInDb = dbResult.getValue() != null;
-        setPremiumLoginMode(event, username, result.premium(), playerExistsInDb);
+        setPremiumLoginMode(event, username, result.premium(), playerExistsInDb, premiumSettings);
     }
 
     private void handlePremiumLookupDatabaseError(
@@ -490,7 +515,12 @@ public class AuthListener {
         return true;
     }
 
-    private void setPremiumLoginMode(PreLoginEvent event, String username, boolean premium, boolean playerExistsInDb) {
+    private void setPremiumLoginMode(
+            PreLoginEvent event,
+            String username,
+            boolean premium,
+            boolean playerExistsInDb,
+            Settings.PremiumSettings premiumSettings) {
         if (!premium) {
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
             return;
@@ -501,7 +531,7 @@ public class AuthListener {
         // When that flag is set we skip Mojang session-server auth so a cracked client can
         // register the nickname first. Premium owners returning to a registered nick still
         // take the forceOnlineMode path below (their DB row matches their Mojang UUID).
-        if (!playerExistsInDb && settings.isAllowCrackedOnPremiumNicks()) {
+        if (!playerExistsInDb && premiumSettings.isAllowCrackedOnPremiumNicks()) {
             logger.warn(SECURITY_MARKER,
                     "[PREMIUM BYPASS] Forcing offline mode for premium nick {} (no DB record, allow-cracked-on-premium-nicks=true)",
                     username);
@@ -519,17 +549,21 @@ public class AuthListener {
      */
     @Subscribe(priority = Short.MAX_VALUE)
     public EventTask onGameProfileRequest(GameProfileRequestEvent event) {
-        if (!settings.isPremiumCheckEnabled() || !event.isOnlineMode()) {
+        Settings.OperationSettings operationSettings = settings.captureOperationSettings();
+        Settings.PremiumSettings premiumSettings = operationSettings.premium();
+        Settings.FloodgateSettings floodgateSettings = operationSettings.floodgate();
+        if (!premiumSettings.isCheckEnabled() || !event.isOnlineMode()) {
             return null;
         }
 
         UUID verifiedPremiumUuid = event.getOriginalProfile().getId();
-        if (verifiedPremiumUuid == null || isBedrockProfile(verifiedPremiumUuid)) {
+        if (verifiedPremiumUuid == null || isBedrockProfile(verifiedPremiumUuid, floodgateSettings)) {
             return null;
         }
 
         String bindingKey = profileBindingKey(event.getUsername(), event.getConnection());
-        CompletableFuture<Void> reconciliation = isFloodgatePreLoginAsync(event.getUsername())
+        CompletableFuture<Void> reconciliation = isFloodgatePreLoginAsync(
+                event.getUsername(), floodgateSettings)
                 .thenCompose(floodgatePlayer -> Boolean.TRUE.equals(floodgatePlayer)
                         ? CompletableFuture.completedFuture(null)
                         : reconcileVerifiedProfile(event, verifiedPremiumUuid, bindingKey));
@@ -557,8 +591,10 @@ public class AuthListener {
                 });
     }
 
-    private boolean isBedrockProfile(UUID profileUuid) {
-        return settings.isFloodgateIntegrationEnabled()
+    private static boolean isBedrockProfile(
+            UUID profileUuid,
+            Settings.FloodgateSettings floodgateSettings) {
+        return floodgateSettings.isEnabled()
                 && FloodgateDetector.isBedrockPlayer(profileUuid);
     }
 
@@ -821,12 +857,22 @@ public class AuthListener {
             RegisteredServer targetServer = event.getOriginalServer();
             String targetServerName = targetServer.getServerInfo().getName();
             RegisteredServer previousServer = event.getPreviousServer();
+            Settings.OperationSettings operationSettings = settings.captureOperationSettings();
+            Settings.PremiumSettings premiumSettings = operationSettings.premium();
+            Settings.FloodgateSettings floodgateSettings = operationSettings.floodgate();
 
             logger.debug("ServerPreConnectEvent for player {} -> server {}",
                     player.getUsername(), targetServerName);
 
             if (previousServer == null) {
-                return handleFirstConnection(event, player, targetServer, targetServerName, operation);
+                return handleFirstConnection(
+                        event,
+                        player,
+                        targetServer,
+                        targetServerName,
+                        premiumSettings,
+                        floodgateSettings,
+                        operation);
             }
 
             // ✅ JEŚLI TO AUTH SERVER - SPRAWDŹ DODATKOWO AUTORYZACJĘ
@@ -835,8 +881,8 @@ public class AuthListener {
             }
 
             // ✅ JEŚLI TO BACKEND - SPRAWDŹ AUTORYZACJĘ + SESJĘ + CACHE (async)
-            return EventTask.resumeWhenComplete(
-                    verifyBackendConnectionAsync(event, player, targetServerName, operation));
+            return EventTask.resumeWhenComplete(verifyBackendConnectionAsync(
+                    event, player, targetServerName, floodgateSettings, operation));
 
         } catch (RuntimeException e) {
             logger.error("Error in ServerPreConnect", e);
@@ -845,15 +891,20 @@ public class AuthListener {
         }
     }
 
-    private EventTask handleFirstConnection(ServerPreConnectEvent event, Player player,
-                                            RegisteredServer targetServer, String targetServerName,
-                                            Operation operation) {
+    private EventTask handleFirstConnection(
+            ServerPreConnectEvent event,
+            Player player,
+            RegisteredServer targetServer,
+            String targetServerName,
+            Settings.PremiumSettings premiumSettings,
+            Settings.FloodgateSettings floodgateSettings,
+            Operation operation) {
         boolean targetIsAuthServer = connectionManager.isAuthServer(targetServer);
 
-        if (shouldBypassAuthServerForPremium(player)) {
+        if (shouldBypassAuthServerForPremium(player, premiumSettings)) {
             if (targetIsAuthServer) {
                 return EventTask.resumeWhenComplete(selectInitialBackendAsync(
-                        event, player, () -> shouldBypassAuthServerForPremium(player),
+                        event, player, () -> shouldBypassAuthServerForPremium(player, premiumSettings),
                         PREMIUM_MARKER, "Premium", operation));
             }
             logger.info(PREMIUM_MARKER, "Premium player {} -> {} (skipping auth server)",
@@ -866,10 +917,10 @@ public class AuthListener {
         // Floodgate already authenticated the player via Xbox Live during the handshake
         // phase, before this event fires. Redirecting to limbo causes
         // ClientboundLevelChunkWithLightPacket translation failures in Geyser.
-        if (shouldBypassAuthServer(player)) {
+        if (shouldBypassAuthServer(player, floodgateSettings)) {
             if (targetIsAuthServer) {
                 return EventTask.resumeWhenComplete(selectInitialBackendAsync(
-                        event, player, () -> shouldBypassAuthServer(player),
+                        event, player, () -> shouldBypassAuthServer(player, floodgateSettings),
                         AUTH_MARKER, "Floodgate", operation));
             }
             logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
@@ -911,8 +962,10 @@ public class AuthListener {
         return null;
     }
 
-    private boolean shouldBypassAuthServerForPremium(Player player) {
-        return settings.isPremiumBypassAuthServerEnabled() && player.isOnlineMode();
+    private static boolean shouldBypassAuthServerForPremium(
+            Player player,
+            Settings.PremiumSettings premiumSettings) {
+        return premiumSettings.isBypassAuthServer() && player.isOnlineMode();
     }
 
     private CompletableFuture<Void> selectInitialBackendAsync(
@@ -996,13 +1049,16 @@ public class AuthListener {
     }
 
     private CompletableFuture<Void> verifyBackendConnectionAsync(
-            ServerPreConnectEvent event, Player player, String targetServerName,
+            ServerPreConnectEvent event,
+            Player player,
+            String targetServerName,
+            Settings.FloodgateSettings floodgateSettings,
             Operation operation) {
         if (!connectionLifecycleRegistry.isCurrent(operation)) {
             event.setResult(ServerPreConnectEvent.ServerResult.denied());
             return CompletableFuture.completedFuture(null);
         }
-        if (shouldBypassAuthServer(player)) {
+        if (shouldBypassAuthServer(player, floodgateSettings)) {
             logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
                     player.getUsername(), targetServerName);
             allowServerIfCurrent(event, event.getOriginalServer(), operation);

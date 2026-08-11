@@ -68,12 +68,14 @@ class CommandContext {
         this.settings = settings;
         this.messages = messages;
         this.logger = plugin.getLogger();
+        Settings.BruteForceSettings bruteForceSettings =
+                settings.captureOperationSettings().bruteForce();
         this.ipRateLimiter = new IPRateLimiter(
-                settings.getBruteForceMaxAttempts(),
-                settings.getBruteForceTimeoutMinutes());
+                bruteForceSettings.maxAttempts(),
+                bruteForceSettings.timeoutMinutes());
         authCache.setIpRateLimiter(this.ipRateLimiter);
         this.conflictModeService = new net.rafalohaki.veloauth.auth.ConflictModeService(
-                databaseManager, settings.getConflictModeTtlHours());
+                databaseManager, bruteForceSettings.conflictModeTtlHours());
         this.sm = new SimpleMessages(messages);
     }
 

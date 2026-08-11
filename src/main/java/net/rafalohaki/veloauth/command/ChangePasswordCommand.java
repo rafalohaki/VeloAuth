@@ -5,6 +5,7 @@ import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.util.SecurityUtils;
 import org.slf4j.Marker;
@@ -46,8 +47,9 @@ class ChangePasswordCommand implements SimpleCommand {
         Player player = inputs.player();
         String oldPassword = inputs.args()[0];
         String newPassword = inputs.args()[1];
+        var passwordSettings = ctx.settings().captureOperationSettings().password();
 
-        if (!CommandHelper.requireValidPassword(player, newPassword, ctx.settings(), ctx.messages())) {
+        if (!CommandHelper.requireValidPassword(player, newPassword, passwordSettings, ctx.messages())) {
             return;
         }
 
@@ -56,13 +58,15 @@ class ChangePasswordCommand implements SimpleCommand {
             return;
         }
         ctx.runAsyncCommand(player, operation,
-                () -> processPasswordChange(player, oldPassword, newPassword, operation),
+                () -> processPasswordChange(
+                        player, oldPassword, newPassword, operation, passwordSettings),
                 ERROR_DATABASE_QUERY);
     }
 
     private void processPasswordChange(
             Player player, String oldPassword, String newPassword,
-            ConnectionLifecycleRegistry.Operation operation) {
+            ConnectionLifecycleRegistry.Operation operation,
+            Settings.PasswordSettings passwordSettings) {
         if (!ctx.beginConnectionCommand(player, operation)) {
             return;
         }
@@ -77,7 +81,7 @@ class ChangePasswordCommand implements SimpleCommand {
                 return;
             }
 
-            if (!updatePassword(authCtx, newPassword)) {
+            if (!updatePassword(authCtx, newPassword, passwordSettings)) {
                 return;
             }
 
@@ -126,9 +130,12 @@ class ChangePasswordCommand implements SimpleCommand {
         return true;
     }
 
-    private boolean updatePassword(AuthenticationContext authCtx, String newPassword) {
+    private boolean updatePassword(
+            AuthenticationContext authCtx,
+            String newPassword,
+            Settings.PasswordSettings passwordSettings) {
         String newHashedPassword = BCrypt.with(BCrypt.Version.VERSION_2Y)
-                .hashToString(ctx.settings().getBcryptCost(), newPassword.toCharArray());
+                .hashToString(passwordSettings.bcryptCost(), newPassword.toCharArray());
         if (!ctx.isConnectionCurrent(authCtx.connectionOperation())) {
             return false;
         }

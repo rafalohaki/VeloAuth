@@ -44,7 +44,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * Master switch: when {@code two-factor.enabled=false}, every sub-command short-circuits to a
  * "disabled by configuration" message. The shutoff also propagates to {@link LoginCommand} so
- * existing tokens stop being enforced (operator's intended killswitch).
+ * existing tokens stop being enforced after the restart that activates the complete two-factor
+ * snapshot. Reload never changes TOTP enforcement in a running process.
  */
 class TwoFactorCommand implements SimpleCommand {
 

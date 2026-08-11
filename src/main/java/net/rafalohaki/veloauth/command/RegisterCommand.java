@@ -6,6 +6,7 @@ import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
@@ -49,8 +50,9 @@ class RegisterCommand implements SimpleCommand {
         Player player = inputs.player();
         String password = inputs.args()[0];
         String confirmPassword = inputs.args()[1];
+        var passwordSettings = ctx.settings().captureOperationSettings().password();
 
-        if (!CommandHelper.requireValidPassword(player, password, ctx.settings(), ctx.messages())
+        if (!CommandHelper.requireValidPassword(player, password, passwordSettings, ctx.messages())
                 || !CommandHelper.requirePasswordsMatch(player, password, confirmPassword, ctx.messages())) {
             return;
         }
@@ -60,18 +62,20 @@ class RegisterCommand implements SimpleCommand {
             return;
         }
         ctx.runAsyncCommandWithTimeout(player, operation,
-                () -> processRegistration(player, password, operation),
+                () -> processRegistration(player, password, operation, passwordSettings),
                 ERROR_DATABASE_QUERY, "auth.registration.timeout");
     }
 
     private void processRegistration(
             Player player, String password,
-            ConnectionLifecycleRegistry.Operation operation) {
+            ConnectionLifecycleRegistry.Operation operation,
+            Settings.PasswordSettings passwordSettings) {
         if (!ctx.beginConnectionCommand(player, operation)) {
             return;
         }
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
-        if (!canProceedWithoutAddress(player, playerAddress, operation)) {
+        if (!canProceedWithoutAddress(
+                player, playerAddress, operation, passwordSettings)) {
             return;
         }
         IpLockState ipLock = tryAcquireRegistrationIpLock(player, playerAddress, operation);
@@ -79,7 +83,8 @@ class RegisterCommand implements SimpleCommand {
             return;
         }
         try {
-            executeRegistrationFlow(player, password, playerAddress, operation);
+            executeRegistrationFlow(
+                    player, password, playerAddress, operation, passwordSettings);
         } catch (CompletionException e) {
             ctx.logger().error(DB_MARKER, "Database error during registration for player {}", player.getUsername(), e);
             ctx.runIfConnectionCurrent(operation, () -> ctx.sendDatabaseErrorMessage(player));
@@ -97,8 +102,9 @@ class RegisterCommand implements SimpleCommand {
     // if they accept that risk.
     private boolean canProceedWithoutAddress(
             Player player, InetAddress playerAddress,
-            ConnectionLifecycleRegistry.Operation operation) {
-        if (playerAddress != null || ctx.settings().getIpLimitRegistrations() <= 0) {
+            ConnectionLifecycleRegistry.Operation operation,
+            Settings.PasswordSettings passwordSettings) {
+        if (playerAddress != null || passwordSettings.ipLimitRegistrations() <= 0) {
             return true;
         }
         ctx.logger().warn(DB_MARKER,
@@ -134,7 +140,8 @@ class RegisterCommand implements SimpleCommand {
 
     private void executeRegistrationFlow(
             Player player, String password, InetAddress playerAddress,
-            ConnectionLifecycleRegistry.Operation operation) {
+            ConnectionLifecycleRegistry.Operation operation,
+            Settings.PasswordSettings passwordSettings) {
         if (ctx.rejectRateLimited(player, playerAddress, operation)) {
             return;
         }
@@ -151,7 +158,7 @@ class RegisterCommand implements SimpleCommand {
             return;
         }
 
-        if (exceedsIpRegistrationLimit(authContext)) {
+        if (exceedsIpRegistrationLimit(authContext, passwordSettings)) {
             ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> player.sendMessage(
                     ctx.messages().component("register.ip_limit_reached", NamedTextColor.RED)));
             return;
@@ -161,7 +168,7 @@ class RegisterCommand implements SimpleCommand {
             return;
         }
 
-        RegisteredPlayer newPlayer = buildNewPlayer(authContext, password);
+        RegisteredPlayer newPlayer = buildNewPlayer(authContext, password, passwordSettings);
         if (!persistNewPlayer(authContext, newPlayer)) {
             return;
         }
@@ -174,15 +181,20 @@ class RegisterCommand implements SimpleCommand {
         }
     }
 
-    private boolean exceedsIpRegistrationLimit(AuthenticationContext authContext) {
+    private boolean exceedsIpRegistrationLimit(
+            AuthenticationContext authContext,
+            Settings.PasswordSettings passwordSettings) {
         String playerIp = PlayerAddressUtils.getPlayerIp(authContext.player());
         long ipCount = ctx.databaseManager().countRegistrationsByIp(playerIp).join();
-        return ipCount >= ctx.settings().getIpLimitRegistrations();
+        return ipCount >= passwordSettings.ipLimitRegistrations();
     }
 
-    private RegisteredPlayer buildNewPlayer(AuthenticationContext authContext, String password) {
+    private RegisteredPlayer buildNewPlayer(
+            AuthenticationContext authContext,
+            String password,
+            Settings.PasswordSettings passwordSettings) {
         String hashedPassword = BCrypt.with(BCrypt.Version.VERSION_2Y)
-                .hashToString(ctx.settings().getBcryptCost(), password.toCharArray());
+                .hashToString(passwordSettings.bcryptCost(), password.toCharArray());
         return new RegisteredPlayer(
                 authContext.username(), hashedPassword,
                 PlayerAddressUtils.getPlayerIp(authContext.player()),

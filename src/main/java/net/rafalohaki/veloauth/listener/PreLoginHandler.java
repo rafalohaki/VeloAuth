@@ -90,7 +90,8 @@ public class PreLoginHandler {
     }
 
     private String stripFloodgatePrefix(String username) {
-        if (!settings.isFloodgateIntegrationEnabled()) {
+        Settings.FloodgateSettings floodgateSettings = settings.getFloodgateSettings();
+        if (!floodgateSettings.isEnabled()) {
             return username;
         }
 
@@ -98,7 +99,7 @@ public class PreLoginHandler {
         // compatibility fallback for startup and for deployments where the optional API cannot
         // be reached through the plugin classloader.
         String prefix = FloodgateDetector.getPlayerPrefix()
-                .orElse(settings.getFloodgateUsernamePrefix());
+                .orElse(floodgateSettings.getUsernamePrefix());
         if (prefix.isEmpty() || !username.startsWith(prefix)) {
             return username;
         }

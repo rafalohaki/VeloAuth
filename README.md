@@ -379,14 +379,13 @@ fails, the command reports failure although the new hot-reloadable config values
 live. Removing `premium.allow-cracked-on-premium-nicks` or `premium.bypass-auth-server` from a
 valid config restores the safe `false` default.
 
-The following values are intended to apply immediately: premium core routing flags, BCrypt cost,
-password length, registration IP limit, debug, report and language.
-Infrastructure captured during startup — database/pool, auth-server topology (including the
-embedded port and managed protocol runtime), premium-resolver
-limits and sources, Floodgate integration, connection tuning, password complexity policy,
-cache/session/brute-force lifetimes, audit retention and 2FA pending-store settings — requires a
-full proxy restart. When in doubt, restart the proxy after
-editing infrastructure settings; `/vauth reload` logs the effective boundary.
+Only premium core routing flags, debug, report controls and language apply immediately. All
+password and registration policy (BCrypt, length, complexity and per-IP limits) is restart-only.
+Database/pool, auth-server topology (including the embedded runtime), connection tuning,
+premium-resolver limits and sources, Floodgate, cache/session/brute-force policy, alerts, audit and
+the complete two-factor/TOTP tree also require a full proxy restart. A successful reload preserves
+those active values, validates and records the configured candidate, and reports the exact groups
+waiting for restart. Invalid candidates leave both active values and pending status unchanged.
 
 #### Diagnostic report (`/vauth report`)
 
@@ -394,6 +393,7 @@ editing infrastructure settings; `/vauth reload` logs the effective boundary.
 
 - **VeloAuth `config.yml`** — secrets redacted (`password`/`passwd`, webhook URLs, SSL passwords, API/access tokens, client secrets, forwarding secrets and connection-URL/query credentials → `<redacted>`)
 - **`velocity.toml`** — secrets redacted (same redaction rules)
+- **Active/pending settings status** — restart-only groups configured but not yet active
 - **Recent proxy logs (opt-in)** — omitted by default because logs can contain IPs, chat and third-party secrets. With `include-logs: true`, the tail of `logs/latest.log` is capped at 10 MiB and passed through local best-effort redaction before upload.
 - **Metadata** — VeloAuth/Velocity/Java versions, online-mode, server count, database type, ping timeout and effective premium routing flags (visible); active auth-server name/mode/client compatibility, try-list and backend names (hidden, without backend addresses).
 

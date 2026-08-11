@@ -81,6 +81,10 @@ class PreLoginHandlerTest {
         FloodgateApi.clear();
         when(settings.isFloodgateIntegrationEnabled()).thenReturn(true);
         when(settings.getFloodgateUsernamePrefix()).thenReturn(".");
+        when(settings.getFloodgateSettings()).thenAnswer(ignored -> new Settings.FloodgateSettings(
+                settings.isFloodgateIntegrationEnabled(),
+                settings.getFloodgateUsernamePrefix(),
+                false));
         when(databaseManager.findPlayerByNickname(org.mockito.ArgumentMatchers.anyString()))
                 .thenReturn(CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
 

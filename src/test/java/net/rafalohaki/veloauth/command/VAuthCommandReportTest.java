@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -108,12 +109,12 @@ class VAuthCommandReportTest {
         List<String> sent = capturedTexts(captor);
         assertTrue(sent.contains(expectedText("admin.report.disabled")),
                 () -> "Expected disabled message, got: " + sent);
-        verify(reportService, never()).generateAndUpload();
+        verify(reportService, never()).generateAndUpload(any(Settings.OperationSettings.class));
     }
 
     @Test
     void report_enabledAndUploadSucceeds_sendsSuccessWithUrl() {
-        when(reportService.generateAndUpload()).thenReturn(
+        when(reportService.generateAndUpload(any(Settings.OperationSettings.class))).thenReturn(
                 ReportService.ReportResult.success("https://mclo.gs/abc123"));
 
         VAuthCommand command = new VAuthCommand(ctx);
@@ -132,7 +133,7 @@ class VAuthCommandReportTest {
 
     @Test
     void report_enabledAndUploadFails_sendsFailureWithError() {
-        when(reportService.generateAndUpload()).thenReturn(
+        when(reportService.generateAndUpload(any(Settings.OperationSettings.class))).thenReturn(
                 ReportService.ReportResult.failure("HTTP 500: server error"));
 
         VAuthCommand command = new VAuthCommand(ctx);
@@ -199,13 +200,7 @@ class VAuthCommandReportTest {
     }
 
     private void setReportEnabled(boolean enabled) {
-        try {
-            Field field = Settings.class.getDeclaredField("reportEnabled");
-            field.setAccessible(true);
-            field.set(settings, enabled);
-        } catch (Exception e) {
-            throw new AssertionError("Failed to set reportEnabled", e);
-        }
+        ((TestValidationSettings) settings).setReportEnabledForTesting(enabled);
     }
 
     private void setExecutorShutdown(boolean shutdown) throws Exception {

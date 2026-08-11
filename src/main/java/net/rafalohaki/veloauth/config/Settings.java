@@ -11,25 +11,18 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * VeloAuth configuration with YAML support and validation.
  *
- * <p><b>Concurrency model:</b> the object is mutated in place by {@code reloadConfig()}
- * via {@link #load()}. Fields are split into two groups:
- * <ul>
- *   <li><b>Hot-reloadable</b> — marked {@code volatile}; read by event/command handlers
- *       that may run on a different thread than the reload. Visibility without
- *       atomicity across multiple fields is acceptable for these scalars because each
- *       is consumed independently (e.g. {@code bcryptCost} at one site,
- *       {@code minPasswordLength} at another).</li>
- *   <li><b>Requires restart</b> — plain (non-volatile) fields whose values are captured
- *       once into {@code final} holders at init time (e.g. {@code IPRateLimiter.maxAttempts},
- *       {@code AuthCache} TTLs, {@code ConnectionManager} pool sizes). Changing them in
- *       {@code config.yml} and reloading <em>will not</em> affect live behaviour; a full
- *       proxy restart is required. {@code VeloAuth.reloadConfig()} logs a warning to this
- *       effect.</li>
- * </ul>
+ * <p><b>Concurrency model:</b> a validated immutable generation is published through one
+ * volatile {@link Publication} reference. Reload retains restart-only values in the active
+ * generation, stores the complete valid candidate as configured state, and reports the differing
+ * groups through {@link #getPendingRestartChanges()}.
  *
  * <h2>Extracted Components</h2>
  * <ul>
@@ -45,75 +38,10 @@ public class Settings {
     private final Path dataDirectory;
     private final Path configFile;
     private final ObjectMapper yamlMapper;
-    private final PostgreSQLSettings postgreSQLSettings = new PostgreSQLSettings();
-    private final PremiumSettings premiumSettings = new PremiumSettings();
-    private final FloodgateSettings floodgateSettings = new FloodgateSettings();
-    private final AlertSettings alertSettings = new AlertSettings();
-    private final PasswordPolicy passwordPolicy = new PasswordPolicy();
-    private final AuditLogSettings auditLogSettings = new AuditLogSettings();
-    private final TwoFactorSettings twoFactorSettings = new TwoFactorSettings();
-    private final EmbeddedAuthServerSettings embeddedAuthServerSettings = new EmbeddedAuthServerSettings();
+    private final ReentrantLock loadLock = new ReentrantLock();
+    private volatile Publication publication = Publication.defaults();
     @SuppressWarnings("java:S2068")
     private static final String DEFAULT_DATABASE_NAME = "veloauth";
-    
-    // Database settings — requires restart (captured by DatabaseManager / HikariCP at init).
-    private String databaseStorageType = DatabaseType.H2.getName();
-    private String databaseHostname = "localhost";
-    private int databasePort = 3306;
-    private String databaseName = DEFAULT_DATABASE_NAME;
-    private String databaseUser = DEFAULT_DATABASE_NAME;
-    @SuppressWarnings("java:S2068")
-    private String databasePassword = "";
-    private String databaseConnectionUrl = null;
-    private String databaseConnectionParameters = "";
-    private int databaseConnectionPoolSize = 20;
-    private long databaseMaxLifetimeMillis = 1800000;
-    // Cache settings — requires restart (captured as final fields by AuthCache / SessionManager
-    // and Caffeine's expireAfterAccess at construction; reload does not rebuild them).
-    private int cacheTtlMinutes = 60;
-    private int cacheMaxSize = 10000;
-    private int cacheCleanupIntervalMinutes = 5;
-    private int sessionTimeoutMinutes = 60;
-    private int premiumTtlHours = 24;
-    private double premiumRefreshThreshold = 0.8;
-    // Auth server settings — requires restart (read by ConnectionManager / forced-hosts setup).
-    private String authServerMode = AuthServerMode.EXTERNAL.configValue;
-    private String authServerName = "limbo";
-    private int authServerTimeoutSeconds = 300;
-    // Connection settings — requires restart (captured by long-lived transfer paths).
-    private int connectionTimeoutSeconds = 30;
-    // Ping timeout (milliseconds) used for pre-transfer availability checks of
-    // auth-server, forced-host target and try-list/fallback backend servers.
-    // Heavy JVM backend servers (large heap, long GC pauses) may not answer a
-    // ping within the default 3000ms — raise this value to give them more room.
-    private int pingTimeoutMillis = 3000;
-    // Conservative dwell time on auth/limbo before an automatic backend transfer. This is an
-    // operator-controlled compatibility buffer, not a claim that a Velocity client event proves
-    // the remote game world has finished initializing.
-    private int autoTransferDelayMillis = 1500;
-    // Security settings — mixed:
-    //   brute-force-* captured as final by IPRateLimiter + AuthCache.BruteForceTracker at init
-    //   → requires restart.
-    //   bcryptCost / min-maxPasswordLength / ipLimitRegistrations read directly per command
-    //   → hot-reloadable (volatile).
-    private int bruteForceMaxAttempts = 5;
-    private int bruteForceTimeoutMinutes = 5;
-    private volatile int ipLimitRegistrations = 3;
-    private volatile int minPasswordLength = 8;
-    private volatile int maxPasswordLength = 72;
-    private volatile int bcryptCost = 10;
-    // CONFLICT_MODE TTL (hours). After this window, a stale conflict entry forces full UUID
-    // verification again. 0 = TTL disabled (permanent conflict, pre-1.3.3 behaviour).
-    // Requires restart — captured as a final field by ConflictModeService at init, so
-    // /vauth reload does NOT pick up changes (same lifecycle as brute-force-*).
-    private int conflictModeTtlHours = 168;
-    // Debug settings — hot-reloadable (volatile).
-    private volatile boolean debugEnabled = false;
-    // Report settings (/vauth report — uploads redacted config and optionally logs) — hot-reloadable.
-    private volatile boolean reportEnabled = true;
-    private volatile boolean reportIncludeLogs = false;
-    // Language settings — hot-reloadable (reloadLanguageFiles swaps the Messages instance).
-    private volatile String language = "en";
 
     /**
      * Creates a new Settings instance.
@@ -132,11 +60,11 @@ public class Settings {
         }
     }
 
-    private Settings(Settings source, SettingsLoader.LoadedState state) {
+    private Settings(Settings source, Snapshot snapshot) {
         this.dataDirectory = source.dataDirectory;
         this.configFile = source.configFile;
         this.yamlMapper = source.yamlMapper;
-        applyLoadedState(state);
+        this.publication = Publication.initial(snapshot);
     }
 
     /**
@@ -145,6 +73,7 @@ public class Settings {
      * @return true on success
      */
     public boolean load() {
+        loadLock.lock();
         try {
             if (!Files.exists(configFile)) {
                 logger.debug("Creating default config file: {}", configFile);
@@ -153,12 +82,21 @@ public class Settings {
 
             logger.debug("Loading configuration from: {}", configFile);
 
-            SettingsLoader.LoadedState loadedState = SettingsLoader.load(this, configFile, yamlMapper, logger);
-            Settings candidate = new Settings(this, loadedState);
+            Publication current = publication;
+            Snapshot loadedSnapshot = SettingsLoader.load(current.configured(), configFile, yamlMapper, logger);
+            Settings candidate = new Settings(this, loadedSnapshot);
             if (!candidate.validateLoadedConfig()) {
                 return false;
             }
-            applyLoadedState(SettingsLoader.LoadedState.from(candidate));
+            Snapshot configured = candidate.activeSnapshot();
+            Snapshot active = current.loaded()
+                    ? current.active().withHotValuesFrom(configured)
+                    : configured;
+            publication = new Publication(
+                    active,
+                    configured,
+                    pendingRestartChanges(active, configured),
+                    true);
 
             logger.debug("Configuration loaded successfully");
             return true;
@@ -175,6 +113,8 @@ public class Settings {
         } catch (IOException e) {
             logger.error("Error reading config file: {}", configFile, e);
             return false;
+        } finally {
+            loadLock.unlock();
         }
     }
 
@@ -196,241 +136,149 @@ public class Settings {
         }
     }
 
-    private void applyLoadedState(SettingsLoader.LoadedState state) {
-        databaseStorageType = state.databaseStorageType;
-        databaseHostname = state.databaseHostname;
-        databasePort = state.databasePort;
-        databaseName = state.databaseName;
-        databaseUser = state.databaseUser;
-        databasePassword = state.databasePassword;
-        databaseConnectionUrl = state.databaseConnectionUrl;
-        databaseConnectionParameters = state.databaseConnectionParameters;
-        databaseConnectionPoolSize = state.databaseConnectionPoolSize;
-        databaseMaxLifetimeMillis = state.databaseMaxLifetimeMillis;
-        cacheTtlMinutes = state.cacheTtlMinutes;
-        cacheMaxSize = state.cacheMaxSize;
-        cacheCleanupIntervalMinutes = state.cacheCleanupIntervalMinutes;
-        sessionTimeoutMinutes = state.sessionTimeoutMinutes;
-        premiumTtlHours = state.premiumTtlHours;
-        premiumRefreshThreshold = state.premiumRefreshThreshold;
-        authServerMode = state.authServerMode;
-        authServerName = state.authServerName;
-        authServerTimeoutSeconds = state.authServerTimeoutSeconds;
-        embeddedAuthServerSettings.copyFrom(state.embeddedAuthServerSettings);
-        connectionTimeoutSeconds = state.connectionTimeoutSeconds;
-        pingTimeoutMillis = state.pingTimeoutMillis;
-        autoTransferDelayMillis = state.autoTransferDelayMillis;
-        bcryptCost = state.bcryptCost;
-        bruteForceMaxAttempts = state.bruteForceMaxAttempts;
-        bruteForceTimeoutMinutes = state.bruteForceTimeoutMinutes;
-        ipLimitRegistrations = state.ipLimitRegistrations;
-        conflictModeTtlHours = state.conflictModeTtlHours;
-        minPasswordLength = state.minPasswordLength;
-        maxPasswordLength = state.maxPasswordLength;
-        debugEnabled = state.debugEnabled;
-        reportEnabled = state.reportEnabled;
-        reportIncludeLogs = state.reportIncludeLogs;
-        language = state.language;
-        copyPostgreSqlSettings(state.postgreSQLSettings);
-        copyPremiumSettings(state.premiumSettings);
-        copyFloodgateSettings(state.floodgateSettings);
-        copyAlertSettings(state.alertSettings);
-        copyPasswordPolicy(state.passwordPolicy);
-        copyAuditLogSettings(state.auditLogSettings);
-        copyTwoFactorSettings(state.twoFactorSettings);
-    }
-
-    private void copyAuditLogSettings(AuditLogSettings source) {
-        auditLogSettings.setEnabled(source.isEnabled());
-        auditLogSettings.setRetentionDays(source.getRetentionDays());
-    }
-
-    private void copyTwoFactorSettings(TwoFactorSettings source) {
-        twoFactorSettings.setEnabled(source.isEnabled());
-        twoFactorSettings.setIssuer(source.getIssuer());
-        twoFactorSettings.setQrLinkEnabled(source.isQrLinkEnabled());
-        twoFactorSettings.setPendingTimeoutSeconds(source.getPendingTimeoutSeconds());
-    }
-
-    private void copyPasswordPolicy(PasswordPolicy source) {
-        passwordPolicy.setMinDigits(source.getMinDigits());
-        passwordPolicy.setMinUppercase(source.getMinUppercase());
-        passwordPolicy.setMinLowercase(source.getMinLowercase());
-        passwordPolicy.setMinSpecial(source.getMinSpecial());
-    }
-
-    private void copyPostgreSqlSettings(PostgreSQLSettings source) {
-        postgreSQLSettings.setSslEnabled(source.isSslEnabled());
-        postgreSQLSettings.setSslMode(source.getSslMode());
-        postgreSQLSettings.setSslCert(source.getSslCert());
-        postgreSQLSettings.setSslKey(source.getSslKey());
-        postgreSQLSettings.setSslRootCert(source.getSslRootCert());
-        postgreSQLSettings.setSslPassword(source.getSslPassword());
-    }
-
-    private void copyPremiumSettings(PremiumSettings source) {
-        premiumSettings.setCheckEnabled(source.isCheckEnabled());
-        premiumSettings.setAllowCrackedOnPremiumNicks(source.isAllowCrackedOnPremiumNicks());
-        premiumSettings.setBypassAuthServer(source.isBypassAuthServer());
-        premiumSettings.getResolver().copyFrom(source.getResolver());
-    }
-
-    private void copyFloodgateSettings(FloodgateSettings source) {
-        floodgateSettings.setEnabled(source.isEnabled());
-        floodgateSettings.setUsernamePrefix(source.getUsernamePrefix());
-        floodgateSettings.setBypassAuthServer(source.isBypassAuthServer());
-    }
-
-    private void copyAlertSettings(AlertSettings source) {
-        alertSettings.setEnabled(source.isEnabled());
-        alertSettings.setDiscordEnabled(source.isDiscordEnabled());
-        alertSettings.setDiscordWebhookUrl(source.getDiscordWebhookUrl());
-        alertSettings.setFailureRateThreshold(source.getFailureRateThreshold());
-        alertSettings.setMinRequestsForAlert(source.getMinRequestsForAlert());
-        alertSettings.setCheckIntervalMinutes(source.getCheckIntervalMinutes());
-        alertSettings.setAlertCooldownMinutes(source.getAlertCooldownMinutes());
-    }
-
     // ===== Package-private mutation methods for validator =====
 
     void adjustMaxPasswordLength() {
-        maxPasswordLength = 72;
+        Snapshot adjusted = activeSnapshot().withMaximumPasswordLength(72);
+        publication = Publication.initial(adjusted);
     }
 
     void normalizeLanguage() {
+        String language = getLanguage();
         if (language == null || language.trim().isEmpty()) {
             logger.warn("Language setting is empty, using default 'en'");
-            language = "en";
+            publication = Publication.initial(activeSnapshot().withLanguage("en"));
             return;
         }
-        language = language.toLowerCase().trim();
-        logger.debug("Language setting: {} (will fall back to 'en' if file not found)", language);
+        String normalized = language.toLowerCase().trim();
+        publication = Publication.initial(activeSnapshot().withLanguage(normalized));
+        logger.debug("Language setting: {} (will fall back to 'en' if file not found)", normalized);
     }
 
     // ===== Getters =====
 
     public String getDatabaseStorageType() {
-        return databaseStorageType != null ? databaseStorageType : DatabaseType.H2.getName();
+        return activeSnapshot().database().storageType();
     }
 
     public String getDatabaseHostname() {
-        return databaseHostname != null ? databaseHostname : "localhost";
+        return activeSnapshot().database().hostname();
     }
 
     public int getDatabasePort() {
-        return databasePort;
+        return activeSnapshot().database().port();
     }
 
     public String getDatabaseName() {
-        return databaseName != null ? databaseName : DEFAULT_DATABASE_NAME;
+        return activeSnapshot().database().databaseName();
     }
 
     public String getDatabaseUser() {
-        return databaseUser != null ? databaseUser : DEFAULT_DATABASE_NAME;
+        return activeSnapshot().database().user();
     }
 
     public String getDatabasePassword() {
-        return databasePassword != null ? databasePassword : "";
+        return activeSnapshot().database().password();
     }
 
     public String getDatabaseConnectionUrl() {
-        return databaseConnectionUrl;
+        return activeSnapshot().database().connectionUrl();
     }
 
     public int getConnectionTimeoutSeconds() {
-        return connectionTimeoutSeconds;
+        return activeSnapshot().connection().timeoutSeconds();
     }
 
     public int getPingTimeoutMillis() {
-        return pingTimeoutMillis;
+        return activeSnapshot().connection().pingTimeoutMillis();
     }
 
     public int getAutoTransferDelayMillis() {
-        return autoTransferDelayMillis;
+        return activeSnapshot().connection().autoTransferDelayMillis();
     }
 
     public String getDatabaseConnectionParameters() {
-        return databaseConnectionParameters != null ? databaseConnectionParameters : "";
+        return activeSnapshot().database().connectionParameters();
     }
 
     public int getDatabaseConnectionPoolSize() {
-        return databaseConnectionPoolSize;
+        return activeSnapshot().database().connectionPoolSize();
     }
 
     public long getDatabaseMaxLifetimeMillis() {
-        return databaseMaxLifetimeMillis;
+        return activeSnapshot().database().maxLifetimeMillis();
     }
 
     public PostgreSQLSettings getPostgreSQLSettings() {
-        return postgreSQLSettings;
+        return activeSnapshot().database().postgreSql();
     }
 
     public int getCacheTtlMinutes() {
-        return cacheTtlMinutes;
+        return activeSnapshot().cache().ttlMinutes();
     }
 
     public int getCacheMaxSize() {
-        return cacheMaxSize;
+        return activeSnapshot().cache().maxSize();
     }
 
     public int getCacheCleanupIntervalMinutes() {
-        return cacheCleanupIntervalMinutes;
+        return activeSnapshot().cache().cleanupIntervalMinutes();
     }
 
     public int getSessionTimeoutMinutes() {
-        return sessionTimeoutMinutes;
+        return activeSnapshot().cache().sessionTimeoutMinutes();
     }
 
     public int getPremiumTtlHours() {
-        return premiumTtlHours;
+        return activeSnapshot().cache().premiumTtlHours();
     }
 
     public double getPremiumRefreshThreshold() {
-        return premiumRefreshThreshold;
+        return activeSnapshot().cache().premiumRefreshThreshold();
     }
 
     public String getAuthServerName() {
-        return authServerName != null ? authServerName : "limbo";
+        return activeSnapshot().authServer().serverName();
     }
 
     public AuthServerMode getAuthServerMode() {
-        return AuthServerMode.parse(authServerMode);
+        return AuthServerMode.parse(activeSnapshot().authServer().mode());
     }
 
     String getConfiguredAuthServerMode() {
-        return authServerMode;
+        return activeSnapshot().authServer().mode();
     }
 
     public EmbeddedAuthServerSettings getEmbeddedAuthServerSettings() {
-        return embeddedAuthServerSettings;
+        return activeSnapshot().authServer().embedded();
     }
 
     public int getAuthServerTimeoutSeconds() {
-        return authServerTimeoutSeconds;
+        return activeSnapshot().authServer().timeoutSeconds();
     }
 
     public int getBcryptCost() {
-        return bcryptCost;
+        return activeSnapshot().password().bcryptCost();
     }
 
     public int getBruteForceMaxAttempts() {
-        return bruteForceMaxAttempts;
+        return activeSnapshot().bruteForce().maxAttempts();
     }
 
     public int getBruteForceTimeoutMinutes() {
-        return bruteForceTimeoutMinutes;
+        return activeSnapshot().bruteForce().timeoutMinutes();
     }
 
     public int getIpLimitRegistrations() {
-        return ipLimitRegistrations;
+        return activeSnapshot().password().ipLimitRegistrations();
     }
 
     public int getMinPasswordLength() {
-        return minPasswordLength;
+        return activeSnapshot().password().minLength();
     }
 
     public int getMaxPasswordLength() {
-        return maxPasswordLength;
+        return activeSnapshot().password().maxLength();
     }
 
     /**
@@ -441,59 +289,63 @@ public class Settings {
      * @return TTL in hours, or {@code 0} to disable TTL-based conflict expiry
      */
     public int getConflictModeTtlHours() {
-        return conflictModeTtlHours;
+        return activeSnapshot().bruteForce().conflictModeTtlHours();
     }
 
     public PasswordPolicy getPasswordPolicy() {
-        return passwordPolicy;
+        return activeSnapshot().password().policy();
+    }
+
+    public PasswordSettings getPasswordSettings() {
+        return activeSnapshot().password();
     }
 
     public boolean isPremiumCheckEnabled() {
-        return premiumSettings.isCheckEnabled();
+        return activeSnapshot().premium().isCheckEnabled();
     }
 
     public boolean isAllowCrackedOnPremiumNicks() {
-        return premiumSettings.isAllowCrackedOnPremiumNicks();
+        return activeSnapshot().premium().isAllowCrackedOnPremiumNicks();
     }
 
     public boolean isPremiumBypassAuthServerEnabled() {
-        return premiumSettings.isBypassAuthServer();
+        return activeSnapshot().premium().isBypassAuthServer();
     }
 
     public PremiumResolverSettings getPremiumResolverSettings() {
-        return premiumSettings.getResolver();
+        return activeSnapshot().premium().getResolver();
     }
 
     public PremiumSettings getPremiumSettings() {
-        return premiumSettings;
+        return activeSnapshot().premium();
     }
 
     public boolean isFloodgateIntegrationEnabled() {
-        return floodgateSettings.isEnabled();
+        return activeSnapshot().floodgate().isEnabled();
     }
 
     public String getFloodgateUsernamePrefix() {
-        return floodgateSettings.getUsernamePrefix();
+        return activeSnapshot().floodgate().getUsernamePrefix();
     }
 
     public boolean isFloodgateBypassAuthServerEnabled() {
-        return floodgateSettings.isBypassAuthServer();
+        return activeSnapshot().floodgate().isBypassAuthServer();
     }
 
     public FloodgateSettings getFloodgateSettings() {
-        return floodgateSettings;
+        return activeSnapshot().floodgate();
     }
 
     public boolean isDebugEnabled() {
-        return debugEnabled;
+        return activeSnapshot().hot().debugEnabled();
     }
 
     public boolean isReportEnabled() {
-        return reportEnabled;
+        return activeSnapshot().hot().reportEnabled();
     }
 
     public boolean isReportIncludeLogs() {
-        return reportIncludeLogs;
+        return activeSnapshot().hot().reportIncludeLogs();
     }
 
     public Path getDataDirectory() {
@@ -505,19 +357,47 @@ public class Settings {
     }
 
     public String getLanguage() {
-        return language;
+        return activeSnapshot().hot().language();
     }
 
     public AlertSettings getAlertSettings() {
-        return alertSettings;
+        return activeSnapshot().alerts();
     }
 
     public AuditLogSettings getAuditLogSettings() {
-        return auditLogSettings;
+        return activeSnapshot().auditLog();
     }
 
     public TwoFactorSettings getTwoFactorSettings() {
-        return twoFactorSettings;
+        return activeSnapshot().twoFactor();
+    }
+
+    public Set<String> getPendingRestartChanges() {
+        return publication.pendingRestartChanges();
+    }
+
+    public boolean hasPendingRestartChanges() {
+        return !getPendingRestartChanges().isEmpty();
+    }
+
+    /** Captures related command/auth settings and pending status from one publication. */
+    public OperationSettings captureOperationSettings() {
+        Publication current = publication;
+        Snapshot active = current.active();
+        HotSettings hot = active.hot();
+        return new OperationSettings(
+                active.password(),
+                active.bruteForce(),
+                active.premium(),
+                active.floodgate(),
+                active.twoFactor(),
+                active.connection(),
+                new ReportSettings(hot.reportEnabled(), hot.reportIncludeLogs()),
+                current.pendingRestartChanges());
+    }
+
+    private Snapshot activeSnapshot() {
+        return publication.active();
     }
 
     // ===== Inner Settings Classes =====
@@ -554,234 +434,195 @@ public class Settings {
      * Restart-required embedded auth-server settings. The network address is deliberately not
      * configurable: the implementation always binds to the IP loopback interface.
      */
-    public static final class EmbeddedAuthServerSettings {
+    public record EmbeddedAuthServerSettings(
+            int port,
+            int maxConnections,
+            int handshakeTimeoutSeconds,
+            int loginTimeoutSeconds) {
         static final int DEFAULT_PORT = 0;
         static final int DEFAULT_MAX_CONNECTIONS = 512;
         static final int DEFAULT_HANDSHAKE_TIMEOUT_SECONDS = 10;
         static final int DEFAULT_LOGIN_TIMEOUT_SECONDS = 15;
 
-        private int port = DEFAULT_PORT;
-        private int maxConnections = DEFAULT_MAX_CONNECTIONS;
-        private int handshakeTimeoutSeconds = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS;
-        private int loginTimeoutSeconds = DEFAULT_LOGIN_TIMEOUT_SECONDS;
-
+        public EmbeddedAuthServerSettings() {
+            this(DEFAULT_PORT, DEFAULT_MAX_CONNECTIONS,
+                    DEFAULT_HANDSHAKE_TIMEOUT_SECONDS, DEFAULT_LOGIN_TIMEOUT_SECONDS);
+        }
         public int getPort() { return port; }
-        void setPort(int value) { port = value; }
         public int getMaxConnections() { return maxConnections; }
-        void setMaxConnections(int value) { maxConnections = value; }
         public int getHandshakeTimeoutSeconds() { return handshakeTimeoutSeconds; }
-        void setHandshakeTimeoutSeconds(int value) { handshakeTimeoutSeconds = value; }
         public int getLoginTimeoutSeconds() { return loginTimeoutSeconds; }
-        void setLoginTimeoutSeconds(int value) { loginTimeoutSeconds = value; }
-
-        void resetToDefaults() {
-            port = DEFAULT_PORT;
-            maxConnections = DEFAULT_MAX_CONNECTIONS;
-            handshakeTimeoutSeconds = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS;
-            loginTimeoutSeconds = DEFAULT_LOGIN_TIMEOUT_SECONDS;
-        }
-
-        void copyFrom(EmbeddedAuthServerSettings source) {
-            port = source.port;
-            maxConnections = source.maxConnections;
-            handshakeTimeoutSeconds = source.handshakeTimeoutSeconds;
-            loginTimeoutSeconds = source.loginTimeoutSeconds;
-        }
     }
 
     /**
      * Resolver-specific configuration mapped from premium.resolver.
      */
-    public static class PremiumResolverSettings {
-        private boolean mojangEnabled = true;
-        private boolean ashconEnabled = true;
-        private boolean wpmeEnabled = false;
-        private int requestTimeoutMs = 3000;
-        private int hitTtlMinutes = 30;
-        private int missTtlMinutes = 10;
-        private boolean caseSensitive = true;
-        private int memoryCacheMaxSize = 10_000;
-        private int maxLookupsPerIpPerMinute = 30;
-        private int maxConcurrentLookups = 32;
-
-        public boolean isMojangEnabled() { return mojangEnabled; }
-        void setMojangEnabled(boolean value) { this.mojangEnabled = value; }
-        public boolean isAshconEnabled() { return ashconEnabled; }
-        void setAshconEnabled(boolean value) { this.ashconEnabled = value; }
-        public boolean isWpmeEnabled() { return wpmeEnabled; }
-        void setWpmeEnabled(boolean value) { this.wpmeEnabled = value; }
-        public int getRequestTimeoutMs() { return requestTimeoutMs; }
-        void setRequestTimeoutMs(int value) { this.requestTimeoutMs = value; }
-        public int getHitTtlMinutes() { return hitTtlMinutes; }
-        void setHitTtlMinutes(int value) { this.hitTtlMinutes = value; }
-        public int getMissTtlMinutes() { return missTtlMinutes; }
-        void setMissTtlMinutes(int value) { this.missTtlMinutes = value; }
-        public boolean isCaseSensitive() { return caseSensitive; }
-        void setCaseSensitive(boolean value) { this.caseSensitive = value; }
-        public int getMemoryCacheMaxSize() { return memoryCacheMaxSize; }
-        void setMemoryCacheMaxSize(int value) { this.memoryCacheMaxSize = value; }
-        public int getMaxLookupsPerIpPerMinute() { return maxLookupsPerIpPerMinute; }
-        void setMaxLookupsPerIpPerMinute(int value) { this.maxLookupsPerIpPerMinute = value; }
-        public int getMaxConcurrentLookups() { return maxConcurrentLookups; }
-        void setMaxConcurrentLookups(int value) { this.maxConcurrentLookups = value; }
-
-        void copyFrom(PremiumResolverSettings source) {
-            this.mojangEnabled = source.mojangEnabled;
-            this.ashconEnabled = source.ashconEnabled;
-            this.wpmeEnabled = source.wpmeEnabled;
-            this.requestTimeoutMs = source.requestTimeoutMs;
-            this.hitTtlMinutes = source.hitTtlMinutes;
-            this.missTtlMinutes = source.missTtlMinutes;
-            this.caseSensitive = source.caseSensitive;
-            this.memoryCacheMaxSize = source.memoryCacheMaxSize;
-            this.maxLookupsPerIpPerMinute = source.maxLookupsPerIpPerMinute;
-            this.maxConcurrentLookups = source.maxConcurrentLookups;
+    public record PremiumResolverSettings(
+            boolean mojangEnabled,
+            boolean ashconEnabled,
+            boolean wpmeEnabled,
+            int requestTimeoutMs,
+            int hitTtlMinutes,
+            int missTtlMinutes,
+            boolean caseSensitive,
+            int memoryCacheMaxSize,
+            int maxLookupsPerIpPerMinute,
+            int maxConcurrentLookups) {
+        public PremiumResolverSettings() {
+            this(true, true, false, 3000, 30, 10, true, 10_000, 30, 32);
         }
+        public boolean isMojangEnabled() { return mojangEnabled; }
+        public boolean isAshconEnabled() { return ashconEnabled; }
+        public boolean isWpmeEnabled() { return wpmeEnabled; }
+        public int getRequestTimeoutMs() { return requestTimeoutMs; }
+        public int getHitTtlMinutes() { return hitTtlMinutes; }
+        public int getMissTtlMinutes() { return missTtlMinutes; }
+        public boolean isCaseSensitive() { return caseSensitive; }
+        public int getMemoryCacheMaxSize() { return memoryCacheMaxSize; }
+        public int getMaxLookupsPerIpPerMinute() { return maxLookupsPerIpPerMinute; }
+        public int getMaxConcurrentLookups() { return maxConcurrentLookups; }
     }
 
     /**
      * PostgreSQL-specific database configuration.
      */
-    public static class PostgreSQLSettings {
-        private boolean sslEnabled = true;
-        private String sslMode = "require";
-        private String sslCert = "";
-        @SuppressWarnings("java:S2068")
-        private String sslKey = "";
-        private String sslRootCert = "";
-        @SuppressWarnings("java:S2068")
-        private String sslPassword = "";
-        
+    public record PostgreSQLSettings(
+            boolean sslEnabled,
+            String sslMode,
+            String sslCert,
+            String sslKey,
+            String sslRootCert,
+            String sslPassword) {
+        public PostgreSQLSettings() {
+            this(true, "require", "", "", "", "");
+        }
         public boolean isSslEnabled() { return sslEnabled; }
-        void setSslEnabled(boolean value) { this.sslEnabled = value; }
         public String getSslMode() { return sslMode; }
-        void setSslMode(String value) { this.sslMode = value; }
         public String getSslCert() { return sslCert; }
-        void setSslCert(String value) { this.sslCert = value; }
         public String getSslKey() { return sslKey; }
-        void setSslKey(String value) { this.sslKey = value; }
         public String getSslRootCert() { return sslRootCert; }
-        void setSslRootCert(String value) { this.sslRootCert = value; }
         public String getSslPassword() { return sslPassword; }
-        void setSslPassword(String value) { this.sslPassword = value; }
     }
 
     /**
      * Premium account detection configuration.
      */
-    public static class PremiumSettings {
-        private final PremiumResolverSettings resolver = new PremiumResolverSettings();
-        private volatile boolean checkEnabled = true;
-        private volatile boolean allowCrackedOnPremiumNicks = false;
-        private volatile boolean bypassAuthServer = false;
-
+    public record PremiumSettings(
+            boolean checkEnabled,
+            boolean allowCrackedOnPremiumNicks,
+            boolean bypassAuthServer,
+            PremiumResolverSettings resolver) {
+        public PremiumSettings() {
+            this(true, false, false, new PremiumResolverSettings());
+        }
         public boolean isCheckEnabled() { return checkEnabled; }
-        void setCheckEnabled(boolean value) { this.checkEnabled = value; }
         public boolean isAllowCrackedOnPremiumNicks() { return allowCrackedOnPremiumNicks; }
-        void setAllowCrackedOnPremiumNicks(boolean value) { this.allowCrackedOnPremiumNicks = value; }
         public boolean isBypassAuthServer() { return bypassAuthServer; }
-        void setBypassAuthServer(boolean value) { this.bypassAuthServer = value; }
         public PremiumResolverSettings getResolver() { return resolver; }
+
+        PremiumSettings withHotValuesFrom(PremiumSettings configured) {
+            return new PremiumSettings(
+                    configured.checkEnabled,
+                    configured.allowCrackedOnPremiumNicks,
+                    configured.bypassAuthServer,
+                    resolver);
+        }
     }
 
     /**
      * Floodgate integration configuration.
      */
-    public static class FloodgateSettings {
-        private boolean enabled = false;
-        private String usernamePrefix = ".";
-        private boolean bypassAuthServer = true;
+    public record FloodgateSettings(boolean enabled, String usernamePrefix, boolean bypassAuthServer) {
+        public FloodgateSettings() {
+            this(false, ".", true);
+        }
 
+        public FloodgateSettings {
+            usernamePrefix = usernamePrefix == null ? "." : usernamePrefix;
+        }
         public boolean isEnabled() { return enabled; }
-        void setEnabled(boolean value) { this.enabled = value; }
-        public String getUsernamePrefix() { return usernamePrefix != null ? usernamePrefix : "."; }
-        void setUsernamePrefix(String value) { this.usernamePrefix = value != null ? value : "."; }
+        public String getUsernamePrefix() { return usernamePrefix; }
         public boolean isBypassAuthServer() { return bypassAuthServer; }
-        void setBypassAuthServer(boolean value) { this.bypassAuthServer = value; }
     }
 
     /**
      * Alert system configuration for Discord webhooks.
      */
-    public static class AlertSettings {
-        private boolean enabled = false;
-        private boolean discordEnabled = false;
-        private String discordWebhookUrl = "";
-        private double failureRateThreshold = 0.5;
-        private int minRequestsForAlert = 10;
-        private int checkIntervalMinutes = 5;
-        private int alertCooldownMinutes = 30;
-
+    public record AlertSettings(
+            boolean enabled,
+            boolean discordEnabled,
+            String discordWebhookUrl,
+            double failureRateThreshold,
+            int minRequestsForAlert,
+            int checkIntervalMinutes,
+            int alertCooldownMinutes) {
+        public AlertSettings() {
+            this(false, false, "", 0.5, 10, 5, 30);
+        }
         public boolean isEnabled() { return enabled; }
-        void setEnabled(boolean value) { this.enabled = value; }
         public boolean isDiscordEnabled() { return discordEnabled; }
-        void setDiscordEnabled(boolean value) { this.discordEnabled = value; }
         public String getDiscordWebhookUrl() { return discordWebhookUrl; }
-        void setDiscordWebhookUrl(String value) { this.discordWebhookUrl = value; }
         public double getFailureRateThreshold() { return failureRateThreshold; }
-        void setFailureRateThreshold(double value) { this.failureRateThreshold = value; }
         public int getMinRequestsForAlert() { return minRequestsForAlert; }
-        void setMinRequestsForAlert(int value) { this.minRequestsForAlert = value; }
         public int getCheckIntervalMinutes() { return checkIntervalMinutes; }
-        void setCheckIntervalMinutes(int value) { this.checkIntervalMinutes = value; }
         public int getAlertCooldownMinutes() { return alertCooldownMinutes; }
-        void setAlertCooldownMinutes(int value) { this.alertCooldownMinutes = value; }
     }
 
     /**
      * Audit log persistence configuration. Default enabled with 90-day retention.
      * Disabling stops both writes and the cleanup scheduler.
      */
-    public static class AuditLogSettings {
-        private boolean enabled = true;
-        private int retentionDays = 90;
-
+    public record AuditLogSettings(boolean enabled, int retentionDays) {
+        public AuditLogSettings() {
+            this(true, 90);
+        }
         public boolean isEnabled() { return enabled; }
-        void setEnabled(boolean value) { this.enabled = value; }
         public int getRetentionDays() { return retentionDays; }
-        void setRetentionDays(int value) { this.retentionDays = value; }
     }
 
     /**
-     * 2FA / TOTP configuration. Opt-in per player; {@code enabled=false} disables
-     * the entire feature (existing TOTP tokens stop being enforced and {@code /2fa setup}
-     * is rejected). Backward-compatible with LimboAuth's {@code TOTPTOKEN} column
+     * Restart-only 2FA / TOTP configuration. Opt-in per player; once activated by a restart,
+     * {@code enabled=false} disables the entire feature (existing TOTP tokens stop being enforced
+     * and {@code /2fa setup} is rejected). Backward-compatible with LimboAuth's {@code TOTPTOKEN} column
      * because we use the same RFC 6238 parameter set as every other authenticator app.
      */
-    public static class TwoFactorSettings {
-        private boolean enabled = true;
-        private String issuer = "VeloAuth";
-        private boolean qrLinkEnabled = false;
-        private int pendingTimeoutSeconds = 300;
+    public record TwoFactorSettings(
+            boolean enabled,
+            String issuer,
+            boolean qrLinkEnabled,
+            int pendingTimeoutSeconds) {
+        public TwoFactorSettings() {
+            this(true, "VeloAuth", false, 300);
+        }
 
+        public TwoFactorSettings {
+            issuer = issuer == null || issuer.isBlank() ? "VeloAuth" : issuer;
+        }
         public boolean isEnabled() { return enabled; }
-        void setEnabled(boolean value) { this.enabled = value; }
         public String getIssuer() { return issuer; }
-        void setIssuer(String value) { this.issuer = (value == null || value.isBlank()) ? "VeloAuth" : value; }
         public boolean isQrLinkEnabled() { return qrLinkEnabled; }
-        void setQrLinkEnabled(boolean value) { this.qrLinkEnabled = value; }
         public int getPendingTimeoutSeconds() { return pendingTimeoutSeconds; }
-        void setPendingTimeoutSeconds(int value) { this.pendingTimeoutSeconds = value; }
     }
 
     /**
      * Password complexity policy. All counters default to 0 (= no constraint),
      * preserving backward compatibility with configs that omit the password-policy section.
      */
-    public static class PasswordPolicy {
-        private int minDigits;
-        private int minUppercase;
-        private int minLowercase;
-        private int minSpecial;
+    public record PasswordPolicy(int minDigits, int minUppercase, int minLowercase, int minSpecial) {
+        public PasswordPolicy() {
+            this(0, 0, 0, 0);
+        }
 
+        public PasswordPolicy {
+            minDigits = Math.max(0, minDigits);
+            minUppercase = Math.max(0, minUppercase);
+            minLowercase = Math.max(0, minLowercase);
+            minSpecial = Math.max(0, minSpecial);
+        }
         public int getMinDigits() { return minDigits; }
-        void setMinDigits(int value) { this.minDigits = Math.max(0, value); }
         public int getMinUppercase() { return minUppercase; }
-        void setMinUppercase(int value) { this.minUppercase = Math.max(0, value); }
         public int getMinLowercase() { return minLowercase; }
-        void setMinLowercase(int value) { this.minLowercase = Math.max(0, value); }
         public int getMinSpecial() { return minSpecial; }
-        void setMinSpecial(int value) { this.minSpecial = Math.max(0, value); }
 
         public boolean isAnyComplexityRequired() {
             return minDigits > 0 || minUppercase > 0 || minLowercase > 0 || minSpecial > 0;
@@ -793,12 +634,202 @@ public class Settings {
          */
         public static PasswordPolicy forTesting(int minDigits, int minUppercase,
                                                 int minLowercase, int minSpecial) {
-            PasswordPolicy p = new PasswordPolicy();
-            p.setMinDigits(minDigits);
-            p.setMinUppercase(minUppercase);
-            p.setMinLowercase(minLowercase);
-            p.setMinSpecial(minSpecial);
-            return p;
+            return new PasswordPolicy(minDigits, minUppercase, minLowercase, minSpecial);
+        }
+    }
+
+    /** Immutable password configuration captured once by a command operation. */
+    public record PasswordSettings(
+            int bcryptCost,
+            int ipLimitRegistrations,
+            int minLength,
+            int maxLength,
+            PasswordPolicy policy) {
+    }
+
+    /** Immutable connection tuning captured once by a transfer operation. */
+    public record ConnectionSettings(
+            int timeoutSeconds,
+            int pingTimeoutMillis,
+            int autoTransferDelayMillis) {
+    }
+
+    public record ReportSettings(boolean enabled, boolean includeLogs) {
+    }
+
+    public record BruteForceSettings(int maxAttempts, int timeoutMinutes, int conflictModeTtlHours) {
+    }
+
+    public record OperationSettings(
+            PasswordSettings password,
+            BruteForceSettings bruteForce,
+            PremiumSettings premium,
+            FloodgateSettings floodgate,
+            TwoFactorSettings twoFactor,
+            ConnectionSettings connection,
+            ReportSettings report,
+            Set<String> pendingRestartChanges) {
+
+        public OperationSettings {
+            pendingRestartChanges = immutableOrderedSet(pendingRestartChanges);
+        }
+    }
+
+    record DatabaseConfig(
+            String storageType,
+            String hostname,
+            int port,
+            String databaseName,
+            String user,
+            String password,
+            String connectionUrl,
+            String connectionParameters,
+            int connectionPoolSize,
+            long maxLifetimeMillis,
+            PostgreSQLSettings postgreSql) {
+    }
+
+    record CacheConfig(
+            int ttlMinutes,
+            int maxSize,
+            int cleanupIntervalMinutes,
+            int sessionTimeoutMinutes,
+            int premiumTtlHours,
+            double premiumRefreshThreshold) {
+    }
+
+    record AuthServerConfig(
+            String mode,
+            String serverName,
+            int timeoutSeconds,
+            EmbeddedAuthServerSettings embedded) {
+    }
+
+    record HotSettings(
+            boolean debugEnabled,
+            boolean reportEnabled,
+            boolean reportIncludeLogs,
+            String language) {
+    }
+
+    record Snapshot(
+            DatabaseConfig database,
+            CacheConfig cache,
+            AuthServerConfig authServer,
+            ConnectionSettings connection,
+            PasswordSettings password,
+            BruteForceSettings bruteForce,
+            PremiumSettings premium,
+            FloodgateSettings floodgate,
+            AlertSettings alerts,
+            AuditLogSettings auditLog,
+            TwoFactorSettings twoFactor,
+            HotSettings hot) {
+
+        static Snapshot defaults() {
+            return new Snapshot(
+                    new DatabaseConfig(
+                            DatabaseType.H2.getName(), "localhost", 3306, DEFAULT_DATABASE_NAME,
+                            DEFAULT_DATABASE_NAME, "", null, "", 20, 1_800_000L,
+                            new PostgreSQLSettings()),
+                    new CacheConfig(60, 10_000, 5, 60, 24, 0.8),
+                    new AuthServerConfig(
+                            AuthServerMode.EXTERNAL.getConfigValue(), "limbo", 300,
+                            new EmbeddedAuthServerSettings()),
+                    new ConnectionSettings(30, 3000, 1500),
+                    new PasswordSettings(10, 3, 8, 72, new PasswordPolicy()),
+                    new BruteForceSettings(5, 5, 168),
+                    new PremiumSettings(),
+                    new FloodgateSettings(),
+                    new AlertSettings(),
+                    new AuditLogSettings(),
+                    new TwoFactorSettings(),
+                    new HotSettings(false, true, false, "en"));
+        }
+
+        Snapshot withHotValuesFrom(Snapshot configured) {
+            return new Snapshot(
+                    database,
+                    cache,
+                    authServer,
+                    connection,
+                    password,
+                    bruteForce,
+                    premium.withHotValuesFrom(configured.premium),
+                    floodgate,
+                    alerts,
+                    auditLog,
+                    twoFactor,
+                    configured.hot);
+        }
+
+        Snapshot withMaximumPasswordLength(int maximum) {
+            return new Snapshot(
+                    database, cache, authServer, connection,
+                    new PasswordSettings(
+                            password.bcryptCost,
+                            password.ipLimitRegistrations,
+                            password.minLength,
+                            maximum,
+                            password.policy),
+                    bruteForce, premium, floodgate, alerts, auditLog, twoFactor, hot);
+        }
+
+        Snapshot withLanguage(String language) {
+            return new Snapshot(
+                    database, cache, authServer, connection, password, bruteForce,
+                    premium, floodgate, alerts, auditLog, twoFactor,
+                    new HotSettings(
+                            hot.debugEnabled,
+                            hot.reportEnabled,
+                            hot.reportIncludeLogs,
+                            language));
+        }
+    }
+
+    private record Publication(
+            Snapshot active,
+            Snapshot configured,
+            Set<String> pendingRestartChanges,
+            boolean loaded) {
+
+        private Publication {
+            pendingRestartChanges = immutableOrderedSet(pendingRestartChanges);
+        }
+
+        static Publication defaults() {
+            Snapshot defaults = Snapshot.defaults();
+            return new Publication(defaults, defaults, Set.of(), false);
+        }
+
+        static Publication initial(Snapshot snapshot) {
+            return new Publication(snapshot, snapshot, Set.of(), true);
+        }
+    }
+
+    private static Set<String> pendingRestartChanges(Snapshot active, Snapshot configured) {
+        Set<String> pending = new LinkedHashSet<>();
+        addDifference(pending, "database/pool", active.database, configured.database);
+        addDifference(pending, "cache/session", active.cache, configured.cache);
+        addDifference(pending, "auth-server", active.authServer, configured.authServer);
+        addDifference(pending, "connection", active.connection, configured.connection);
+        addDifference(pending, "password/security", active.password, configured.password);
+        addDifference(pending, "brute-force", active.bruteForce, configured.bruteForce);
+        addDifference(pending, "premium-resolver", active.premium.resolver, configured.premium.resolver);
+        addDifference(pending, "floodgate", active.floodgate, configured.floodgate);
+        addDifference(pending, "alerts", active.alerts, configured.alerts);
+        addDifference(pending, "audit-log", active.auditLog, configured.auditLog);
+        addDifference(pending, "two-factor", active.twoFactor, configured.twoFactor);
+        return immutableOrderedSet(pending);
+    }
+
+    private static Set<String> immutableOrderedSet(Set<String> values) {
+        return Collections.unmodifiableSet(new LinkedHashSet<>(values));
+    }
+
+    private static void addDifference(Set<String> target, String name, Object active, Object configured) {
+        if (!active.equals(configured)) {
+            target.add(name);
         }
     }
 }

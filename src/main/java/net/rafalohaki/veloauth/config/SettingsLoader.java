@@ -25,12 +25,16 @@ final class SettingsLoader {
 
     private SettingsLoader() {}
 
-    static LoadedState load(Settings settings, Path configFile, ObjectMapper yamlMapper, Logger logger)
+    static Settings.Snapshot load(
+            Settings.Snapshot baseline,
+            Path configFile,
+            ObjectMapper yamlMapper,
+            Logger logger)
             throws IOException {
         @SuppressWarnings("unchecked")
         Map<String, Object> config = yamlMapper.readValue(configFile.toFile(), Map.class);
 
-        LoadedState state = LoadedState.from(settings);
+        Builder state = new Builder(baseline);
         loadDatabaseSettings(config, state);
         loadCacheSettings(config, state);
         loadAuthServerSettings(config, state, logger);
@@ -45,39 +49,42 @@ final class SettingsLoader {
         loadReportSettings(config, state);
         loadLanguageSettings(config, state);
         processDatabaseSettings(state, logger);
-        return state;
+        return state.build();
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadAuditLogSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadAuditLogSettings(Map<String, Object> config, Builder state) {
         Object section = config.get("audit-log");
         if (!(section instanceof Map<?, ?>)) {
             return;
         }
         Map<String, Object> auditLog = (Map<String, Object>) section;
         Settings.AuditLogSettings target = state.auditLogSettings;
-        target.setEnabled(YamlParserUtils.getBoolean(auditLog, YAML_FIELD_ENABLED, target.isEnabled()));
-        target.setRetentionDays(YamlParserUtils.getInt(auditLog, "retention-days", target.getRetentionDays()));
+        state.auditLogSettings = new Settings.AuditLogSettings(
+                YamlParserUtils.getBoolean(auditLog, YAML_FIELD_ENABLED, target.isEnabled()),
+                YamlParserUtils.getInt(auditLog, "retention-days", target.getRetentionDays()));
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadTwoFactorSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadTwoFactorSettings(Map<String, Object> config, Builder state) {
         Settings.TwoFactorSettings target = state.twoFactorSettings;
-        // Security-sensitive opt-in: removing the key on reload must restore the safe default.
-        target.setQrLinkEnabled(false);
         Object section = config.get("two-factor");
         if (!(section instanceof Map<?, ?>)) {
+            state.twoFactorSettings = new Settings.TwoFactorSettings(
+                    target.enabled(), target.issuer(), false, target.pendingTimeoutSeconds());
             return;
         }
         Map<String, Object> twoFactor = (Map<String, Object>) section;
-        target.setEnabled(YamlParserUtils.getBoolean(twoFactor, YAML_FIELD_ENABLED, target.isEnabled()));
-        target.setIssuer(YamlParserUtils.getString(twoFactor, "issuer", target.getIssuer()));
-        target.setQrLinkEnabled(YamlParserUtils.getBoolean(twoFactor, "qr-link-enabled", target.isQrLinkEnabled()));
-        target.setPendingTimeoutSeconds(YamlParserUtils.getInt(twoFactor, "pending-timeout-seconds", target.getPendingTimeoutSeconds()));
+        state.twoFactorSettings = new Settings.TwoFactorSettings(
+                YamlParserUtils.getBoolean(twoFactor, YAML_FIELD_ENABLED, target.isEnabled()),
+                YamlParserUtils.getString(twoFactor, "issuer", target.getIssuer()),
+                YamlParserUtils.getBoolean(twoFactor, "qr-link-enabled", false),
+                YamlParserUtils.getInt(
+                        twoFactor, "pending-timeout-seconds", target.getPendingTimeoutSeconds()));
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadDatabaseSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadDatabaseSettings(Map<String, Object> config, Builder state) {
         Map<String, Object> database = (Map<String, Object>) config.get("database");
         if (database == null) {
             return;
@@ -101,7 +108,7 @@ final class SettingsLoader {
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadPostgreSqlSettings(Map<String, Object> database, LoadedState state) {
+    private static void loadPostgreSqlSettings(Map<String, Object> database, Builder state) {
         Object postgreSqlSection = database.get("postgresql");
         if (!(postgreSqlSection instanceof Map<?, ?>)) {
             return;
@@ -109,20 +116,22 @@ final class SettingsLoader {
 
         Map<String, Object> postgreSql = (Map<String, Object>) postgreSqlSection;
         Settings.PostgreSQLSettings target = state.postgreSQLSettings;
-        target.setSslEnabled(YamlParserUtils.getBoolean(postgreSql, "ssl-enabled", target.isSslEnabled()));
-        target.setSslMode(YamlParserUtils.getString(postgreSql, "ssl-mode", target.getSslMode()));
-        target.setSslCert(YamlParserUtils.getString(postgreSql, "ssl-cert", target.getSslCert()));
-        target.setSslKey(YamlParserUtils.getString(postgreSql, "ssl-key", target.getSslKey()));
-        target.setSslRootCert(YamlParserUtils.getString(postgreSql, "ssl-root-cert", target.getSslRootCert()));
-        target.setSslPassword(YamlParserUtils.getString(postgreSql, CONFIG_KEY_SSL_CREDENTIAL, target.getSslPassword()));
+        state.postgreSQLSettings = new Settings.PostgreSQLSettings(
+                YamlParserUtils.getBoolean(postgreSql, "ssl-enabled", target.isSslEnabled()),
+                YamlParserUtils.getString(postgreSql, "ssl-mode", target.getSslMode()),
+                YamlParserUtils.getString(postgreSql, "ssl-cert", target.getSslCert()),
+                YamlParserUtils.getString(postgreSql, "ssl-key", target.getSslKey()),
+                YamlParserUtils.getString(postgreSql, "ssl-root-cert", target.getSslRootCert()),
+                YamlParserUtils.getString(
+                        postgreSql, CONFIG_KEY_SSL_CREDENTIAL, target.getSslPassword()));
     }
 
-    private static void loadDebugSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadDebugSettings(Map<String, Object> config, Builder state) {
         state.debugEnabled = YamlParserUtils.getBoolean(config, "debug-enabled", state.debugEnabled);
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadReportSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadReportSettings(Map<String, Object> config, Builder state) {
         // Logs are opt-in. A hot reload that removes the key must not retain a previous true.
         state.reportIncludeLogs = false;
         Map<String, Object> report = (Map<String, Object>) config.get("report");
@@ -133,12 +142,12 @@ final class SettingsLoader {
         }
     }
 
-    private static void loadLanguageSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadLanguageSettings(Map<String, Object> config, Builder state) {
         state.language = YamlParserUtils.getString(config, "language", state.language);
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadCacheSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadCacheSettings(Map<String, Object> config, Builder state) {
         Map<String, Object> cache = (Map<String, Object>) config.get("cache");
         if (cache == null) {
             return;
@@ -156,11 +165,11 @@ final class SettingsLoader {
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadAuthServerSettings(Map<String, Object> config, LoadedState state, Logger logger) {
+    private static void loadAuthServerSettings(Map<String, Object> config, Builder state, Logger logger) {
         // Embedded topology is an explicit opt-in. Removing the key on reload must never retain
         // a previously loaded embedded mode or custom embedded network settings.
         state.authServerMode = Settings.AuthServerMode.EXTERNAL.getConfigValue();
-        state.embeddedAuthServerSettings.resetToDefaults();
+        state.embeddedAuthServerSettings = new Settings.EmbeddedAuthServerSettings();
 
         Object authServerSection = config.get("auth-server");
         if (authServerSection instanceof Map<?, ?>) {
@@ -169,7 +178,8 @@ final class SettingsLoader {
             state.authServerName = YamlParserUtils.getString(authServer, "server-name", state.authServerName);
             state.authServerTimeoutSeconds = YamlParserUtils.getInt(authServer,
                     CONFIG_KEY_TIMEOUT_SECONDS, state.authServerTimeoutSeconds);
-            loadEmbeddedAuthServerSettings(authServer, state.embeddedAuthServerSettings);
+            state.embeddedAuthServerSettings = loadEmbeddedAuthServerSettings(
+                    authServer, state.embeddedAuthServerSettings);
             return;
         }
         if (config.containsKey("auth-server")) {
@@ -187,7 +197,7 @@ final class SettingsLoader {
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadEmbeddedAuthServerSettings(
+    private static Settings.EmbeddedAuthServerSettings loadEmbeddedAuthServerSettings(
             Map<String, Object> authServer,
             Settings.EmbeddedAuthServerSettings target) {
         Object embeddedSection = authServer.get("embedded");
@@ -196,17 +206,17 @@ final class SettingsLoader {
                 throw new IllegalArgumentException(
                         "Config section 'auth-server.embedded:' must be a YAML map");
             }
-            return;
+            return target;
         }
 
         Map<String, Object> embedded = (Map<String, Object>) embeddedSection;
-        target.setPort(YamlParserUtils.getInt(embedded, "port", target.getPort()));
-        target.setMaxConnections(YamlParserUtils.getInt(
-                embedded, "max-connections", target.getMaxConnections()));
-        target.setHandshakeTimeoutSeconds(YamlParserUtils.getInt(
-                embedded, "handshake-timeout-seconds", target.getHandshakeTimeoutSeconds()));
-        target.setLoginTimeoutSeconds(YamlParserUtils.getInt(
-                embedded, "login-timeout-seconds", target.getLoginTimeoutSeconds()));
+        return new Settings.EmbeddedAuthServerSettings(
+                YamlParserUtils.getInt(embedded, "port", target.getPort()),
+                YamlParserUtils.getInt(embedded, "max-connections", target.getMaxConnections()),
+                YamlParserUtils.getInt(
+                        embedded, "handshake-timeout-seconds", target.getHandshakeTimeoutSeconds()),
+                YamlParserUtils.getInt(
+                        embedded, "login-timeout-seconds", target.getLoginTimeoutSeconds()));
     }
 
     private static String explicitStringOrDefault(
@@ -220,7 +230,7 @@ final class SettingsLoader {
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadConnectionSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadConnectionSettings(Map<String, Object> config, Builder state) {
         Map<String, Object> connection = (Map<String, Object>) config.get("connection");
         if (connection != null) {
             state.connectionTimeoutSeconds = YamlParserUtils.getInt(connection,
@@ -233,7 +243,7 @@ final class SettingsLoader {
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadSecuritySettings(Map<String, Object> config, LoadedState state) {
+    private static void loadSecuritySettings(Map<String, Object> config, Builder state) {
         Map<String, Object> security = (Map<String, Object>) config.get("security");
         if (security == null) {
             return;
@@ -257,25 +267,27 @@ final class SettingsLoader {
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadPasswordPolicy(Map<String, Object> security, LoadedState state) {
+    private static void loadPasswordPolicy(Map<String, Object> security, Builder state) {
         Object policySection = security.get("password-policy");
         if (!(policySection instanceof Map<?, ?>)) {
             return;
         }
         Map<String, Object> policy = (Map<String, Object>) policySection;
         Settings.PasswordPolicy target = state.passwordPolicy;
-        target.setMinDigits(YamlParserUtils.getInt(policy, "min-digits", target.getMinDigits()));
-        target.setMinUppercase(YamlParserUtils.getInt(policy, "min-uppercase", target.getMinUppercase()));
-        target.setMinLowercase(YamlParserUtils.getInt(policy, "min-lowercase", target.getMinLowercase()));
-        target.setMinSpecial(YamlParserUtils.getInt(policy, "min-special", target.getMinSpecial()));
+        state.passwordPolicy = new Settings.PasswordPolicy(
+                YamlParserUtils.getInt(policy, "min-digits", target.getMinDigits()),
+                YamlParserUtils.getInt(policy, "min-uppercase", target.getMinUppercase()),
+                YamlParserUtils.getInt(policy, "min-lowercase", target.getMinLowercase()),
+                YamlParserUtils.getInt(policy, "min-special", target.getMinSpecial()));
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadPremiumSettings(Map<String, Object> config, LoadedState state, Logger logger) {
+    private static void loadPremiumSettings(Map<String, Object> config, Builder state, Logger logger) {
         // Security-sensitive opt-in: removing the key or section on reload must restore
         // the conservative behavior instead of inheriting a previous live true value.
-        state.premiumSettings.setAllowCrackedOnPremiumNicks(false);
-        state.premiumSettings.setBypassAuthServer(false);
+        Settings.PremiumSettings current = state.premiumSettings;
+        state.premiumSettings = new Settings.PremiumSettings(
+                current.checkEnabled(), false, false, current.resolver());
         Object premiumSection = config.get("premium");
         if (premiumSection instanceof Map<?, ?>) {
             Map<String, Object> premium = (Map<String, Object>) premiumSection;
@@ -289,13 +301,17 @@ final class SettingsLoader {
         }
     }
 
-    private static void applyPremiumCoreSettings(Map<String, Object> premium, LoadedState state) {
+    private static void applyPremiumCoreSettings(Map<String, Object> premium, Builder state) {
         Settings.PremiumSettings target = state.premiumSettings;
-        target.setCheckEnabled(YamlParserUtils.getBoolean(premium, "check-enabled", target.isCheckEnabled()));
-        target.setAllowCrackedOnPremiumNicks(YamlParserUtils.getBoolean(premium,
-                "allow-cracked-on-premium-nicks", target.isAllowCrackedOnPremiumNicks()));
-        target.setBypassAuthServer(YamlParserUtils.getBoolean(premium,
-                "bypass-auth-server", target.isBypassAuthServer()));
+        state.premiumSettings = new Settings.PremiumSettings(
+                YamlParserUtils.getBoolean(premium, "check-enabled", target.isCheckEnabled()),
+                YamlParserUtils.getBoolean(
+                        premium,
+                        "allow-cracked-on-premium-nicks",
+                        target.isAllowCrackedOnPremiumNicks()),
+                YamlParserUtils.getBoolean(
+                        premium, "bypass-auth-server", target.isBypassAuthServer()),
+                target.resolver());
     }
 
     private static void warnAboutLegacyPremiumKeys(Map<String, Object> premium, Logger logger) {
@@ -305,29 +321,39 @@ final class SettingsLoader {
     }
 
     @SuppressWarnings("unchecked")
-    private static void applyPremiumResolverSection(Object resolverSection, LoadedState state) {
+    private static void applyPremiumResolverSection(Object resolverSection, Builder state) {
         if (!(resolverSection instanceof Map<?, ?>)) {
             return;
         }
 
         Map<String, Object> resolver = (Map<String, Object>) resolverSection;
-        Settings.PremiumResolverSettings target = state.premiumSettings.getResolver();
-        target.setMojangEnabled(YamlParserUtils.getBoolean(resolver, "mojang-enabled", target.isMojangEnabled()));
-        target.setAshconEnabled(YamlParserUtils.getBoolean(resolver, "ashcon-enabled", target.isAshconEnabled()));
-        target.setWpmeEnabled(YamlParserUtils.getBoolean(resolver, "wpme-enabled", target.isWpmeEnabled()));
-        target.setRequestTimeoutMs(YamlParserUtils.getInt(resolver, "request-timeout-ms", target.getRequestTimeoutMs()));
-        target.setHitTtlMinutes(YamlParserUtils.getInt(resolver, "hit-ttl-minutes", target.getHitTtlMinutes()));
-        target.setMissTtlMinutes(YamlParserUtils.getInt(resolver, "miss-ttl-minutes", target.getMissTtlMinutes()));
-        target.setCaseSensitive(YamlParserUtils.getBoolean(resolver, "case-sensitive", target.isCaseSensitive()));
-        target.setMemoryCacheMaxSize(YamlParserUtils.getInt(resolver, "memory-cache-max-size", target.getMemoryCacheMaxSize()));
-        target.setMaxLookupsPerIpPerMinute(YamlParserUtils.getInt(
-                resolver, "max-lookups-per-ip-per-minute", target.getMaxLookupsPerIpPerMinute()));
-        target.setMaxConcurrentLookups(YamlParserUtils.getInt(
-                resolver, "max-concurrent-lookups", target.getMaxConcurrentLookups()));
+        Settings.PremiumSettings premium = state.premiumSettings;
+        Settings.PremiumResolverSettings target = premium.getResolver();
+        Settings.PremiumResolverSettings configured = new Settings.PremiumResolverSettings(
+                YamlParserUtils.getBoolean(resolver, "mojang-enabled", target.isMojangEnabled()),
+                YamlParserUtils.getBoolean(resolver, "ashcon-enabled", target.isAshconEnabled()),
+                YamlParserUtils.getBoolean(resolver, "wpme-enabled", target.isWpmeEnabled()),
+                YamlParserUtils.getInt(resolver, "request-timeout-ms", target.getRequestTimeoutMs()),
+                YamlParserUtils.getInt(resolver, "hit-ttl-minutes", target.getHitTtlMinutes()),
+                YamlParserUtils.getInt(resolver, "miss-ttl-minutes", target.getMissTtlMinutes()),
+                YamlParserUtils.getBoolean(resolver, "case-sensitive", target.isCaseSensitive()),
+                YamlParserUtils.getInt(
+                        resolver, "memory-cache-max-size", target.getMemoryCacheMaxSize()),
+                YamlParserUtils.getInt(
+                        resolver,
+                        "max-lookups-per-ip-per-minute",
+                        target.getMaxLookupsPerIpPerMinute()),
+                YamlParserUtils.getInt(
+                        resolver, "max-concurrent-lookups", target.getMaxConcurrentLookups()));
+        state.premiumSettings = new Settings.PremiumSettings(
+                premium.checkEnabled(),
+                premium.allowCrackedOnPremiumNicks(),
+                premium.bypassAuthServer(),
+                configured);
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadAlertSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadAlertSettings(Map<String, Object> config, Builder state) {
         Object alertSection = config.get("alerts");
         if (!(alertSection instanceof Map<?, ?>)) {
             return;
@@ -335,28 +361,33 @@ final class SettingsLoader {
 
         Map<String, Object> alerts = (Map<String, Object>) alertSection;
         Settings.AlertSettings target = state.alertSettings;
-        target.setEnabled(YamlParserUtils.getBoolean(alerts, YAML_FIELD_ENABLED, target.isEnabled()));
-        target.setFailureRateThreshold(YamlParserUtils.getDouble(alerts,
-                "failure-rate-threshold", target.getFailureRateThreshold()));
-        target.setMinRequestsForAlert(YamlParserUtils.getInt(alerts,
-                "min-requests-for-alert", target.getMinRequestsForAlert()));
-        target.setCheckIntervalMinutes(YamlParserUtils.getInt(alerts,
-                "check-interval-minutes", target.getCheckIntervalMinutes()));
-        target.setAlertCooldownMinutes(YamlParserUtils.getInt(alerts,
-                "alert-cooldown-minutes", target.getAlertCooldownMinutes()));
+        boolean discordEnabled = target.isDiscordEnabled();
+        String webhookUrl = target.getDiscordWebhookUrl();
 
         Object discordSection = alerts.get("discord");
         if (discordSection instanceof Map<?, ?>) {
             Map<String, Object> discord = (Map<String, Object>) discordSection;
-            target.setDiscordEnabled(YamlParserUtils.getBoolean(discord,
-                    YAML_FIELD_ENABLED, target.isDiscordEnabled()));
-            target.setDiscordWebhookUrl(YamlParserUtils.getString(discord,
-                    "webhook-url", target.getDiscordWebhookUrl()));
+            discordEnabled = YamlParserUtils.getBoolean(
+                    discord, YAML_FIELD_ENABLED, target.isDiscordEnabled());
+            webhookUrl = YamlParserUtils.getString(
+                    discord, "webhook-url", target.getDiscordWebhookUrl());
         }
+        state.alertSettings = new Settings.AlertSettings(
+                YamlParserUtils.getBoolean(alerts, YAML_FIELD_ENABLED, target.isEnabled()),
+                discordEnabled,
+                webhookUrl,
+                YamlParserUtils.getDouble(
+                        alerts, "failure-rate-threshold", target.getFailureRateThreshold()),
+                YamlParserUtils.getInt(
+                        alerts, "min-requests-for-alert", target.getMinRequestsForAlert()),
+                YamlParserUtils.getInt(
+                        alerts, "check-interval-minutes", target.getCheckIntervalMinutes()),
+                YamlParserUtils.getInt(
+                        alerts, "alert-cooldown-minutes", target.getAlertCooldownMinutes()));
     }
 
     @SuppressWarnings("unchecked")
-    private static void loadFloodgateSettings(Map<String, Object> config, LoadedState state) {
+    private static void loadFloodgateSettings(Map<String, Object> config, Builder state) {
         Object floodgateSection = config.get("floodgate");
         if (!(floodgateSection instanceof Map<?, ?>)) {
             return;
@@ -364,20 +395,21 @@ final class SettingsLoader {
 
         Map<String, Object> floodgate = (Map<String, Object>) floodgateSection;
         Settings.FloodgateSettings target = state.floodgateSettings;
-        target.setEnabled(YamlParserUtils.getBoolean(floodgate, YAML_FIELD_ENABLED, target.isEnabled()));
-        target.setUsernamePrefix(YamlParserUtils.getString(floodgate,
-                "username-prefix", target.getUsernamePrefix()));
-        target.setBypassAuthServer(YamlParserUtils.getBoolean(floodgate,
-                "bypass-auth-server", target.isBypassAuthServer()));
+        state.floodgateSettings = new Settings.FloodgateSettings(
+                YamlParserUtils.getBoolean(floodgate, YAML_FIELD_ENABLED, target.isEnabled()),
+                YamlParserUtils.getString(
+                        floodgate, "username-prefix", target.getUsernamePrefix()),
+                YamlParserUtils.getBoolean(
+                        floodgate, "bypass-auth-server", target.isBypassAuthServer()));
     }
 
-    private static void processDatabaseSettings(LoadedState state, Logger logger) {
+    private static void processDatabaseSettings(Builder state, Logger logger) {
         if (state.databaseConnectionUrl != null && !state.databaseConnectionUrl.trim().isEmpty()) {
             parseConnectionUrl(state, state.databaseConnectionUrl, logger);
         }
     }
 
-    private static void parseConnectionUrl(LoadedState state, String connectionUrl, Logger logger) {
+    private static void parseConnectionUrl(Builder state, String connectionUrl, Logger logger) {
         try {
             String url = connectionUrl.trim();
             DatabaseType dbType = DatabaseType.fromUrl(url);
@@ -397,7 +429,7 @@ final class SettingsLoader {
         }
     }
 
-    private static void parseConnectionCredentials(LoadedState state, String remaining, Logger logger) {
+    private static void parseConnectionCredentials(Builder state, String remaining, Logger logger) {
         // Split on the LAST '@' — RFC 3986 puts userinfo before the final '@' that separates
         // it from the host. The previous split("@") with a length==2 guard rejected any URL
         // whose password also contained an '@', silently falling back to the default user.
@@ -410,7 +442,7 @@ final class SettingsLoader {
         parseHostPart(state, remaining.substring(atIdx + 1), logger);
     }
 
-    private static void parseAuthPart(LoadedState state, String authPart) {
+    private static void parseAuthPart(Builder state, String authPart) {
         // Split on the FIRST ':' only — passwords may legally contain colons (URL-encoded
         // as %3A, but some operators paste raw values). The previous split(":") tokenized
         // on every colon and kept only element [1], silently truncating passwords like
@@ -424,7 +456,7 @@ final class SettingsLoader {
         state.databasePassword = URLDecoder.decode(authPart.substring(separatorIdx + 1), StandardCharsets.UTF_8);
     }
 
-    private static void parseHostPart(LoadedState state, String hostPart, Logger logger) {
+    private static void parseHostPart(Builder state, String hostPart, Logger logger) {
         String[] hostSplit = hostPart.split("/", 2);
         String hostAndPort = hostSplit[0];
         if (hostSplit.length == 2) {
@@ -461,7 +493,7 @@ final class SettingsLoader {
         }
     }
 
-    static final class LoadedState {
+    static final class Builder {
         String databaseStorageType;
         String databaseHostname;
         int databasePort;
@@ -495,117 +527,123 @@ final class SettingsLoader {
         boolean reportEnabled;
         boolean reportIncludeLogs;
         String language;
-        final Settings.PostgreSQLSettings postgreSQLSettings = new Settings.PostgreSQLSettings();
-        final Settings.PremiumSettings premiumSettings = new Settings.PremiumSettings();
-        final Settings.FloodgateSettings floodgateSettings = new Settings.FloodgateSettings();
-        final Settings.AlertSettings alertSettings = new Settings.AlertSettings();
-        final Settings.PasswordPolicy passwordPolicy = new Settings.PasswordPolicy();
-        final Settings.AuditLogSettings auditLogSettings = new Settings.AuditLogSettings();
-        final Settings.TwoFactorSettings twoFactorSettings = new Settings.TwoFactorSettings();
-        final Settings.EmbeddedAuthServerSettings embeddedAuthServerSettings =
-                new Settings.EmbeddedAuthServerSettings();
+        Settings.PostgreSQLSettings postgreSQLSettings;
+        Settings.PremiumSettings premiumSettings;
+        Settings.FloodgateSettings floodgateSettings;
+        Settings.AlertSettings alertSettings;
+        Settings.PasswordPolicy passwordPolicy;
+        Settings.AuditLogSettings auditLogSettings;
+        Settings.TwoFactorSettings twoFactorSettings;
+        Settings.EmbeddedAuthServerSettings embeddedAuthServerSettings;
 
-        static LoadedState from(Settings settings) {
-            LoadedState state = new LoadedState();
-            state.databaseStorageType = settings.getDatabaseStorageType();
-            state.databaseHostname = settings.getDatabaseHostname();
-            state.databasePort = settings.getDatabasePort();
-            state.databaseName = settings.getDatabaseName();
-            state.databaseUser = settings.getDatabaseUser();
-            state.databasePassword = settings.getDatabasePassword();
-            state.databaseConnectionUrl = settings.getDatabaseConnectionUrl();
-            state.databaseConnectionParameters = settings.getDatabaseConnectionParameters();
-            state.databaseConnectionPoolSize = settings.getDatabaseConnectionPoolSize();
-            state.databaseMaxLifetimeMillis = settings.getDatabaseMaxLifetimeMillis();
-            state.cacheTtlMinutes = settings.getCacheTtlMinutes();
-            state.cacheMaxSize = settings.getCacheMaxSize();
-            state.cacheCleanupIntervalMinutes = settings.getCacheCleanupIntervalMinutes();
-            state.sessionTimeoutMinutes = settings.getSessionTimeoutMinutes();
-            state.premiumTtlHours = settings.getPremiumTtlHours();
-            state.premiumRefreshThreshold = settings.getPremiumRefreshThreshold();
-            state.authServerMode = settings.getConfiguredAuthServerMode();
-            state.authServerName = settings.getAuthServerName();
-            state.authServerTimeoutSeconds = settings.getAuthServerTimeoutSeconds();
-            state.embeddedAuthServerSettings.copyFrom(settings.getEmbeddedAuthServerSettings());
-            state.connectionTimeoutSeconds = settings.getConnectionTimeoutSeconds();
-            state.pingTimeoutMillis = settings.getPingTimeoutMillis();
-            state.autoTransferDelayMillis = settings.getAutoTransferDelayMillis();
-            state.bcryptCost = settings.getBcryptCost();
-            state.bruteForceMaxAttempts = settings.getBruteForceMaxAttempts();
-            state.bruteForceTimeoutMinutes = settings.getBruteForceTimeoutMinutes();
-            state.ipLimitRegistrations = settings.getIpLimitRegistrations();
-            state.conflictModeTtlHours = settings.getConflictModeTtlHours();
-            state.minPasswordLength = settings.getMinPasswordLength();
-            state.maxPasswordLength = settings.getMaxPasswordLength();
-            state.debugEnabled = settings.isDebugEnabled();
-            state.reportEnabled = settings.isReportEnabled();
-            state.reportIncludeLogs = settings.isReportIncludeLogs();
-            state.language = settings.getLanguage();
-            copyPostgreSqlSettings(settings.getPostgreSQLSettings(), state.postgreSQLSettings);
-            copyPremiumSettings(settings.getPremiumSettings(), state.premiumSettings);
-            copyFloodgateSettings(settings.getFloodgateSettings(), state.floodgateSettings);
-            copyAlertSettings(settings.getAlertSettings(), state.alertSettings);
-            copyPasswordPolicy(settings.getPasswordPolicy(), state.passwordPolicy);
-            copyAuditLogSettings(settings.getAuditLogSettings(), state.auditLogSettings);
-            copyTwoFactorSettings(settings.getTwoFactorSettings(), state.twoFactorSettings);
-            return state;
+        Builder(Settings.Snapshot snapshot) {
+            Settings.DatabaseConfig database = snapshot.database();
+            databaseStorageType = database.storageType();
+            databaseHostname = database.hostname();
+            databasePort = database.port();
+            databaseName = database.databaseName();
+            databaseUser = database.user();
+            databasePassword = database.password();
+            databaseConnectionUrl = database.connectionUrl();
+            databaseConnectionParameters = database.connectionParameters();
+            databaseConnectionPoolSize = database.connectionPoolSize();
+            databaseMaxLifetimeMillis = database.maxLifetimeMillis();
+            postgreSQLSettings = database.postgreSql();
+
+            Settings.CacheConfig cache = snapshot.cache();
+            cacheTtlMinutes = cache.ttlMinutes();
+            cacheMaxSize = cache.maxSize();
+            cacheCleanupIntervalMinutes = cache.cleanupIntervalMinutes();
+            sessionTimeoutMinutes = cache.sessionTimeoutMinutes();
+            premiumTtlHours = cache.premiumTtlHours();
+            premiumRefreshThreshold = cache.premiumRefreshThreshold();
+
+            Settings.AuthServerConfig authServer = snapshot.authServer();
+            authServerMode = authServer.mode();
+            authServerName = authServer.serverName();
+            authServerTimeoutSeconds = authServer.timeoutSeconds();
+            embeddedAuthServerSettings = authServer.embedded();
+
+            Settings.ConnectionSettings connection = snapshot.connection();
+            connectionTimeoutSeconds = connection.timeoutSeconds();
+            pingTimeoutMillis = connection.pingTimeoutMillis();
+            autoTransferDelayMillis = connection.autoTransferDelayMillis();
+
+            Settings.PasswordSettings password = snapshot.password();
+            bcryptCost = password.bcryptCost();
+            ipLimitRegistrations = password.ipLimitRegistrations();
+            minPasswordLength = password.minLength();
+            maxPasswordLength = password.maxLength();
+            passwordPolicy = password.policy();
+
+            Settings.BruteForceSettings bruteForce = snapshot.bruteForce();
+            bruteForceMaxAttempts = bruteForce.maxAttempts();
+            bruteForceTimeoutMinutes = bruteForce.timeoutMinutes();
+            conflictModeTtlHours = bruteForce.conflictModeTtlHours();
+
+            premiumSettings = snapshot.premium();
+            floodgateSettings = snapshot.floodgate();
+            alertSettings = snapshot.alerts();
+            auditLogSettings = snapshot.auditLog();
+            twoFactorSettings = snapshot.twoFactor();
+
+            Settings.HotSettings hot = snapshot.hot();
+            debugEnabled = hot.debugEnabled();
+            reportEnabled = hot.reportEnabled();
+            reportIncludeLogs = hot.reportIncludeLogs();
+            language = hot.language();
         }
 
-        private static void copyAuditLogSettings(Settings.AuditLogSettings source,
-                                                 Settings.AuditLogSettings target) {
-            target.setEnabled(source.isEnabled());
-            target.setRetentionDays(source.getRetentionDays());
-        }
-
-        private static void copyTwoFactorSettings(Settings.TwoFactorSettings source,
-                                                  Settings.TwoFactorSettings target) {
-            target.setEnabled(source.isEnabled());
-            target.setIssuer(source.getIssuer());
-            target.setQrLinkEnabled(source.isQrLinkEnabled());
-            target.setPendingTimeoutSeconds(source.getPendingTimeoutSeconds());
-        }
-
-        private static void copyPasswordPolicy(Settings.PasswordPolicy source, Settings.PasswordPolicy target) {
-            target.setMinDigits(source.getMinDigits());
-            target.setMinUppercase(source.getMinUppercase());
-            target.setMinLowercase(source.getMinLowercase());
-            target.setMinSpecial(source.getMinSpecial());
-        }
-
-        private static void copyPostgreSqlSettings(Settings.PostgreSQLSettings source,
-                                                   Settings.PostgreSQLSettings target) {
-            target.setSslEnabled(source.isSslEnabled());
-            target.setSslMode(source.getSslMode());
-            target.setSslCert(source.getSslCert());
-            target.setSslKey(source.getSslKey());
-            target.setSslRootCert(source.getSslRootCert());
-            target.setSslPassword(source.getSslPassword());
-        }
-
-        private static void copyPremiumSettings(Settings.PremiumSettings source,
-                                                Settings.PremiumSettings target) {
-            target.setCheckEnabled(source.isCheckEnabled());
-            target.setAllowCrackedOnPremiumNicks(source.isAllowCrackedOnPremiumNicks());
-            target.setBypassAuthServer(source.isBypassAuthServer());
-            target.getResolver().copyFrom(source.getResolver());
-        }
-
-        private static void copyFloodgateSettings(Settings.FloodgateSettings source,
-                                                  Settings.FloodgateSettings target) {
-            target.setEnabled(source.isEnabled());
-            target.setUsernamePrefix(source.getUsernamePrefix());
-            target.setBypassAuthServer(source.isBypassAuthServer());
-        }
-
-        private static void copyAlertSettings(Settings.AlertSettings source,
-                                              Settings.AlertSettings target) {
-            target.setEnabled(source.isEnabled());
-            target.setDiscordEnabled(source.isDiscordEnabled());
-            target.setDiscordWebhookUrl(source.getDiscordWebhookUrl());
-            target.setFailureRateThreshold(source.getFailureRateThreshold());
-            target.setMinRequestsForAlert(source.getMinRequestsForAlert());
-            target.setCheckIntervalMinutes(source.getCheckIntervalMinutes());
-            target.setAlertCooldownMinutes(source.getAlertCooldownMinutes());
+        Settings.Snapshot build() {
+            return new Settings.Snapshot(
+                    new Settings.DatabaseConfig(
+                            databaseStorageType,
+                            databaseHostname,
+                            databasePort,
+                            databaseName,
+                            databaseUser,
+                            databasePassword,
+                            databaseConnectionUrl,
+                            databaseConnectionParameters,
+                            databaseConnectionPoolSize,
+                            databaseMaxLifetimeMillis,
+                            postgreSQLSettings),
+                    new Settings.CacheConfig(
+                            cacheTtlMinutes,
+                            cacheMaxSize,
+                            cacheCleanupIntervalMinutes,
+                            sessionTimeoutMinutes,
+                            premiumTtlHours,
+                            premiumRefreshThreshold),
+                    new Settings.AuthServerConfig(
+                            authServerMode,
+                            authServerName,
+                            authServerTimeoutSeconds,
+                            embeddedAuthServerSettings),
+                    new Settings.ConnectionSettings(
+                            connectionTimeoutSeconds,
+                            pingTimeoutMillis,
+                            autoTransferDelayMillis),
+                    new Settings.PasswordSettings(
+                            bcryptCost,
+                            ipLimitRegistrations,
+                            minPasswordLength,
+                            maxPasswordLength,
+                            passwordPolicy),
+                    new Settings.BruteForceSettings(
+                            bruteForceMaxAttempts,
+                            bruteForceTimeoutMinutes,
+                            conflictModeTtlHours),
+                    premiumSettings,
+                    floodgateSettings,
+                    alertSettings,
+                    auditLogSettings,
+                    twoFactorSettings,
+                    new Settings.HotSettings(
+                            debugEnabled,
+                            reportEnabled,
+                            reportIncludeLogs,
+                            language));
         }
     }
 }

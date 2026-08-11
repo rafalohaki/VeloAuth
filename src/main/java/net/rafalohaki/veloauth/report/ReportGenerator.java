@@ -47,6 +47,14 @@ final class ReportGenerator {
      * @return {@link ReportContent} ready for upload
      */
     ReportContent generate() {
+        return generate(captureOperationSettings());
+    }
+
+    Settings.OperationSettings captureOperationSettings() {
+        return settings.captureOperationSettings();
+    }
+
+    ReportContent generate(Settings.OperationSettings operationSettings) {
         StringBuilder sb = new StringBuilder(64 * 1024);
 
         appendSection(sb, "VeloAuth version", "v" + BuildConstants.VERSION);
@@ -55,12 +63,18 @@ final class ReportGenerator {
         appendSection(sb, "Online mode", String.valueOf(plugin.getServer().getConfiguration().isOnlineMode()));
         appendSection(sb, "Server count", String.valueOf(plugin.getServer().getAllServers().size()));
         appendSection(sb, "Players online", String.valueOf(plugin.getServer().getPlayerCount()));
+        appendSection(
+                sb,
+                "Pending restart changes",
+                operationSettings.pendingRestartChanges().isEmpty()
+                        ? "none"
+                        : String.join(", ", operationSettings.pendingRestartChanges()));
 
         appendSection(sb, "VeloAuth config.yml (secrets redacted)", readAndRedactPluginConfig());
         appendSection(sb, "velocity.toml (secrets redacted)", readAndRedactVelocityConfig());
-        appendSection(sb, "Recent proxy logs", readLogs());
+        appendSection(sb, "Recent proxy logs", readLogs(operationSettings.report()));
 
-        return new ReportContent(sb.toString(), buildMetadata());
+        return new ReportContent(sb.toString(), buildMetadata(operationSettings));
     }
 
     private String readAndRedactPluginConfig() {
@@ -89,8 +103,8 @@ final class ReportGenerator {
         }
     }
 
-    private String readLogs() {
-        if (!settings.isReportIncludeLogs()) {
+    private String readLogs(Settings.ReportSettings reportSettings) {
+        if (!reportSettings.includeLogs()) {
             return "[omitted — set report.include-logs: true to include locally redacted logs]";
         }
         Path logPath = LogReader.resolveLogPath(plugin.getDataDirectory());
@@ -103,7 +117,8 @@ final class ReportGenerator {
         return LogReader.resolveProxyRoot(plugin.getDataDirectory()).resolve(VELOCITY_CONFIG_RELATIVE);
     }
 
-    private List<McLogsClient.MetadataEntry> buildMetadata() {
+    private List<McLogsClient.MetadataEntry> buildMetadata(
+            Settings.OperationSettings operationSettings) {
         ProxyServer server = plugin.getServer();
         List<McLogsClient.MetadataEntry> meta = new ArrayList<>();
         meta.add(McLogsClient.MetadataEntry.visible("veloauth_version", "v" + BuildConstants.VERSION, "VeloAuth"));
@@ -113,12 +128,21 @@ final class ReportGenerator {
         meta.add(McLogsClient.MetadataEntry.visible("server_count", server.getAllServers().size(), "Servers"));
         meta.add(McLogsClient.MetadataEntry.visible("players_online", server.getPlayerCount(), "Players online"));
         meta.add(McLogsClient.MetadataEntry.visible("database_type", settings.getDatabaseStorageType(), "Database"));
-        meta.add(McLogsClient.MetadataEntry.visible("ping_timeout_ms", settings.getPingTimeoutMillis(), "Ping timeout (ms)"));
-        meta.add(McLogsClient.MetadataEntry.visible("premium_check", settings.isPremiumCheckEnabled(), "Premium check"));
+        meta.add(McLogsClient.MetadataEntry.visible(
+                "ping_timeout_ms", operationSettings.connection().pingTimeoutMillis(), "Ping timeout (ms)"));
+        Settings.PremiumSettings premiumSettings = operationSettings.premium();
+        meta.add(McLogsClient.MetadataEntry.visible(
+                "premium_check", premiumSettings.isCheckEnabled(), "Premium check"));
         meta.add(McLogsClient.MetadataEntry.visible("allow_cracked_on_premium_nicks",
-                settings.isAllowCrackedOnPremiumNicks(), "Allow cracked on premium nicks"));
+                premiumSettings.isAllowCrackedOnPremiumNicks(), "Allow cracked on premium nicks"));
         meta.add(McLogsClient.MetadataEntry.visible("premium_bypass_auth_server",
-                settings.isPremiumBypassAuthServerEnabled(), "Premium auth-server bypass"));
+                premiumSettings.isBypassAuthServer(), "Premium auth-server bypass"));
+        meta.add(McLogsClient.MetadataEntry.visible(
+                "pending_restart_changes",
+                operationSettings.pendingRestartChanges().isEmpty()
+                        ? "none"
+                        : String.join(",", operationSettings.pendingRestartChanges()),
+                "Pending restart"));
         // Hidden metadata — useful for support but not displayed on the public page.
         AuthServerProvider authServerProvider = plugin.getAuthServerProvider();
         String authServerName = authServerProvider == null

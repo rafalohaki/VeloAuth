@@ -1,5 +1,7 @@
 package net.rafalohaki.veloauth.config;
 
+import net.rafalohaki.veloauth.command.ValidationUtils;
+import net.rafalohaki.veloauth.i18n.Messages;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -12,6 +14,12 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -143,7 +151,7 @@ class SettingsValidationTest {
     @Test
     void shouldUseDefaultsWhenConfigNotFound() throws IOException {
         // Given: No config file exists
-        settings.getPostgreSQLSettings().setSslEnabled(false);
+        assertTrue(settings.getPostgreSQLSettings().isSslEnabled());
 
         // When: Loading settings without config file
         boolean loaded = settings.load();
@@ -379,7 +387,7 @@ class SettingsValidationTest {
     }
 
     @Test
-    void securitySensitiveOptIns_removedOnReload_returnToSafeDefaults() {
+    void securitySensitiveOptInsRemovedOnReloadRespectHotAndRestartBoundaries() {
         Path configFile = tempDir.resolve("config.yml");
         writeConfigFile(configFile, """
                 report:
@@ -399,7 +407,9 @@ class SettingsValidationTest {
                 """);
         assertTrue(settings.load());
         assertFalse(settings.isReportIncludeLogs());
-        assertFalse(settings.getTwoFactorSettings().isQrLinkEnabled());
+        assertTrue(settings.getTwoFactorSettings().isQrLinkEnabled(),
+                "The complete two-factor tree is restart-only");
+        assertEquals(Set.of("two-factor"), settings.getPendingRestartChanges());
     }
 
     @Test
@@ -518,27 +528,12 @@ class SettingsValidationTest {
     }
 
     @Test
-    void hotReloadableSettingsFieldsShouldBeMarkedVolatile() throws ReflectiveOperationException {
-        // Reload mutates these fields in place from a different thread than the readers.
-        // Without volatile a reader thread may observe a stale value indefinitely.
-        // If you add a new hot-reloadable scalar, add it here — and if you remove one,
-        // drop it. The set is intentionally explicit so this test documents the contract.
-        Set<String> hotReloadable = Set.of(
-                "ipLimitRegistrations",
-                "minPasswordLength",
-                "maxPasswordLength",
-                "bcryptCost",
-                "debugEnabled",
-                "reportEnabled",
-                "reportIncludeLogs",
-                "language");
+    void completeSettingsGenerationShouldBePublishedThroughOneVolatileReference()
+            throws ReflectiveOperationException {
+        Field publication = Settings.class.getDeclaredField("publication");
 
-        for (String fieldName : hotReloadable) {
-            Field field = Settings.class.getDeclaredField(fieldName);
-            int modifiers = field.getModifiers();
-            assertTrue(java.lang.reflect.Modifier.isVolatile(modifiers),
-                    "Settings." + fieldName + " must be volatile — it is hot-reloadable");
-        }
+        assertTrue(java.lang.reflect.Modifier.isVolatile(publication.getModifiers()),
+                "The complete immutable Settings generation must be published with one volatile write");
     }
 
     @Test
@@ -557,15 +552,19 @@ class SettingsValidationTest {
                   conflict-mode-ttl-hours: 24
                 """);
         assertTrue(settings.load(), "conflict-mode-ttl-hours: 24 should be valid");
-        assertEquals(24, settings.getConflictModeTtlHours());
+        assertEquals(0, settings.getConflictModeTtlHours(),
+                "Brute-force settings stay active until restart");
+        assertEquals(Set.of("brute-force"), settings.getPendingRestartChanges());
 
         writeConfigFile(configFile, """
                 security:
                   conflict-mode-ttl-hours: -1
                 """);
         assertFalse(settings.load(), "conflict-mode-ttl-hours: -1 should fail validation");
-        assertEquals(24, settings.getConflictModeTtlHours(),
-                "Rejected reload should preserve the previously active TTL");
+        assertEquals(0, settings.getConflictModeTtlHours(),
+                "Rejected reload should preserve the active restart-only TTL");
+        assertEquals(Set.of("brute-force"), settings.getPendingRestartChanges(),
+                "Rejected reload must preserve the previously valid pending candidate");
     }
 
     @Test
@@ -773,7 +772,7 @@ class SettingsValidationTest {
     }
 
     @Test
-    void removingEmbeddedOptInOnReloadShouldRestoreExternalDefaults() {
+    void removingEmbeddedOptInOnReloadShouldRemainPendingUntilRestart() {
         Path configFile = tempDir.resolve("config.yml");
         writeConfigFile(configFile, """
                 auth-server:
@@ -793,13 +792,13 @@ class SettingsValidationTest {
                 """);
 
         assertTrue(settings.load());
-        assertEquals(Settings.AuthServerMode.EXTERNAL, settings.getAuthServerMode());
-        assertEquals("external-limbo", settings.getAuthServerName());
+        assertEquals(Settings.AuthServerMode.EMBEDDED, settings.getAuthServerMode());
         Settings.EmbeddedAuthServerSettings embedded = settings.getEmbeddedAuthServerSettings();
-        assertEquals(0, embedded.getPort());
-        assertEquals(512, embedded.getMaxConnections());
-        assertEquals(10, embedded.getHandshakeTimeoutSeconds());
-        assertEquals(15, embedded.getLoginTimeoutSeconds());
+        assertEquals(25570, embedded.getPort());
+        assertEquals(750, embedded.getMaxConnections());
+        assertEquals(7, embedded.getHandshakeTimeoutSeconds());
+        assertEquals(12, embedded.getLoginTimeoutSeconds());
+        assertEquals(Set.of("auth-server"), settings.getPendingRestartChanges());
     }
 
     @ParameterizedTest(name = "shouldReject auth-server.mode={0}")
@@ -882,14 +881,193 @@ class SettingsValidationTest {
     }
 
     @Test
-    void hotReloadablePremiumCoreFieldsShouldBeVolatile() throws ReflectiveOperationException {
-        Set<String> hotReloadable = Set.of(
-                "checkEnabled", "allowCrackedOnPremiumNicks", "bypassAuthServer");
+    void publishedSettingValueObjectsShouldBeImmutableRecords() {
+        assertTrue(Settings.PremiumSettings.class.isRecord());
+        assertTrue(Settings.PasswordSettings.class.isRecord());
+        assertTrue(Settings.TwoFactorSettings.class.isRecord());
+    }
 
-        for (String fieldName : hotReloadable) {
-            Field field = Settings.PremiumSettings.class.getDeclaredField(fieldName);
-            assertTrue(java.lang.reflect.Modifier.isVolatile(field.getModifiers()),
-                    "Settings.PremiumSettings." + fieldName + " must be volatile — it is read by login events");
+    @Test
+    void reloadShouldApplyOnlyHotValuesAndReportEveryRestartOnlyGroup() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                debug-enabled: false
+                language: en
+                report:
+                  enabled: true
+                  include-logs: false
+                premium:
+                  check-enabled: true
+                  allow-cracked-on-premium-nicks: false
+                  bypass-auth-server: false
+                  resolver:
+                    request-timeout-ms: 3000
+                database:
+                  connection-pool-size: 20
+                cache:
+                  ttl-minutes: 60
+                auth-server:
+                  server-name: limbo
+                connection:
+                  timeout-seconds: 30
+                security:
+                  bcrypt-cost: 10
+                  ip-limit-registrations: 3
+                  min-password-length: 8
+                  max-password-length: 72
+                  bruteforce-max-attempts: 5
+                  bruteforce-timeout-minutes: 5
+                  conflict-mode-ttl-hours: 168
+                floodgate:
+                  enabled: false
+                alerts:
+                  enabled: false
+                audit-log:
+                  retention-days: 90
+                two-factor:
+                  enabled: true
+                  issuer: VeloAuth
+                  qr-link-enabled: false
+                  pending-timeout-seconds: 300
+                """);
+        assertTrue(settings.load());
+
+        writeConfigFile(configFile, """
+                debug-enabled: true
+                language: pl
+                report:
+                  enabled: false
+                  include-logs: true
+                premium:
+                  check-enabled: false
+                  allow-cracked-on-premium-nicks: true
+                  bypass-auth-server: true
+                  resolver:
+                    request-timeout-ms: 4000
+                database:
+                  connection-pool-size: 25
+                cache:
+                  ttl-minutes: 61
+                auth-server:
+                  server-name: next-limbo
+                connection:
+                  timeout-seconds: 31
+                security:
+                  bcrypt-cost: 11
+                  ip-limit-registrations: 4
+                  min-password-length: 12
+                  max-password-length: 20
+                  bruteforce-max-attempts: 6
+                  bruteforce-timeout-minutes: 6
+                  conflict-mode-ttl-hours: 169
+                floodgate:
+                  enabled: true
+                  username-prefix: "+"
+                alerts:
+                  enabled: true
+                audit-log:
+                  retention-days: 91
+                two-factor:
+                  enabled: false
+                  issuer: NextAuth
+                  qr-link-enabled: true
+                  pending-timeout-seconds: 301
+                """);
+
+        assertTrue(settings.load());
+
+        assertTrue(settings.isDebugEnabled());
+        assertFalse(settings.isReportEnabled());
+        assertTrue(settings.isReportIncludeLogs());
+        assertEquals("pl", settings.getLanguage());
+        assertFalse(settings.isPremiumCheckEnabled());
+        assertTrue(settings.isAllowCrackedOnPremiumNicks());
+        assertTrue(settings.isPremiumBypassAuthServerEnabled());
+
+        assertEquals(20, settings.getDatabaseConnectionPoolSize());
+        assertEquals(60, settings.getCacheTtlMinutes());
+        assertEquals("limbo", settings.getAuthServerName());
+        assertEquals(30, settings.getConnectionTimeoutSeconds());
+        assertEquals(10, settings.getBcryptCost());
+        assertEquals(3, settings.getIpLimitRegistrations());
+        assertEquals(3000, settings.getPremiumResolverSettings().getRequestTimeoutMs());
+        assertFalse(settings.isFloodgateIntegrationEnabled());
+        assertFalse(settings.getAlertSettings().isEnabled());
+        assertEquals(90, settings.getAuditLogSettings().getRetentionDays());
+        assertTrue(settings.getTwoFactorSettings().isEnabled());
+        assertEquals("VeloAuth", settings.getTwoFactorSettings().getIssuer());
+
+        assertEquals(Set.of(
+                "database/pool",
+                "cache/session",
+                "auth-server",
+                "connection",
+                "password/security",
+                "brute-force",
+                "premium-resolver",
+                "floodgate",
+                "alerts",
+                "audit-log",
+                "two-factor"), settings.getPendingRestartChanges());
+    }
+
+    @Test
+    void passwordValidationDuringReloadMustNotObserveMixedGenerations() throws Exception {
+        CountDownLatch passwordSnapshotCaptured = new CountDownLatch(1);
+        CountDownLatch reloadComplete = new CountDownLatch(1);
+        AtomicReference<Thread> validationThread = new AtomicReference<>();
+        Settings interleavingSettings = new Settings(tempDir) {
+            @Override
+            public PasswordSettings getPasswordSettings() {
+                PasswordSettings captured = super.getPasswordSettings();
+                if (Thread.currentThread() == validationThread.get()) {
+                    passwordSnapshotCaptured.countDown();
+                    awaitLatch(reloadComplete);
+                }
+                return captured;
+            }
+        };
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                security:
+                  min-password-length: 8
+                  max-password-length: 9
+                """);
+        assertTrue(interleavingSettings.load());
+
+        Messages messages = new Messages();
+        messages.setLanguage("en");
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<ValidationUtils.ValidationResult> validation = executor.submit(() -> {
+                validationThread.set(Thread.currentThread());
+                return ValidationUtils.validatePassword("abcdefghij", interleavingSettings, messages);
+            });
+            assertTrue(passwordSnapshotCaptured.await(5, TimeUnit.SECONDS),
+                    "Validation did not capture the old password settings generation");
+
+            writeConfigFile(configFile, """
+                    security:
+                      min-password-length: 12
+                      max-password-length: 20
+                    """);
+            assertTrue(interleavingSettings.load());
+            reloadComplete.countDown();
+
+            assertFalse(validation.get(5, TimeUnit.SECONDS).valid(),
+                    "Password length 10 is invalid in both 8..9 and 12..20 generations");
+        } finally {
+            reloadComplete.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS), "Timed out waiting for deterministic reload interleave");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting for deterministic reload interleave", e);
         }
     }
 

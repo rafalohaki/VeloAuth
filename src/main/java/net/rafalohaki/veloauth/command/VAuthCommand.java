@@ -6,6 +6,7 @@ import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 
@@ -25,7 +26,7 @@ class VAuthCommand implements SimpleCommand {
     private static final String ERROR_DATABASE_QUERY = "error.database.query";
     private static final String ERROR_REPORT_FAILED = "admin.report.failed";
     private static final String CONFLICT_PREFIX = "   §7";
-    private static final String RELOAD_WARNING_KEY = "admin.reload.warning";
+    private static final String RELOAD_WARNING_KEY = "admin.reload.pending_restart";
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
     private static final Marker AUTH_MARKER = MarkerFactory.getMarker("AUTH");
 
@@ -147,7 +148,7 @@ class VAuthCommand implements SimpleCommand {
         boolean success = ctx.plugin().reloadConfig();
         if (success) {
             source.sendMessage(ctx.sm().adminReloadSuccess());
-            sendLocalizedReloadWarning(source);
+            sendLocalizedReloadWarning(source, ctx.settings().getPendingRestartChanges());
         } else {
             source.sendMessage(ctx.sm().adminReloadFailed());
         }
@@ -172,23 +173,26 @@ class VAuthCommand implements SimpleCommand {
     }
 
     private void handleReportCommand(CommandSource source) {
-        if (!ctx.settings().isReportEnabled()) {
+        Settings.OperationSettings operationSettings = ctx.settings().captureOperationSettings();
+        if (!operationSettings.report().enabled()) {
             source.sendMessage(ctx.messages().component("admin.report.disabled", NamedTextColor.RED));
             return;
         }
         source.sendMessage(ctx.messages().component("admin.report.generating", NamedTextColor.YELLOW));
         source.sendMessage(ctx.messages().component("admin.report.warning", NamedTextColor.YELLOW));
-        ctx.runAsyncCommand(source, () -> processReport(source), ERROR_REPORT_FAILED);
+        ctx.runAsyncCommand(
+                source, () -> processReport(source, operationSettings), ERROR_REPORT_FAILED);
     }
 
-    private void processReport(CommandSource source) {
+    private void processReport(CommandSource source, Settings.OperationSettings operationSettings) {
         net.rafalohaki.veloauth.report.ReportService reportService = ctx.reportService();
         if (reportService == null) {
             source.sendMessage(ctx.messages().component(
                     ERROR_REPORT_FAILED, NamedTextColor.RED, "report service not initialized"));
             return;
         }
-        net.rafalohaki.veloauth.report.ReportService.ReportResult result = reportService.generateAndUpload();
+        net.rafalohaki.veloauth.report.ReportService.ReportResult result =
+                reportService.generateAndUpload(operationSettings);
         if (result.success()) {
             source.sendMessage(ctx.messages().component(
                     "admin.report.success", NamedTextColor.GREEN, result.url()));
@@ -385,14 +389,14 @@ class VAuthCommand implements SimpleCommand {
         }
     }
 
-    private void sendLocalizedReloadWarning(CommandSource source) {
-        String warningMessage = ctx.messages().get(RELOAD_WARNING_KEY);
-        if (RELOAD_WARNING_KEY.equals(warningMessage)
-                || ("Missing: " + RELOAD_WARNING_KEY).equals(warningMessage)) {
+    private void sendLocalizedReloadWarning(CommandSource source, java.util.Set<String> pendingChanges) {
+        if (pendingChanges.isEmpty()) {
             return;
         }
-        source.sendMessage(ctx.messages().componentFromResolvedText(
-                warningMessage, NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component(
+                RELOAD_WARNING_KEY,
+                NamedTextColor.YELLOW,
+                String.join(", ", pendingChanges)));
     }
 
     private record PlayerLookupResult(UUID playerUuid, boolean handledError) {}
