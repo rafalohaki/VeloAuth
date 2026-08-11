@@ -353,8 +353,6 @@ log=$2
 [[ -d "${build_dir}" && -z "$(find "${build_dir}" -mindepth 1 -print -quit)" ]]
 [[ "${MAVEN_SKIP_RC:-}" == true ]]
 [[ "${MAVEN_USER_HOME:-}" == */maven-user-home ]]
-[[ -z "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" ]]
-[[ -z "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" ]]
 [[ -f "${VELOAUTH_RELEASE_MAVEN_SETTINGS:-}" ]]
 [[ -d "${VELOAUTH_RELEASE_MAVEN_REPOSITORY:-}" ]]
 printf 'build:%s\n' "${build_dir}" >>"${log}"
@@ -373,12 +371,32 @@ cat >"${FAKE_SMOKE_A}" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "${VELOAUTH_PLUGIN_JAR:-}" == /* && -f "${VELOAUTH_PLUGIN_JAR}" ]]
+task_root="$(dirname -- "${MAVEN_USER_HOME}")"
+if [[ "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" != "${task_root}/maven-settings.xml" \
+    || "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" != "${task_root}/maven-repository" \
+    || "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" != "${VELOAUTH_RELEASE_MAVEN_SETTINGS:-}" \
+    || "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" != "${VELOAUTH_RELEASE_MAVEN_REPOSITORY:-}" \
+    || ! -f "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" \
+    || ! -d "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" ]]; then
+  echo "smoke A did not receive the task-owned Maven settings and repository" >&2
+  exit 91
+fi
 printf 'smoke-a:%s\n' "${VELOAUTH_PLUGIN_JAR}" >>"${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
 SH
 cat >"${FAKE_SMOKE_B}" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "${VELOAUTH_PLUGIN_JAR:-}" == /* && -f "${VELOAUTH_PLUGIN_JAR}" ]]
+task_root="$(dirname -- "${MAVEN_USER_HOME}")"
+if [[ "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" != "${task_root}/maven-settings.xml" \
+    || "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" != "${task_root}/maven-repository" \
+    || "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" != "${VELOAUTH_RELEASE_MAVEN_SETTINGS:-}" \
+    || "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" != "${VELOAUTH_RELEASE_MAVEN_REPOSITORY:-}" \
+    || ! -f "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" \
+    || ! -d "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" ]]; then
+  echo "smoke B did not receive the task-owned Maven settings and repository" >&2
+  exit 92
+fi
 printf 'smoke-b:%s\n' "${VELOAUTH_PLUGIN_JAR}" >>"${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
 SH
 cat >"${FAKE_IDENTITY}" <<'SH'
@@ -410,7 +428,10 @@ VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
   "${FAKE_BUILDER}" "${FAKE_REPRO}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" "${FAKE_IDENTITY}" \
   "${INVOCATION_LOG}" \
   >"${TEMP_DIR}/orchestrated.out" 2>&1 \
-  || fail "guarded fake build orchestration must pass"
+  || {
+    cat "${TEMP_DIR}/orchestrated.out" >&2
+    fail "guarded fake build orchestration must pass"
+  }
 [[ "$(grep -c '^build:' "${INVOCATION_LOG}")" == 1 ]] \
   || fail "canonical candidate must be built exactly once"
 EXPECTED_ORCHESTRATED_JAR="${ORCHESTRATED}/veloauth-1.5.0.jar"
