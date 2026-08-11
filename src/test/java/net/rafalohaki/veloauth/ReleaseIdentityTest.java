@@ -81,6 +81,59 @@ class ReleaseIdentityTest {
     }
 
     @Test
+    void verifier_ConsistentFixture_DoesNotInvokeMaven() throws Exception {
+        Fixture fixture = createFixture(VERSION);
+
+        VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
+
+        assertEquals(0, result.exitCode(), result.output());
+        assertTrue(Files.notExists(fixture.mavenMarker()),
+                "Offline identity verification must not invoke Maven or the wrapper");
+    }
+
+    @Test
+    void verifier_OnlyNestedVersion_FailsClosed() throws Exception {
+        Fixture fixture = createFixture(VERSION);
+        Files.writeString(fixture.root().resolve("pom.xml"), """
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>net.rafalohaki</groupId>
+                    <artifactId>parent</artifactId>
+                    <version>1.5.0</version>
+                  </parent>
+                  <artifactId>veloauth</artifactId>
+                </project>
+                """, StandardCharsets.UTF_8);
+
+        VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
+
+        assertEquals(1, result.exitCode(), result.output());
+        assertTrue(result.output().contains(
+                "Maven project must contain exactly one direct release version"), result.output());
+    }
+
+    @Test
+    void verifier_DuplicateDirectVersions_FailsClosed() throws Exception {
+        Fixture fixture = createFixture(VERSION);
+        Files.writeString(fixture.root().resolve("pom.xml"), """
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>net.rafalohaki.veloauth</groupId>
+                  <artifactId>veloauth</artifactId>
+                  <version>1.5.0</version>
+                  <version>1.5.0</version>
+                </project>
+                """, StandardCharsets.UTF_8);
+
+        VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
+
+        assertEquals(1, result.exitCode(), result.output());
+        assertTrue(result.output().contains(
+                "Maven project must contain exactly one direct release version"), result.output());
+    }
+
+    @Test
     void verifier_MismatchedTag_FailsWithSpecificDiagnostic() throws Exception {
         Fixture fixture = createFixture(VERSION);
 
@@ -194,7 +247,6 @@ class ReleaseIdentityTest {
         ProcessBuilder processBuilder = new ProcessBuilder(VERIFIER.toString(), EXPECTED_TAG);
         processBuilder.redirectErrorStream(true);
         processBuilder.environment().put("VELOAUTH_RELEASE_IDENTITY_PROJECT_DIR", fixture.root().toString());
-        processBuilder.environment().put("VELOAUTH_RELEASE_IDENTITY_MAVEN", fixture.maven().toString());
 
         VerificationResult result = runProcess(processBuilder);
 
@@ -222,34 +274,24 @@ class ReleaseIdentityTest {
                   <version>1.5.0</version>
                 </project>
                 """, StandardCharsets.UTF_8);
-        Files.writeString(root.resolve("fixture-version"), VERSION, StandardCharsets.UTF_8);
-
-        Path fakeMaven = root.resolve("fake-maven");
+        Path mavenMarker = root.resolve("maven-invoked");
+        Path fakeMaven = root.resolve("mvnw");
         Files.writeString(fakeMaven, """
                 #!/usr/bin/env bash
                 set -euo pipefail
-                found_expression=false
-                for argument in "$@"; do
-                  if [[ "${argument}" == "-Dexpression=project.version" ]]; then
-                    found_expression=true
-                  fi
-                done
-                if [[ "${found_expression}" != true ]]; then
-                  echo "Unexpected fake Maven invocation" >&2
-                  exit 97
-                fi
-                tr -d '\\r\\n' < "$(dirname -- "$0")/fixture-version"
-                printf '\\n'
+                : >"$(dirname -- "$0")/maven-invoked"
+                echo "Release identity verifier invoked Maven" >&2
+                exit 97
                 """, StandardCharsets.UTF_8);
-        assertTrue(fakeMaven.toFile().setExecutable(true), "Fixture Maven command must be executable");
+        assertTrue(fakeMaven.toFile().setExecutable(true), "Poison Maven wrapper must be executable");
 
         Path jar = target.resolve("veloauth-1.5.0.jar");
         writeFixtureJar(jar, pluginMetadataVersion, buildConstantsContent);
         String sha256 = sha256(jar);
         Path checksum = Path.of(jar + ".sha256");
         Files.writeString(checksum, sha256 + "  " + jar.getFileName() + "\n", StandardCharsets.UTF_8);
-        return new Fixture(root, temporary, fakeMaven, jar, checksum,
-                Path.of(jar + ".manifest.json"), sha256);
+        return new Fixture(root, temporary, jar, checksum,
+                Path.of(jar + ".manifest.json"), sha256, mavenMarker);
     }
 
     private static byte[] validBuildConstants() throws IOException {
@@ -289,7 +331,6 @@ class ReleaseIdentityTest {
         processBuilder.redirectErrorStream(true);
         processBuilder.environment().put("VELOAUTH_RELEASE_IDENTITY_TEST_MODE", "true");
         processBuilder.environment().put("VELOAUTH_RELEASE_IDENTITY_PROJECT_DIR", fixture.root().toString());
-        processBuilder.environment().put("VELOAUTH_RELEASE_IDENTITY_MAVEN", fixture.maven().toString());
         processBuilder.environment().put("TMPDIR", fixture.temporary().toString());
         VerificationResult result = runProcess(processBuilder);
         try (var entries = Files.list(fixture.temporary())) {
@@ -383,7 +424,8 @@ class ReleaseIdentityTest {
     }
 
     private record Fixture(
-            Path root, Path temporary, Path maven, Path jar, Path checksum, Path manifest, String sha256) {
+            Path root, Path temporary, Path jar, Path checksum, Path manifest, String sha256,
+            Path mavenMarker) {
     }
 
     private record VerificationResult(int exitCode, String output) {

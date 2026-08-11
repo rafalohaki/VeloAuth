@@ -7,10 +7,14 @@ both real-proxy smoke tests, attestation, the protected approval gate, and publi
 
 ## Provenance and publication gate
 
-Before the tag is created, GitHub's immutable-releases repository setting must already be enabled
-and the `production-release` environment must require a maintainer's manual approval. Tagging is
-forbidden if that protection is absent. Approve the release job only after the exact workflow
-candidate passed the external-limbo canary and the protected environment contains:
+Before the tag is created, GitHub's immutable-releases repository setting and a protected tag
+ruleset that blocks update/deletion of `v*` tags must already be enabled, and the
+`production-release` environment must require a maintainer's manual approval. Store
+`RELEASE_POLICY_TOKEN` in that environment as a fine-grained token with repository
+`Administration (read)` permission so the workflow can verify the immutable-release policy before
+and after publication. Tagging is forbidden if any protection is absent. Approve the release job
+only after the exact workflow candidate passed the external-limbo canary and the protected
+environment contains:
 
 - `EXTERNAL_CANARY_GREEN=true`
 - `OPERATOR_RELEASE_SIGNOFF=v{{VERSION}}:<40-character-source-commit>`

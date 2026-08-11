@@ -197,7 +197,49 @@ compare_build_outputs() {
   echo "Reproducible artifact verified: ${name_a}; SHA-256 ${sha_a}; size ${size_a} bytes"
 }
 
-if [[ $# -gt 0 && ( "$1" == --test-compare || "$1" == --test-orchestrate \
+compare_existing_candidate() {
+  local candidate=$1
+  local build_a=$2
+  local build_b=$3
+  [[ "${candidate}" == /* ]] \
+    || fail "Existing canonical candidate path must be absolute: ${candidate}"
+  [[ -f "${candidate}" && ! -L "${candidate}" ]] \
+    || fail "Existing canonical candidate must be a regular non-symlink file: ${candidate}"
+
+  local artifact_a artifact_b build_artifact candidate_name build_name candidate_sha build_sha
+  artifact_a="$(select_candidate "Build A" "${build_a}")"
+  artifact_b="$(select_candidate "Build B" "${build_b}")"
+  candidate_name="$(basename -- "${candidate}")"
+  for build_artifact in "${artifact_a}" "${artifact_b}"; do
+    build_name="$(basename -- "${build_artifact}")"
+    [[ "${candidate_name}" == "${build_name}" ]] \
+      || fail "Canonical candidate name mismatch: expected ${build_name}, found ${candidate_name}"
+  done
+
+  candidate_sha="$(sha256_file "${candidate}")"
+  build_sha="$(sha256_file "${artifact_a}")"
+  if [[ "$(wc -c <"${candidate}" | tr -d '[:space:]')" \
+      != "$(wc -c <"${artifact_a}" | tr -d '[:space:]')" \
+      || "${candidate_sha}" != "${build_sha}" ]] \
+      || ! cmp -s -- "${candidate}" "${artifact_a}"; then
+    diagnose_archive_mismatch "${candidate}" "${artifact_a}"
+    fail "Canonical candidate differs from fresh reproducibility Build A"
+  fi
+
+  build_sha="$(sha256_file "${artifact_b}")"
+  if [[ "$(wc -c <"${candidate}" | tr -d '[:space:]')" \
+      != "$(wc -c <"${artifact_b}" | tr -d '[:space:]')" \
+      || "${candidate_sha}" != "${build_sha}" ]] \
+      || ! cmp -s -- "${candidate}" "${artifact_b}"; then
+    diagnose_archive_mismatch "${candidate}" "${artifact_b}"
+    fail "Canonical candidate differs from fresh reproducibility Build B"
+  fi
+
+  echo "Canonical candidate matches both fresh reproducibility builds: ${candidate_name}; SHA-256 ${candidate_sha}"
+}
+
+if [[ $# -gt 0 && ( "$1" == --test-compare || "$1" == --test-compare-existing \
+    || "$1" == --test-orchestrate \
     || "$1" == --test-cleanup-probe ) ]]; then
   [[ "${TEST_MODE}" == true ]] \
     || fail "Test-only verifier hooks require VELOAUTH_REPRO_TEST_MODE=true"
@@ -206,6 +248,14 @@ if [[ $# -gt 0 && ( "$1" == --test-compare || "$1" == --test-orchestrate \
       [[ $# -eq 3 ]] || fail "Usage in test mode: $0 --test-compare BUILD_A BUILD_B"
       initialize_work_dir
       compare_build_outputs "$2" "$3"
+      exit 0
+      ;;
+    --test-compare-existing)
+      [[ $# -eq 4 ]] \
+        || fail "Usage in test mode: $0 --test-compare-existing CANDIDATE BUILD_A BUILD_B"
+      initialize_work_dir
+      compare_build_outputs "$3" "$4"
+      compare_existing_candidate "$2" "$3" "$4"
       exit 0
       ;;
     --test-orchestrate)
@@ -234,7 +284,19 @@ fi
 
 [[ "${TEST_MODE}" == false ]] \
   || fail "VELOAUTH_REPRO_TEST_MODE=true is valid only with an explicit test-only hook"
-[[ $# -eq 0 ]] || fail "Usage: $0"
+EXISTING_CANDIDATE=""
+case $# in
+  0) ;;
+  2)
+    [[ "$1" == --compare-existing ]] || fail "Usage: $0 [--compare-existing ABSOLUTE_JAR]"
+    EXISTING_CANDIDATE=$2
+    [[ "${EXISTING_CANDIDATE}" == /* ]] \
+      || fail "Existing canonical candidate path must be absolute: ${EXISTING_CANDIDATE}"
+    [[ -f "${EXISTING_CANDIDATE}" && ! -L "${EXISTING_CANDIDATE}" ]] \
+      || fail "Existing canonical candidate must be a regular non-symlink file: ${EXISTING_CANDIDATE}"
+    ;;
+  *) fail "Usage: $0 [--compare-existing ABSOLUTE_JAR]" ;;
+esac
 reject_build_environment_overrides
 
 require_command awk
@@ -380,3 +442,6 @@ print(version)
 PY
 )" || fail "Unable to resolve the Maven project version"
 compare_build_outputs "${CLONE_A}" "${CLONE_B}" "veloauth-${PROJECT_VERSION}.jar"
+if [[ -n "${EXISTING_CANDIDATE}" ]]; then
+  compare_existing_candidate "${EXISTING_CANDIDATE}" "${CLONE_A}" "${CLONE_B}"
+fi

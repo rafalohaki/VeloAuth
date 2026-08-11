@@ -341,6 +341,7 @@ assert_contains "${TEMP_DIR}/existing-identity-guard.out" \
   "--existing identity test helper must be guarded"
 
 FAKE_BUILDER="${TEMP_DIR}/fake-builder.sh"
+FAKE_REPRO="${TEMP_DIR}/fake-repro.sh"
 FAKE_SMOKE_A="${TEMP_DIR}/fake-smoke-a.sh"
 FAKE_SMOKE_B="${TEMP_DIR}/fake-smoke-b.sh"
 FAKE_IDENTITY="${TEMP_DIR}/fake-identity.sh"
@@ -352,13 +353,21 @@ log=$2
 [[ -d "${build_dir}" && -z "$(find "${build_dir}" -mindepth 1 -print -quit)" ]]
 [[ "${MAVEN_SKIP_RC:-}" == true ]]
 [[ "${MAVEN_USER_HOME:-}" == */maven-user-home ]]
-[[ -f "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" ]]
-[[ -d "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" ]]
-[[ "${VELOAUTH_RELEASE_MAVEN_SETTINGS:-}" == "${VELOAUTH_SMOKE_MAVEN_SETTINGS}" ]]
-[[ "${VELOAUTH_RELEASE_MAVEN_REPOSITORY:-}" == "${VELOAUTH_SMOKE_MAVEN_REPOSITORY}" ]]
+[[ -z "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" ]]
+[[ -z "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" ]]
+[[ -f "${VELOAUTH_RELEASE_MAVEN_SETTINGS:-}" ]]
+[[ -d "${VELOAUTH_RELEASE_MAVEN_REPOSITORY:-}" ]]
 printf 'build:%s\n' "${build_dir}" >>"${log}"
 mkdir -p "${build_dir}/target"
 printf 'one canonical build\n' >"${build_dir}/target/veloauth-1.5.0.jar"
+SH
+cat >"${FAKE_REPRO}" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--compare-existing" ]]
+[[ "$2" == /*/veloauth-1.5.0.jar && -f "$2" ]]
+grep -Fxq 'one canonical build' "$2"
+printf 'repro:%s\n' "$2" >>"${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
 SH
 cat >"${FAKE_SMOKE_A}" <<'SH'
 #!/usr/bin/env bash
@@ -379,11 +388,12 @@ set -euo pipefail
 [[ "$2" == /*/veloauth-1.5.0.jar && -f "$2" ]]
 printf 'identity:%s\n' "$2" >>"${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
 SH
-chmod 700 "${FAKE_BUILDER}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" "${FAKE_IDENTITY}"
+chmod 700 "${FAKE_BUILDER}" "${FAKE_REPRO}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" \
+  "${FAKE_IDENTITY}"
 
 run_expect_failure "${TEMP_DIR}/build-hook-guard.out" \
   "${CANDIDATE_VERIFIER}" --test-build "${TEMP_DIR}/unused" \
-  "${FAKE_BUILDER}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" "${FAKE_IDENTITY}" \
+  "${FAKE_BUILDER}" "${FAKE_REPRO}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" "${FAKE_IDENTITY}" \
   "${TEMP_DIR}/unused.log"
 assert_contains "${TEMP_DIR}/build-hook-guard.out" \
   "Test-only release build hook requires VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true" \
@@ -397,13 +407,15 @@ printf 'keep\n' >"${CLEANUP_PARENT}/unrelated-sibling/marker"
 TMPDIR="${CLEANUP_PARENT}" VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true \
 VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
   "${CANDIDATE_VERIFIER}" --test-build "${ORCHESTRATED}" \
-  "${FAKE_BUILDER}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" "${FAKE_IDENTITY}" \
+  "${FAKE_BUILDER}" "${FAKE_REPRO}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" "${FAKE_IDENTITY}" \
   "${INVOCATION_LOG}" \
   >"${TEMP_DIR}/orchestrated.out" 2>&1 \
   || fail "guarded fake build orchestration must pass"
 [[ "$(grep -c '^build:' "${INVOCATION_LOG}")" == 1 ]] \
   || fail "canonical candidate must be built exactly once"
 EXPECTED_ORCHESTRATED_JAR="${ORCHESTRATED}/veloauth-1.5.0.jar"
+[[ "$(grep -c "^repro:${EXPECTED_ORCHESTRATED_JAR}$" "${INVOCATION_LOG}")" == 1 ]] \
+  || fail "both fresh reproducibility builds must be compared to the canonical candidate"
 [[ "$(grep -Ec "^smoke-[ab]:${EXPECTED_ORCHESTRATED_JAR}$" "${INVOCATION_LOG}")" == 2 ]] \
   || fail "both smokes must receive the same absolute candidate JAR"
 [[ "$(grep -c "^identity:${EXPECTED_ORCHESTRATED_JAR}$" "${INVOCATION_LOG}")" == 1 ]] \
@@ -426,15 +438,56 @@ VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
 
 ENV_CANDIDATE="${TEMP_DIR}/environment-candidate"
 mkdir -p "${ENV_CANDIDATE}"
-run_expect_failure "${TEMP_DIR}/environment.out" env \
-  VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true MAVEN_OPTS=fixture-override \
-  "${CANDIDATE_VERIFIER}" --test-build "${ENV_CANDIDATE}" \
-  "${FAKE_BUILDER}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" "${FAKE_IDENTITY}" \
-  "${TEMP_DIR}/environment.log"
-assert_contains "${TEMP_DIR}/environment.out" \
-  "Build-affecting environment variable must be empty or unset: MAVEN_OPTS" \
-  "ambient Maven/JVM overrides must fail before building"
-[[ ! -e "${TEMP_DIR}/environment.log" ]] || fail "rejected ambient environment reached fake builder"
+PRODUCTION_OVERRIDE_VARIABLES=(
+  MAVEN_OPTS
+  VELOAUTH_PLUGIN_JAR
+  VELOAUTH_CTD_REQUIRE_PINNED_JAVA25
+  VELOAUTH_SMOKE_COPY_DESTINATION
+  VELOAUTH_SMOKE_COPY_TEST_MODE
+  VELOAUTH_SMOKE_JAVA
+  VELOAUTH_SMOKE_MAVEN_REPOSITORY
+  VELOAUTH_SMOKE_MAVEN_SETTINGS
+  VELOAUTH_TEST_FORWARDING_MODE
+  VELOAUTH_TEST_RUNTIME_UPDATE
+  VELOAUTH_VELOCITY_LABEL
+  VELOAUTH_VELOCITY_SHA256
+  VELOAUTH_VELOCITY_URL
+)
+for variable_name in "${PRODUCTION_OVERRIDE_VARIABLES[@]}"; do
+  environment_log="${TEMP_DIR}/environment-${variable_name}.log"
+  run_expect_failure "${TEMP_DIR}/environment-${variable_name}.out" env \
+    VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true "${variable_name}=fixture-override" \
+    "${CANDIDATE_VERIFIER}" --test-build "${ENV_CANDIDATE}" \
+    "${FAKE_BUILDER}" "${FAKE_REPRO}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" \
+    "${FAKE_IDENTITY}" "${environment_log}"
+  assert_contains "${TEMP_DIR}/environment-${variable_name}.out" \
+    "Build-affecting environment variable must be empty or unset: ${variable_name}" \
+    "ambient ${variable_name} override must fail before building"
+  [[ ! -e "${environment_log}" ]] || fail "rejected ${variable_name} reached fake builder"
+done
+
+MISMATCH_REPRO="${TEMP_DIR}/mismatch-repro.sh"
+cat >"${MISMATCH_REPRO}" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'repro-mismatch:%s\n' "$2" >>"${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
+echo 'Canonical candidate differs from fresh reproducibility Build A' >&2
+exit 1
+SH
+chmod 700 "${MISMATCH_REPRO}"
+REPRO_MISMATCH_CANDIDATE="${TEMP_DIR}/repro-mismatch-candidate"
+mkdir -p "${REPRO_MISMATCH_CANDIDATE}"
+run_expect_failure "${TEMP_DIR}/repro-mismatch.out" env \
+  VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true \
+  "${CANDIDATE_VERIFIER}" --test-build "${REPRO_MISMATCH_CANDIDATE}" \
+  "${FAKE_BUILDER}" "${MISMATCH_REPRO}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" \
+  "${FAKE_IDENTITY}" "${TEMP_DIR}/repro-mismatch.log"
+assert_contains "${TEMP_DIR}/repro-mismatch.out" \
+  "Canonical candidate differs from fresh reproducibility Build A" \
+  "candidate/repro mismatch must fail closed"
+if grep -Eq '^(smoke-|identity:)' "${TEMP_DIR}/repro-mismatch.log"; then
+  fail "release smoke or identity ran after reproducibility mismatch"
+fi
 
 MUTATING_SMOKE="${TEMP_DIR}/mutating-smoke.sh"
 cat >"${MUTATING_SMOKE}" <<'SH'
@@ -450,7 +503,7 @@ mkdir -p "${MUTATION_CANDIDATE}"
 run_expect_failure "${TEMP_DIR}/smoke-mutation.out" env \
   VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true \
   "${CANDIDATE_VERIFIER}" --test-build "${MUTATION_CANDIDATE}" \
-  "${FAKE_BUILDER}" "${MUTATING_SMOKE}" "${FAKE_SMOKE_B}" "${FAKE_IDENTITY}" \
+  "${FAKE_BUILDER}" "${FAKE_REPRO}" "${MUTATING_SMOKE}" "${FAKE_SMOKE_B}" "${FAKE_IDENTITY}" \
   "${TEMP_DIR}/mutation.log"
 assert_contains "${TEMP_DIR}/smoke-mutation.out" \
   "Release candidate changed during the first smoke test" \
@@ -469,7 +522,7 @@ mkdir -p "${IDENTITY_MUTATION_CANDIDATE}"
 run_expect_failure "${TEMP_DIR}/identity-mutation.out" env \
   VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true \
   "${CANDIDATE_VERIFIER}" --test-build "${IDENTITY_MUTATION_CANDIDATE}" \
-  "${FAKE_BUILDER}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" "${MUTATING_IDENTITY}" \
+  "${FAKE_BUILDER}" "${FAKE_REPRO}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" "${MUTATING_IDENTITY}" \
   "${TEMP_DIR}/identity-mutation.log"
 assert_contains "${TEMP_DIR}/identity-mutation.out" \
   "Release candidate changed during release identity verification" \
@@ -614,13 +667,12 @@ required = [
     "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961",
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-    "actions/attest-build-provenance@1e69f48acb82d1966a394da916b4c1698aa569d6",
+    "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
     "environment: production-release",
     "./scripts/verify-release-candidate.sh --build",
     "./scripts/verify-release-candidate.sh --existing",
     "./scripts/verify-release-candidate.sh --render-notes",
     "./scripts/test-verify-reproducible-jar.sh",
-    "./scripts/verify-reproducible-jar.sh",
     "gh attestation verify",
     "gh release download",
     "--json isImmutable --jq .isImmutable",
@@ -631,6 +683,11 @@ required = [
     "EXTERNAL_CANARY_GREEN",
     "java-version: '25.0.4+7'",
     "VELOAUTH_CTD_JAVA25_HOME",
+    "RELEASE_POLICY_TOKEN",
+    "repos/${GITHUB_REPOSITORY}/immutable-releases",
+    "X-GitHub-Api-Version: 2026-03-10",
+    "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}",
+    "repos/${GITHUB_REPOSITORY}/git/tags/",
 ]
 for token in required:
     if token not in text:
@@ -647,6 +704,7 @@ if not re.search(r"(?ms)^  release:.*?actions/download-artifact@", text):
 for forbidden in (
     "allowUpdates", "replacesArtifacts", "ncipollo/release-action", "overwrite: true",
     "--clobber", "refs/tags/latest", "git tag -a latest", "$(date", "date -u",
+    "actions/attest-build-provenance@",
 ):
     if forbidden.lower() in text.lower():
         raise SystemExit(f"TEST FAILURE: workflow contains forbidden mutable token: {forbidden}")
@@ -696,7 +754,7 @@ end
 candidate_steps = candidate.fetch("steps")
 java25_index = candidate_steps.index { |step| step["id"] == "candidate-java25" }
 java21_index = candidate_steps.index { |step| step["name"] == "Restore exact Temurin 21.0.12+8 as the build default" }
-repro_index = candidate_steps.index { |step| step["name"] == "Prove reproducibility before creating the candidate" }
+repro_index = candidate_steps.index { |step| step["name"] == "Run reproducibility fixture tests" }
 build_index = candidate_steps.index { |step| step["name"] == "Build and smoke the single canonical candidate" }
 attest_index = candidate_steps.index { |step| step["name"] == "Attest the exact candidate JAR" }
 post_attest_index = candidate_steps.index { |step| step["name"] == "Re-hash the attested candidate before upload" }
@@ -710,12 +768,15 @@ unless build_env.fetch("VELOAUTH_CTD_JAVA25_HOME").include?("candidate-java25")
   raise "TEST FAILURE: canonical candidate does not pass the pinned Java 25 home only to CTD smoke"
 end
 repro_script = candidate_steps.fetch(repro_index).fetch("run")
-unless repro_script.include?("./scripts/test-verify-reproducible-jar.sh") &&
-       repro_script.include?("./scripts/verify-reproducible-jar.sh")
-  raise "TEST FAILURE: candidate must run fixture and real reproducibility gates"
+unless repro_script.include?("./scripts/test-verify-reproducible-jar.sh")
+  raise "TEST FAILURE: candidate must run reproducibility fixture gates"
+end
+build_script = candidate_steps.fetch(build_index).fetch("run")
+unless build_script.include?("verify-release-candidate.sh --build")
+  raise "TEST FAILURE: canonical build must own candidate/reproducibility comparison"
 end
 unless repro_index < build_index && build_index < attest_index && attest_index < post_attest_index && post_attest_index < upload_index
-  raise "TEST FAILURE: candidate order must be reproduce, build, attest, re-hash, upload"
+  raise "TEST FAILURE: candidate order must be fixture, canonical build plus comparison, attest, re-hash, upload"
 end
 
 release_steps = release.fetch("steps")
@@ -724,17 +785,35 @@ publish_index = release_steps.index { |step| step["name"] == "Publish one immuta
 release_attest_index = release_steps.index { |step| step["name"] == "Verify the exact attestation before publication" }
 release_rehash_index = release_steps.index { |step| step["name"] == "Re-hash the attested candidate before publication" }
 published_verify_index = release_steps.index { |step| step["name"] == "Verify immutable published assets byte for byte" }
+policy_index = release_steps.index { |step| step["name"] == "Require immutable-release policy" }
 raise "TEST FAILURE: protected release gate is missing" unless gate_index
 raise "TEST FAILURE: immutable publication step is missing" unless publish_index
+raise "TEST FAILURE: immutable-release policy gate is missing" unless policy_index
 raise "TEST FAILURE: protected release gate must precede publication" unless gate_index < publish_index
-unless release_attest_index < release_rehash_index && release_rehash_index < publish_index && publish_index < published_verify_index
+unless release_attest_index < release_rehash_index && release_rehash_index < policy_index && policy_index < publish_index && publish_index < published_verify_index
   raise "TEST FAILURE: release order must be attest, re-hash, publish, immutable byte verification"
+end
+policy = release_steps.fetch(policy_index)
+unless policy.fetch("env").fetch("GH_TOKEN") == "${{ secrets.RELEASE_POLICY_TOKEN }}" &&
+       policy.fetch("run").include?("immutable-releases") &&
+       policy.fetch("run").include?(".enabled")
+  raise "TEST FAILURE: immutable-release policy must use the protected Administration(read) token"
+end
+publish_script = release_steps.fetch(publish_index).fetch("run")
+unless publish_script.include?("git/ref/tags/${GITHUB_REF_NAME}") &&
+       publish_script.include?("git/tags/${tag_sha}") &&
+       publish_script.index("git/ref/tags/${GITHUB_REF_NAME}") < publish_script.index("gh release create")
+  raise "TEST FAILURE: remote lightweight/annotated tag must be peeled immediately before publication"
 end
 published_script = release_steps.fetch(published_verify_index).fetch("run")
 unless published_script.include?("--json isImmutable --jq .isImmutable") &&
        published_script.include?("gh release download") &&
        published_script.include?("cmp --") &&
-       published_script.include?("verify-release-candidate.sh --existing")
+       published_script.include?("verify-release-candidate.sh --existing") &&
+       published_script.include?("git/ref/tags/${GITHUB_REF_NAME}") &&
+       published_script.include?("immutable-releases") &&
+       release_steps.fetch(published_verify_index).fetch("env").fetch("RELEASE_POLICY_TOKEN") ==
+         "${{ secrets.RELEASE_POLICY_TOKEN }}"
   raise "TEST FAILURE: published release must be immutable and byte-identical with exactly three assets"
 end
 gate = release_steps.fetch(gate_index)
@@ -754,5 +833,11 @@ grep -Fq 'production-release' "${PROJECT_DIR}/README.md" \
   || fail "README must document the protected release environment precondition"
 grep -Fq 'verify-release-candidate.sh --existing' "${PROJECT_DIR}/README.md" \
   || fail "README must document offline verification of an existing candidate"
+grep -Fq 'RELEASE_POLICY_TOKEN' "${PROJECT_DIR}/README.md" \
+  || fail "README must document the protected immutable-release policy token"
+grep -Fq 'Administration (read)' "${PROJECT_DIR}/README.md" \
+  || fail "README must document least-privilege policy-token permission"
+grep -Fq 'protected tag ruleset' "${PROJECT_DIR}/README.md" \
+  || fail "README must require a protected tag ruleset before tag creation"
 
 echo "Release artifact fixture tests passed"

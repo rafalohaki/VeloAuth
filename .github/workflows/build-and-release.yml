@@ -216,12 +216,8 @@ jobs:
       - name: Run release artifact fixture tests
         run: ./scripts/test-release-artifacts.sh
 
-      - name: Prove reproducibility before creating the candidate
-        env:
-          VELOAUTH_JAVA21_HOME: ${{ env.JAVA_HOME }}
-        run: |
-          ./scripts/test-verify-reproducible-jar.sh
-          ./scripts/verify-reproducible-jar.sh
+      - name: Run reproducibility fixture tests
+        run: ./scripts/test-verify-reproducible-jar.sh
 
       - name: Build and smoke the single canonical candidate
         env:
@@ -262,7 +258,7 @@ jobs:
           "${GITHUB_REF_NAME}"
 
       - name: Attest the exact candidate JAR
-        uses: actions/attest-build-provenance@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/veloauth-release-candidate/${{ steps.identity.outputs.jar-name }}
 
@@ -392,6 +388,19 @@ jobs:
             exit 1
           fi
 
+      - name: Require immutable-release policy
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
+        run: |
+          enabled="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled')"
+          if [[ "${enabled}" != true ]]; then
+            echo "GitHub immutable releases must be enabled before publication" >&2
+            exit 1
+          fi
+
       - name: Publish one immutable release with exactly three assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -399,6 +408,36 @@ jobs:
           VERSION: ${{ needs.candidate.outputs.version }}
         run: |
           candidate_dir="${RUNNER_TEMP}/veloauth-release-candidate"
+          verify_remote_tag_commit() {
+            local tag_object tag_type tag_sha depth
+            tag_object="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" \
+              --jq '.object.type, .object.sha')"
+            tag_type="$(printf '%s\n' "${tag_object}" | sed -n '1p')"
+            tag_sha="$(printf '%s\n' "${tag_object}" | sed -n '2p')"
+            depth=0
+            while [[ "${tag_type}" == tag ]]; do
+              depth=$((depth + 1))
+              if [[ ${depth} -gt 8 || ! "${tag_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "Remote release tag could not be safely peeled" >&2
+                exit 1
+              fi
+              tag_object="$(gh api \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2026-03-10" \
+                "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" \
+                --jq '.object.type, .object.sha')"
+              tag_type="$(printf '%s\n' "${tag_object}" | sed -n '1p')"
+              tag_sha="$(printf '%s\n' "${tag_object}" | sed -n '2p')"
+            done
+            if [[ "${tag_type}" != commit || "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+              echo "Remote release tag does not resolve to workflow commit ${GITHUB_SHA}" >&2
+              exit 1
+            fi
+          }
+          verify_remote_tag_commit
           gh release create "${GITHUB_REF_NAME}" \
             "${candidate_dir}/${JAR_NAME}" \
             "${candidate_dir}/${JAR_NAME}.sha256" \
@@ -412,7 +451,46 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           JAR_NAME: ${{ needs.candidate.outputs.jar-name }}
+          RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
         run: |
+          verify_remote_tag_commit() {
+            local tag_object tag_type tag_sha depth
+            tag_object="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" \
+              --jq '.object.type, .object.sha')"
+            tag_type="$(printf '%s\n' "${tag_object}" | sed -n '1p')"
+            tag_sha="$(printf '%s\n' "${tag_object}" | sed -n '2p')"
+            depth=0
+            while [[ "${tag_type}" == tag ]]; do
+              depth=$((depth + 1))
+              if [[ ${depth} -gt 8 || ! "${tag_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "Remote release tag could not be safely peeled" >&2
+                exit 1
+              fi
+              tag_object="$(gh api \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2026-03-10" \
+                "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" \
+                --jq '.object.type, .object.sha')"
+              tag_type="$(printf '%s\n' "${tag_object}" | sed -n '1p')"
+              tag_sha="$(printf '%s\n' "${tag_object}" | sed -n '2p')"
+            done
+            if [[ "${tag_type}" != commit || "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+              echo "Remote release tag changed during publication" >&2
+              exit 1
+            fi
+          }
+          verify_remote_tag_commit
+          enabled="$(GH_TOKEN="${RELEASE_POLICY_TOKEN}" gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled')"
+          if [[ "${enabled}" != true ]]; then
+            echo "GitHub immutable releases became disabled during publication" >&2
+            exit 1
+          fi
           if [[ "$(gh release view "${GITHUB_REF_NAME}" --json isImmutable --jq .isImmutable)" != true ]]; then
             echo "Published release is not immutable" >&2
             exit 1

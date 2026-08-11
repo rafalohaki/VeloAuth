@@ -332,7 +332,19 @@ reject_build_environment_overrides() {
       MAVEN_BASEDIR \
       MAVEN_CONFIG \
       MAVEN_PROJECTBASEDIR \
-      MVNW_REPOURL; do
+      MVNW_REPOURL \
+      VELOAUTH_PLUGIN_JAR \
+      VELOAUTH_CTD_REQUIRE_PINNED_JAVA25 \
+      VELOAUTH_SMOKE_COPY_DESTINATION \
+      VELOAUTH_SMOKE_COPY_TEST_MODE \
+      VELOAUTH_SMOKE_JAVA \
+      VELOAUTH_SMOKE_MAVEN_REPOSITORY \
+      VELOAUTH_SMOKE_MAVEN_SETTINGS \
+      VELOAUTH_TEST_FORWARDING_MODE \
+      VELOAUTH_TEST_RUNTIME_UPDATE \
+      VELOAUTH_VELOCITY_LABEL \
+      VELOAUTH_VELOCITY_SHA256 \
+      VELOAUTH_VELOCITY_URL; do
     variable_value="${!variable_name-}"
     [[ -z "${variable_value}" ]] \
       || fail "Build-affecting environment variable must be empty or unset: ${variable_name}"
@@ -372,12 +384,8 @@ configure_controlled_environment() {
     MAVEN_BASEDIR MAVEN_CONFIG MAVEN_PROJECTBASEDIR MVNW_REPOURL
   export MAVEN_USER_HOME="${TASK_MAVEN_USER_HOME}"
   export MAVEN_SKIP_RC=true
-  export VELOAUTH_SMOKE_MAVEN_SETTINGS="${TASK_MAVEN_SETTINGS}"
-  export VELOAUTH_SMOKE_MAVEN_REPOSITORY="${TASK_MAVEN_REPOSITORY}"
   export VELOAUTH_RELEASE_MAVEN_SETTINGS="${TASK_MAVEN_SETTINGS}"
   export VELOAUTH_RELEASE_MAVEN_REPOSITORY="${TASK_MAVEN_REPOSITORY}"
-  export VELOAUTH_RELEASE_IDENTITY_MAVEN_SETTINGS="${TASK_MAVEN_SETTINGS}"
-  export VELOAUTH_RELEASE_IDENTITY_MAVEN_REPOSITORY="${TASK_MAVEN_REPOSITORY}"
   export TZ=UTC
   export LC_ALL=C
   export LANG=C
@@ -455,19 +463,25 @@ prepare_empty_candidate_dir() {
 copy_and_smoke_candidate() {
   local built_artifact=$1
   local candidate_dir=$2
-  local smoke_one=$3
-  local smoke_two=$4
-  local identity_verifier=$5
-  local test_log=${6:-}
+  local reproducibility_verifier=$3
+  local smoke_one=$4
+  local smoke_two=$5
+  local identity_verifier=$6
+  local test_log=${7:-}
   local candidate_artifact="${candidate_dir}/${ARTIFACT_NAME}"
   cp -- "${built_artifact}" "${candidate_artifact}"
   local original_sha current_sha
   original_sha="$(sha256_file "${candidate_artifact}")"
 
-  export VELOAUTH_PLUGIN_JAR="${candidate_artifact}"
   if [[ -n "${test_log}" ]]; then
     export VELOAUTH_RELEASE_TEST_INVOCATION_LOG="${test_log}"
   fi
+  "${reproducibility_verifier}" --compare-existing "${candidate_artifact}"
+  current_sha="$(sha256_file "${candidate_artifact}")"
+  [[ "${current_sha}" == "${original_sha}" ]] \
+    || fail "Release candidate changed during reproducibility verification"
+
+  export VELOAUTH_PLUGIN_JAR="${candidate_artifact}"
   "${smoke_one}"
   current_sha="$(sha256_file "${candidate_artifact}")"
   [[ "${current_sha}" == "${original_sha}" ]] \
@@ -532,20 +546,23 @@ run_production_build() {
   local built_artifact
   built_artifact="$(select_built_artifact "${PROJECT_DIR}")"
   copy_and_smoke_candidate "${built_artifact}" "${candidate_dir}" \
+    "${SCRIPT_DIR}/verify-reproducible-jar.sh" \
     "${SCRIPT_DIR}/test-velocity-embedded.sh" "${SCRIPT_DIR}/test-velocity-ctd-embedded.sh" \
     "${SCRIPT_DIR}/verify-release-identity.sh"
 }
 
 run_test_build() {
-  [[ $# -eq 7 ]] \
-    || fail "Usage in test mode: $0 --test-build CANDIDATE_DIR BUILDER SMOKE_A SMOKE_B IDENTITY INVOCATION_LOG"
+  [[ $# -eq 8 ]] \
+    || fail "Usage in test mode: $0 --test-build CANDIDATE_DIR BUILDER REPRO SMOKE_A SMOKE_B IDENTITY INVOCATION_LOG"
   local candidate_dir=$2
   local builder=$3
-  local smoke_one=$4
-  local smoke_two=$5
-  local identity_verifier=$6
-  local invocation_log=$7
-  for executable in "${builder}" "${smoke_one}" "${smoke_two}" "${identity_verifier}"; do
+  local reproducibility_verifier=$4
+  local smoke_one=$5
+  local smoke_two=$6
+  local identity_verifier=$7
+  local invocation_log=$8
+  for executable in "${builder}" "${reproducibility_verifier}" "${smoke_one}" \
+      "${smoke_two}" "${identity_verifier}"; do
     [[ "${executable}" == /* && -x "${executable}" ]] \
       || fail "Test helper must be an absolute executable path: ${executable}"
   done
@@ -560,7 +577,8 @@ run_test_build() {
   local built_artifact
   built_artifact="$(select_built_artifact "${build_dir}")"
   copy_and_smoke_candidate "${built_artifact}" "${candidate_dir}" \
-    "${smoke_one}" "${smoke_two}" "${identity_verifier}" "${invocation_log}"
+    "${reproducibility_verifier}" "${smoke_one}" "${smoke_two}" \
+    "${identity_verifier}" "${invocation_log}"
 }
 
 require_command awk

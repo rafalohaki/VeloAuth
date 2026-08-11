@@ -132,12 +132,17 @@ Maven integration client, ordinary Velocity smoke and manifest identity remain o
 
 The GitHub `production-release` environment is a mandatory protected environment with manual
 maintainer approval. Before anyone creates a version tag, GitHub's immutable-releases repository
-setting and that environment protection must already be enabled. The release job can be approved
-only after the exact workflow candidate passes the external-limbo canary; protected environment
-variables must set `EXTERNAL_CANARY_GREEN=true` and
+setting, a protected tag ruleset that blocks update/deletion of `v*` tags, and that environment
+protection must already be enabled. Store `RELEASE_POLICY_TOKEN` as an environment secret backed by
+a fine-grained token with repository `Administration (read)` permission; the job uses it only to
+fail closed on the immutable-releases policy before and after publication. The release job can be
+approved only after the exact workflow candidate passes the external-limbo canary; protected
+environment variables must set `EXTERNAL_CANARY_GREEN=true` and
 `OPERATOR_RELEASE_SIGNOFF=v1.5.0:<40-character-source-commit>`. The job downloads the same workflow
 artifact, verifies its provenance, and refuses to create or modify an already existing release. It
-never moves a `latest` tag, renames the JAR, rebuilds the candidate, or replaces release assets.
+remotely peels either a lightweight or annotated version tag to the workflow commit immediately
+before publication and checks it again afterward. It never moves a `latest` tag, renames the JAR,
+rebuilds the candidate, or replaces release assets.
 
 ## Requirements
 
@@ -728,7 +733,8 @@ The verifier requires exactly three flat files, canonical JSON, a decimal workfl
 version/output timestamp, current source commit, fixed signer workflow and an exact checksum. In
 GitHub Actions it additionally matches every available `GITHUB_*` identity field. It also runs the
 read-only Task5 internal identity check for `velocity-plugin.json`, packaged `pom.properties` and
-`BuildConstants.VERSION` using exact Temurin 21 and controlled Maven settings. `--existing`
+`BuildConstants.VERSION` using exact Temurin 21. The root POM version is parsed directly as XML;
+the identity verifier neither invokes Maven nor reads Maven settings or repositories. `--existing`
 performs zero builds and zero smoke tests; it is the offline Task8/canary handoff contract and
 requires exact Temurin 21.0.12+8 to be discoverable or supplied through `VELOAUTH_JAVA21_HOME`.
 
@@ -740,6 +746,12 @@ repository, builds both through the checked-in wrapper and compares their JAR by
 VELOAUTH_JAVA21_HOME=/path/to/temurin-21.0.12+8/Contents/Home \
   ./scripts/verify-reproducible-jar.sh
 ```
+
+For a release, `verify-release-candidate.sh --build` first performs the one canonical full build,
+copies that exact JAR into the candidate directory, then invokes the verifier with
+`--compare-existing /absolute/candidate.jar`. Both fresh clone builds must match the canonical JAR
+directly before either real-proxy smoke, manifest creation or attestation can begin; the verifier
+never replaces the candidate.
 
 On macOS the verifier also checks `java_home`, then `JAVA_HOME` and `PATH`, but accepts only that
 exact Temurin build. It never installs a JDK silently. Maven and Java option environment variables

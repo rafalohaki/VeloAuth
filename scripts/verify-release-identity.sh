@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 TEST_MODE="${VELOAUTH_RELEASE_IDENTITY_TEST_MODE:-false}"
 PROJECT_OVERRIDE="${VELOAUTH_RELEASE_IDENTITY_PROJECT_DIR:-}"
-MAVEN_OVERRIDE="${VELOAUTH_RELEASE_IDENTITY_MAVEN:-}"
 TEMP_PARENT=""
 TEMP_PREFIX=""
 TEMP_DIR=""
@@ -44,46 +43,21 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [[ "${TEST_MODE}" != true && ( -n "${PROJECT_OVERRIDE}" || -n "${MAVEN_OVERRIDE}" ) ]]; then
+if [[ "${TEST_MODE}" != true && -n "${PROJECT_OVERRIDE}" ]]; then
   fail "Test-only release identity overrides require VELOAUTH_RELEASE_IDENTITY_TEST_MODE=true"
 fi
 
 if [[ "${TEST_MODE}" == true ]]; then
   [[ -n "${PROJECT_OVERRIDE}" ]] || fail "Test mode requires VELOAUTH_RELEASE_IDENTITY_PROJECT_DIR"
-  [[ -n "${MAVEN_OVERRIDE}" ]] || fail "Test mode requires VELOAUTH_RELEASE_IDENTITY_MAVEN"
-  [[ -x "${MAVEN_OVERRIDE}" ]] || fail "Test Maven command is not executable: ${MAVEN_OVERRIDE}"
   PROJECT_DIR="$(cd -- "${PROJECT_OVERRIDE}" && pwd)"
-  MAVEN=("${MAVEN_OVERRIDE}")
 else
   PROJECT_DIR="${DEFAULT_PROJECT_DIR}"
-  if [[ -x "${PROJECT_DIR}/mvnw" ]]; then
-    MAVEN=("${PROJECT_DIR}/mvnw")
-  elif command -v mvnd >/dev/null 2>&1; then
-    MAVEN=(mvnd)
-  elif command -v mvn >/dev/null 2>&1; then
-    MAVEN=(mvn)
-  else
-    fail "Maven, mvnd or ./mvnw is required"
-  fi
 fi
 
 [[ $# -le 2 ]] || fail "Usage: $0 [expected-tag] [absolute-candidate-jar]"
 EXPECTED_TAG="${1:-}"
 CANDIDATE_OVERRIDE="${2:-}"
 [[ -f "${PROJECT_DIR}/pom.xml" ]] || fail "Missing Maven project: ${PROJECT_DIR}/pom.xml"
-
-IDENTITY_MAVEN_SETTINGS="${VELOAUTH_RELEASE_IDENTITY_MAVEN_SETTINGS:-}"
-IDENTITY_MAVEN_REPOSITORY="${VELOAUTH_RELEASE_IDENTITY_MAVEN_REPOSITORY:-}"
-if [[ -n "${IDENTITY_MAVEN_SETTINGS}" || -n "${IDENTITY_MAVEN_REPOSITORY}" ]]; then
-  [[ "${IDENTITY_MAVEN_SETTINGS}" == /* && -f "${IDENTITY_MAVEN_SETTINGS}" \
-      && ! -L "${IDENTITY_MAVEN_SETTINGS}" ]] \
-    || fail "Release identity Maven settings must be an absolute regular non-symlink file"
-  [[ "${IDENTITY_MAVEN_REPOSITORY}" == /* && -d "${IDENTITY_MAVEN_REPOSITORY}" \
-      && ! -L "${IDENTITY_MAVEN_REPOSITORY}" ]] \
-    || fail "Release identity Maven repository must be an absolute real directory"
-  MAVEN+=(-s "${IDENTITY_MAVEN_SETTINGS}" \
-    "-Dmaven.repo.local=${IDENTITY_MAVEN_REPOSITORY}")
-fi
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
@@ -97,14 +71,32 @@ require_command mktemp
 require_command python3
 require_command rm
 
-MAVEN_OUTPUT="$(
-  "${MAVEN[@]}" -f "${PROJECT_DIR}/pom.xml" help:evaluate \
-    -Dstyle.color=never -DforceStdout -Dexpression=project.version
-)" || fail "Failed to evaluate the Maven project version"
-PROJECT_VERSION="$(
-  printf '%s\n' "${MAVEN_OUTPUT}" \
-    | awk 'NF && $0 !~ /^\[/ { value=$0 } END { print value }'
-)"
+PROJECT_VERSION="$(python3 - "${PROJECT_DIR}/pom.xml" <<'PY'
+import re
+import sys
+import xml.etree.ElementTree as ElementTree
+
+try:
+    root = ElementTree.parse(sys.argv[1]).getroot()
+except (OSError, ElementTree.ParseError) as error:
+    print(f"Unable to read Maven project version: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+namespace = root.tag.rpartition("}")[0] + "}" if "}" in root.tag else ""
+if root.tag != f"{namespace}project":
+    print("Maven project root element must be project", file=sys.stderr)
+    raise SystemExit(1)
+versions = [
+    (child.text or "").strip()
+    for child in root
+    if child.tag == f"{namespace}version"
+]
+if len(versions) != 1 or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", versions[0]) is None:
+    print("Maven project must contain exactly one direct release version", file=sys.stderr)
+    raise SystemExit(1)
+print(versions[0])
+PY
+)" || fail "Failed to parse the Maven project version"
 [[ "${PROJECT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
   || fail "Maven project version is not a release version: ${PROJECT_VERSION:-<empty>}"
 

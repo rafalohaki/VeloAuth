@@ -97,6 +97,26 @@ VELOAUTH_REPRO_TEST_MODE=true "${VERIFIER}" --test-compare \
 grep -Fq "Reproducible artifact verified" "${EQUAL_OUTPUT}" \
   || fail "equal-artifact success output is missing"
 
+EXISTING_CANDIDATE="${TEMP_DIR}/veloauth-1.5.0.jar"
+cp "${FIXTURE_A}/target/veloauth-1.5.0.jar" "${EXISTING_CANDIDATE}"
+EXISTING_OUTPUT="${TEMP_DIR}/existing.out"
+VELOAUTH_REPRO_TEST_MODE=true "${VERIFIER}" --test-compare-existing \
+  "${EXISTING_CANDIDATE}" "${FIXTURE_A}" "${FIXTURE_B}" \
+  >"${EXISTING_OUTPUT}" 2>&1 \
+  || fail "an existing candidate equal to both fresh builds must pass"
+grep -Fq "Canonical candidate matches both fresh reproducibility builds" \
+  "${EXISTING_OUTPUT}" \
+  || fail "existing-candidate success output is missing"
+
+printf 'different candidate\n' >"${EXISTING_CANDIDATE}"
+EXISTING_MISMATCH_OUTPUT="${TEMP_DIR}/existing-mismatch.out"
+run_expect_failure "${EXISTING_MISMATCH_OUTPUT}" env VELOAUTH_REPRO_TEST_MODE=true \
+  "${VERIFIER}" --test-compare-existing \
+  "${EXISTING_CANDIDATE}" "${FIXTURE_A}" "${FIXTURE_B}"
+grep -Fq "Canonical candidate differs from fresh reproducibility Build A" \
+  "${EXISTING_MISMATCH_OUTPUT}" \
+  || fail "existing candidate mismatch must fail before release smoke or metadata"
+
 printf 'same artifacu\n' >"${FIXTURE_B}/target/veloauth-1.5.0.jar"
 SHA_A="$(sha256_file "${FIXTURE_A}/target/veloauth-1.5.0.jar")"
 SHA_B="$(sha256_file "${FIXTURE_B}/target/veloauth-1.5.0.jar")"
