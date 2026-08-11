@@ -456,7 +456,119 @@ class ConnectionManagerLifecycleIntegrationTest {
         authFallback.complete(authSuccess);
 
         verify(newPendingTransfer, never()).cancel();
+        verify(backendRequest).connect();
+        verify(authRequest).connect();
         verify(taskBuilder, times(1)).schedule();
+    }
+
+    @Test
+    void authFallbackAdmission_ReplacedAfterLastGuard_DoesNotConnectToAuthServer() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerConnection backendConnection = org.mockito.Mockito.mock(ServerConnection.class);
+        ConnectionRequestBuilder backendRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder authRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result backendFailure = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldFallbackAdmissionPlayer");
+        when(oldPlayer.isActive()).thenReturn(true);
+        when(oldPlayer.getCurrentServer()).thenReturn(Optional.of(backendConnection));
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(backendConnection.getServer()).thenReturn(backendServer);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(backendServer.ping()).thenReturn(CompletableFuture.completedFuture(
+                org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(oldPlayer.createConnectionRequest(backendServer)).thenReturn(backendRequest);
+        when(oldPlayer.createConnectionRequest(authServer)).thenReturn(authRequest);
+        when(backendRequest.connect()).thenReturn(CompletableFuture.completedFuture(backendFailure));
+        when(backendFailure.isSuccessful()).thenReturn(false);
+        when(logger.isInfoEnabled()).thenAnswer(ignored -> {
+            connectionManager.beginTransferSession(newPlayer);
+            return true;
+        });
+        connectionManager.beginTransferSession(oldPlayer);
+        connectionManager.setForcedHostTarget(oldPlayer, "backend");
+
+        assertTrue(connectionManager.transferToBackend(oldPlayer));
+
+        verify(oldPlayer, never()).createConnectionRequest(authServer);
+        verify(authRequest, never()).connect();
+        assertSame(newPlayer, getStateOwner(playerUuid));
+    }
+
+    @Test
+    void backendRetryAfterLimbo_CurrentOwner_StartsOneOwnedConnection() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerConnection backendConnection = org.mockito.Mockito.mock(ServerConnection.class);
+        ServerConnection authConnection = org.mockito.Mockito.mock(ServerConnection.class);
+        ConnectionRequestBuilder initialRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder authRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder retryRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result backendFailure = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        ConnectionRequestBuilder.Result authSuccess = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        ConnectionRequestBuilder.Result retrySuccess = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask pendingTransfer = org.mockito.Mockito.mock(ScheduledTask.class);
+        CountDownLatch retryStarted = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger currentServerCalls =
+                new java.util.concurrent.atomic.AtomicInteger();
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Consumer<ScheduledTask>> callbackCaptor =
+                org.mockito.ArgumentCaptor.forClass(Consumer.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("LimboRetryPlayer");
+        when(player.isActive()).thenReturn(true);
+        when(player.getCurrentServer()).thenAnswer(ignored ->
+                currentServerCalls.getAndIncrement() == 0
+                        ? Optional.of(backendConnection)
+                        : Optional.of(authConnection));
+        when(backendConnection.getServer()).thenReturn(backendServer);
+        when(authConnection.getServer()).thenReturn(authServer);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(backendServer.ping()).thenReturn(CompletableFuture.completedFuture(
+                org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(player.createConnectionRequest(backendServer)).thenReturn(initialRequest, retryRequest);
+        when(player.createConnectionRequest(authServer)).thenReturn(authRequest);
+        when(initialRequest.connect()).thenReturn(CompletableFuture.completedFuture(backendFailure));
+        when(authRequest.connect()).thenReturn(CompletableFuture.completedFuture(authSuccess));
+        when(retryRequest.connect()).thenAnswer(ignored -> {
+            retryStarted.countDown();
+            return CompletableFuture.completedFuture(retrySuccess);
+        });
+        when(backendFailure.isSuccessful()).thenReturn(false);
+        when(authSuccess.isSuccessful()).thenReturn(true);
+        when(retrySuccess.isSuccessful()).thenReturn(true);
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(pendingTransfer);
+        connectionManager.beginTransferSession(player);
+        connectionManager.setForcedHostTarget(player, "backend");
+
+        assertTrue(connectionManager.transferToBackend(player));
+        callbackCaptor.getValue().accept(pendingTransfer);
+
+        assertTrue(retryStarted.await(2, TimeUnit.SECONDS));
+        verify(initialRequest).connect();
+        verify(authRequest).connect();
+        verify(retryRequest).connect();
     }
 
     @Test
@@ -587,6 +699,7 @@ class ConnectionManagerLifecycleIntegrationTest {
 
         verify(newWaitTask, never()).cancel();
         verify(oldPlayer, never()).createConnectionRequest(forcedBackend);
+        verify(forcedBackend, times(2)).ping();
         verify(taskBuilder, times(2)).schedule();
     }
 
@@ -881,6 +994,69 @@ class ConnectionManagerLifecycleIntegrationTest {
     }
 
     @Test
+    void backendConnectAdmission_ShutdownDuringLastActiveCheck_DoesNotCreateRequest() {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ConnectionRequestBuilder request = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result result = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("ShutdownAdmissionPlayer");
+        when(player.isActive()).thenReturn(true).thenAnswer(ignored -> {
+            connectionManager.shutdown();
+            return true;
+        });
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(backendServer.ping()).thenReturn(CompletableFuture.completedFuture(
+                org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(player.createConnectionRequest(backendServer)).thenReturn(request);
+        when(request.connect()).thenReturn(CompletableFuture.completedFuture(result));
+        when(result.isSuccessful()).thenReturn(true);
+        connectionManager.beginTransferSession(player);
+        connectionManager.setForcedHostTarget(player, "backend");
+
+        assertFalse(connectionManager.transferToBackend(player));
+
+        verify(player, never()).createConnectionRequest(backendServer);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void forcedHostPingAdmission_ReplacedDuringResolution_DoesNotPingOldTarget() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer forcedBackend = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldForcedAdmissionPlayer");
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(forcedBackend.getServerInfo()).thenReturn(
+                new ServerInfo("forced", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(forcedBackend.ping()).thenReturn(CompletableFuture.completedFuture(
+                org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("forced")).thenAnswer(ignored -> {
+            connectionManager.beginTransferSession(newPlayer);
+            return Optional.of(forcedBackend);
+        });
+        connectionManager.beginTransferSession(oldPlayer);
+        connectionManager.setForcedHostTarget(oldPlayer, "forced");
+        Object oldState = getMap("transferStates").get(playerUuid);
+        Method retrySelection = ConnectionManager.class.getDeclaredMethod(
+                "findAvailableBackendServerForRetryAsync", Player.class, oldState.getClass());
+        retrySelection.setAccessible(true);
+
+        CompletableFuture<Optional<RegisteredServer>> selection =
+                (CompletableFuture<Optional<RegisteredServer>>) retrySelection.invoke(
+                        connectionManager, oldPlayer, oldState);
+
+        assertTrue(selection.join().isEmpty());
+        verify(forcedBackend, never()).ping();
+        assertSame(newPlayer, getStateOwner(playerUuid));
+    }
+
+    @Test
     void shutdown_InFlightCallbacksCannotPublishOrResurrectState() throws Exception {
         UUID playerUuid = UUID.randomUUID();
         Player player = org.mockito.Mockito.mock(Player.class);
@@ -894,6 +1070,47 @@ class ConnectionManagerLifecycleIntegrationTest {
         assertFalse(connectionManager.transferToBackend(player));
         assertTrue(getMap("transferStates").isEmpty(),
                 "A public transfer after shutdown must not lazily resurrect ownership");
+    }
+
+    @Test
+    void initialBackendPingAdmission_AfterShutdown_ReturnsEmptyWithoutPing() {
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of("backend"));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(backendServer.ping()).thenReturn(CompletableFuture.completedFuture(
+                org.mockito.Mockito.mock(ServerPing.class)));
+        connectionManager.shutdown();
+
+        Optional<RegisteredServer> selected = connectionManager
+                .findAvailableBackendServerForInitialConnectionAsync().join();
+
+        assertTrue(selected.isEmpty());
+        verify(backendServer, never()).ping();
+    }
+
+    @Test
+    void initialBackendPingCompletion_AfterShutdown_ReturnsEmpty() {
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        CompletableFuture<ServerPing> pendingPing = new CompletableFuture<>();
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of("backend"));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(backendServer.ping()).thenReturn(pendingPing);
+
+        CompletableFuture<Optional<RegisteredServer>> selection =
+                connectionManager.findAvailableBackendServerForInitialConnectionAsync();
+        connectionManager.shutdown();
+        pendingPing.complete(org.mockito.Mockito.mock(ServerPing.class));
+
+        assertTrue(selection.join().isEmpty());
+        verify(backendServer).ping();
     }
 
     @Test

@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 /**
  * Manager połączeń i transferów graczy między serwerami.
@@ -284,17 +285,38 @@ public class ConnectionManager {
 
     private CompletableFuture<com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result> startAuthServerConnection(
             Player player, PlayerTransferState state, RegisteredServer targetServer) {
+        return startConnectionIfCurrent(player, state, targetServer);
+    }
+
+    private CompletableFuture<com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result> startConnectionIfCurrent(
+            Player player, PlayerTransferState state, RegisteredServer targetServer) {
+        return startIoIfAllowed(state, () -> player.createConnectionRequest(targetServer)
+                .connect()
+                .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS));
+    }
+
+    private CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> startPingIfAllowed(
+            @javax.annotation.Nullable PlayerTransferState state, RegisteredServer targetServer) {
+        return startIoIfAllowed(state, () -> targetServer.ping()
+                .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS));
+    }
+
+    private <T> CompletableFuture<T> startIoIfAllowed(
+            @javax.annotation.Nullable PlayerTransferState state,
+            Supplier<CompletableFuture<T>> initiation) {
         taskLifecycleLock.lock();
         try {
-            if (isStale(state)) {
+            if (isIoOwnerUnavailable(state)) {
                 return null;
             }
-            return player.createConnectionRequest(targetServer)
-                    .connect()
-                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS);
+            return initiation.get();
         } finally {
             taskLifecycleLock.unlock();
         }
+    }
+
+    private boolean isIoOwnerUnavailable(@javax.annotation.Nullable PlayerTransferState state) {
+        return closed.get() || (state != null && !isCurrent(state));
     }
 
     private boolean handleAuthServerTransferResult(Player player, PlayerTransferState state,
@@ -362,16 +384,7 @@ public class ConnectionManager {
 
     private CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> startAuthServerPing(
             PlayerTransferState state, RegisteredServer targetServer) {
-        taskLifecycleLock.lock();
-        try {
-            if (isStale(state)) {
-                return null;
-            }
-            return targetServer.ping()
-                    .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS);
-        } finally {
-            taskLifecycleLock.unlock();
-        }
+        return startPingIfAllowed(state, targetServer);
     }
 
     private CompletableFuture<Boolean> scheduleAuthServerReadyRetry(
@@ -421,7 +434,7 @@ public class ConnectionManager {
 
             // 2. Fallback: znajdź dostępny serwer z try list
             if (backendServer.isEmpty()) {
-                backendServer = findAvailableBackendServer();
+                backendServer = findAvailableBackendServer(state);
             }
 
             if (backendServer.isEmpty()) {
@@ -540,10 +553,12 @@ public class ConnectionManager {
                 return false;
             }
 
-            var result = player.createConnectionRequest(targetServer)
-                    .connect()
-                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
-                    .join();
+            CompletableFuture<com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result> connection =
+                    startConnectionIfCurrent(player, state, targetServer);
+            if (connection == null) {
+                return false;
+            }
+            var result = connection.join();
 
             return handleTransferResult(player, state, targetServer, serverName, attempts, result);
         } catch (CompletionException e) {
@@ -644,15 +659,14 @@ public class ConnectionManager {
     private void scheduleAuthServerFallback(Player player, PlayerTransferState state,
                                             RegisteredServer authServer,
                                             RegisteredServer targetServer, String serverName) {
-        if (isStale(state)) {
+        CompletableFuture<com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result> connection =
+                startConnectionIfCurrent(player, state, authServer);
+        if (connection == null) {
             return;
         }
-        player.createConnectionRequest(authServer)
-                .connect()
-                .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
-                .whenComplete((limboResult, ex) ->
-                        handleAuthServerFallbackResult(
-                                player, state, targetServer, serverName, limboResult, ex));
+        connection.whenComplete((limboResult, ex) ->
+                handleAuthServerFallbackResult(
+                        player, state, targetServer, serverName, limboResult, ex));
     }
 
     private void handleAuthServerFallbackResult(
@@ -803,10 +817,12 @@ public class ConnectionManager {
             if (isStale(state)) {
                 return;
             }
-            var retry = player.createConnectionRequest(targetServer)
-                    .connect()
-                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
-                    .join();
+            CompletableFuture<com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result> connection =
+                    startConnectionIfCurrent(player, state, targetServer);
+            if (connection == null) {
+                return;
+            }
+            var retry = connection.join();
             if (!retry.isSuccessful()) {
                 if (isStale(state)) {
                     return;
@@ -933,16 +949,19 @@ public class ConnectionManager {
             if (isStale(state)) {
                 return;
             }
-            player.createConnectionRequest(targetServer)
-                    .connect()
-                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
-                    .whenComplete((result, ex) -> {
-                        try {
-                            handleTimeoutRetryResult(player, state, serverName, result, ex);
-                        } finally {
-                            releaseBackendConnection(state);
-                        }
-                    });
+            CompletableFuture<com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result> connection =
+                    startConnectionIfCurrent(player, state, targetServer);
+            if (connection == null) {
+                releaseBackendConnection(state);
+                return;
+            }
+            connection.whenComplete((result, ex) -> {
+                try {
+                    handleTimeoutRetryResult(player, state, serverName, result, ex);
+                } finally {
+                    releaseBackendConnection(state);
+                }
+            });
         } catch (RuntimeException retryEx) {
             releaseBackendConnection(state);
             if (isStale(state)) {
@@ -985,10 +1004,10 @@ public class ConnectionManager {
     /**
      * Znajduje dostępny serwer backend używając Velocity try servers configuration.
      * Sync wrapper used by callers that already run on a virtual thread; prefer
-     * {@link #findAvailableBackendServerAsync()} when composing async chains.
+     * {@link #findAvailableBackendServerAsync(PlayerTransferState)} when composing async chains.
      */
-    private Optional<RegisteredServer> findAvailableBackendServer() {
-        return findAvailableBackendServerAsync().join();
+    private Optional<RegisteredServer> findAvailableBackendServer(PlayerTransferState state) {
+        return findAvailableBackendServerAsync(state).join();
     }
 
     /**
@@ -999,7 +1018,7 @@ public class ConnectionManager {
      * @return future containing the first available backend, or empty when none is reachable
      */
     public CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerForInitialConnectionAsync() {
-        return findAvailableBackendServerAsync();
+        return findAvailableBackendServerAsync(null);
     }
 
     /**
@@ -1012,7 +1031,11 @@ public class ConnectionManager {
      * result is known. Worst-case wall time per phase stays at one
      * {@code connection.ping-timeout-ms} timeout regardless of the number of registered servers.
      */
-    private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerAsync() {
+    private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerAsync(
+            @javax.annotation.Nullable PlayerTransferState state) {
+        if (isIoOwnerUnavailable(state)) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
         String authServerName = authServerProvider.serverName();
         var tryServers = plugin.getServer().getConfiguration().getAttemptConnectionOrder();
         if (logger.isDebugEnabled()) {
@@ -1024,7 +1047,10 @@ public class ConnectionManager {
                 .flatMap(name -> plugin.getServer().getServer(name).stream())
                 .toList();
 
-        return pickFirstAvailable(tryCandidates).thenCompose(found -> {
+        return pickFirstAvailable(tryCandidates, state).thenCompose(found -> {
+            if (isIoOwnerUnavailable(state)) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
             if (found.isPresent()) {
                 return CompletableFuture.completedFuture(found);
             }
@@ -1037,7 +1063,7 @@ public class ConnectionManager {
                     .filter(server -> !authServerProvider.isAuthServer(server))
                     .filter(server -> !alreadyChecked.contains(server.getServerInfo().getName()))
                     .toList();
-            return pickFirstAvailable(fallbackCandidates);
+            return pickFirstAvailable(fallbackCandidates, state);
         });
     }
 
@@ -1075,7 +1101,7 @@ public class ConnectionManager {
             if (forcedTarget.isPresent()) {
                 return CompletableFuture.completedFuture(forcedTarget);
             }
-            return findAvailableBackendServerAsync();
+            return findAvailableBackendServerAsync(state);
         });
     }
 
@@ -1085,7 +1111,8 @@ public class ConnectionManager {
      * lower-priority ping cannot delay the transfer.
      */
     private CompletableFuture<Optional<RegisteredServer>> pickFirstAvailable(
-            java.util.List<RegisteredServer> candidates) {
+            java.util.List<RegisteredServer> candidates,
+            @javax.annotation.Nullable PlayerTransferState state) {
         if (candidates.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -1093,10 +1120,14 @@ public class ConnectionManager {
         for (int index = 0; index < candidates.size() && !selection.future().isDone(); index++) {
             final int candidateIndex = index;
             try {
-                candidates.get(index).ping()
-                        .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
-                        .whenComplete((ignored, failure) ->
-                                selection.record(candidateIndex, failure == null));
+                CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> ping =
+                        startPingIfAllowed(state, candidates.get(index));
+                if (ping == null) {
+                    selection.record(candidateIndex, false);
+                } else {
+                    ping.whenComplete((ignored, failure) ->
+                            selection.record(candidateIndex, failure == null));
+                }
             } catch (RuntimeException failure) {
                 selection.record(candidateIndex, false);
             }
@@ -1176,7 +1207,7 @@ public class ConnectionManager {
             return Optional.empty();
         }
         ForcedHostTarget target = resolvedTarget.get();
-        if (isServerAvailable(target.server(), target.name())) {
+        if (isServerAvailable(state, target.server(), target.name())) {
             if (isStale(state)) {
                 return Optional.empty();
             }
@@ -1204,10 +1235,13 @@ public class ConnectionManager {
             return CompletableFuture.completedFuture(Optional.empty());
         }
         ForcedHostTarget target = resolvedTarget.get();
-        return target.server().ping()
-                .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
-                .handle((ignored, throwable) ->
-                        handleForcedHostPingResult(player, state, target, throwable));
+        CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> ping =
+                startPingIfAllowed(state, target.server());
+        if (ping == null) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        return ping.handle((ignored, throwable) ->
+                handleForcedHostPingResult(player, state, target, throwable));
     }
 
     private Optional<ForcedHostTarget> findStoredForcedHostTarget(Player player, PlayerTransferState state) {
@@ -1287,12 +1321,17 @@ public class ConnectionManager {
      * which already
      * runs on a virtual thread (called from transfer paths that are themselves submitted to
      * the VT executor). For new code prefer pinging in parallel via
-     * {@link #pickFirstAvailable(java.util.List)}.
+     * {@link #pickFirstAvailable(java.util.List, PlayerTransferState)}.
      */
-    private boolean isServerAvailable(RegisteredServer server, String serverName) {
+    private boolean isServerAvailable(
+            PlayerTransferState state, RegisteredServer server, String serverName) {
         try {
-            Boolean ok = server.ping()
-                    .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
+            CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> ping =
+                    startPingIfAllowed(state, server);
+            if (ping == null) {
+                return false;
+            }
+            Boolean ok = ping
                     .handle((ignored, ex) -> ex == null)
                     .join();
             if (Boolean.TRUE.equals(ok)) {
