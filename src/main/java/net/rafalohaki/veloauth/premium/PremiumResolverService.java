@@ -540,6 +540,13 @@ public class PremiumResolverService {
             return existing.join();
         }
 
+        PremiumResolution refreshedCacheEntry = getFromCache(cacheKey);
+        if (refreshedCacheEntry != null) {
+            leaderFuture.complete(refreshedCacheEntry);
+            inFlight.remove(cacheKey, leaderFuture);
+            return refreshedCacheEntry;
+        }
+
         boolean permitAcquired = externalLookupPermits.tryAcquire();
         if (!permitAcquired) {
             PremiumResolution saturated = PremiumResolution.unknown(

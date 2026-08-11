@@ -260,6 +260,32 @@ class PreLoginHandlerTest {
     }
 
     @Test
+    void resolvePremiumStatusAsync_existingOfflineAuthOwnerShouldIgnoreStalePremiumCache() {
+        String username = "ReassignedName";
+        RegisteredPlayer offlineOwner = new RegisteredPlayer(
+                username,
+                "$2a$10$offlinehashvalueofflinehashvalueofflinehashval",
+                "127.0.0.1",
+                UUID.randomUUID().toString());
+        when(databaseManager.findPlayerByNickname(username)).thenReturn(
+                CompletableFuture.completedFuture(
+                        DatabaseManager.DbResult.success(offlineOwner)));
+        when(databaseManager.isPlayerPremiumRuntime(offlineOwner)).thenReturn(false);
+        when(authCache.getPremiumStatus(username)).thenReturn(new PremiumCacheEntry(
+                true, UUID.randomUUID(), System.currentTimeMillis(), 600_000L));
+
+        PreLoginHandler.PremiumResolutionResult result =
+                handler.resolvePremiumStatusAsync(username).join();
+
+        assertNotNull(result);
+        assertFalse(result.premium(),
+                "An offline AUTH owner must not inherit the previous nickname owner's cache");
+        assertNull(result.premiumUuid());
+        verify(authCache, never()).getPremiumStatus(username);
+        verify(premiumResolverService, never()).resolve(username);
+    }
+
+    @Test
     void resolvePremiumStatusAsync_authDatabaseErrorShouldFailClosed() {
         String username = "DatabaseFailure";
         when(databaseManager.findPlayerByNickname(username)).thenReturn(

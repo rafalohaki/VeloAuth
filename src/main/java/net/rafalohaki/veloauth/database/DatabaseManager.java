@@ -920,15 +920,8 @@ public class DatabaseManager {
             try {
                 String normalizedNickname = normalizeNickname(username);
                 RegisteredPlayer authPlayer = jdbcAuthDao.findPlayerByLowercaseNickname(normalizedNickname);
-                if (authPlayer != null && isPlayerPremiumRuntime(authPlayer)) {
-                    UUID authPremiumUuid = parseUuid(authPlayer.getPremiumUuid());
-                    if (authPremiumUuid != null) {
-                        synchronizePremiumUuidCacheBestEffort(username, authPremiumUuid);
-                    }
-                    if (logger.isDebugEnabled()) {
-                        logger.debug(DB_MARKER, "Premium status from authoritative AUTH for {}: true", username);
-                    }
-                    return DbResult.success(true);
+                if (authPlayer != null) {
+                    return authoritativePremiumStatus(username, authPlayer);
                 }
 
                 boolean premium = premiumUuidDao.findByNicknameStrict(username).isPresent();
@@ -942,6 +935,20 @@ public class DatabaseManager {
                 return genericDatabaseErrorResult();
             }
         });
+    }
+
+    private DbResult<Boolean> authoritativePremiumStatus(String username, RegisteredPlayer authPlayer) {
+        boolean premium = isPlayerPremiumRuntime(authPlayer);
+        UUID authPremiumUuid = premium ? parseUuid(authPlayer.getPremiumUuid()) : null;
+        if (authPremiumUuid != null) {
+            synchronizePremiumUuidCacheBestEffort(username, authPremiumUuid);
+        }
+        if (logger.isDebugEnabled()) {
+            logger.debug(DB_MARKER,
+                    "Premium status from authoritative AUTH for {}: {}",
+                    username, premium);
+        }
+        return DbResult.success(premium);
     }
 
     /**

@@ -167,19 +167,27 @@ public class PreLoginHandler {
         }
 
         RegisteredPlayer authPlayer = dbResult.getValue();
-        if (databaseManager.isPlayerPremiumRuntime(authPlayer)) {
-            UUID premiumUuid = parsePremiumUuid(authPlayer);
-            if (premiumUuid != null) {
-                authCache.addPremiumPlayer(username, premiumUuid);
-            }
-            if (logger.isDebugEnabled()) {
-                logger.debug("Authoritative AUTH premium hit for {} (verified UUID stored: {})",
-                        username, premiumUuid != null);
-            }
-            return CompletableFuture.completedFuture(new PremiumResolutionResult(true, premiumUuid));
+        if (authPlayer != null) {
+            return resolveAuthoritativeAuthResult(username, authPlayer);
         }
 
         return resolveFromMemoryOrApi(username, sourceAddress);
+    }
+
+    private CompletableFuture<PremiumResolutionResult> resolveAuthoritativeAuthResult(
+            String username, RegisteredPlayer authPlayer) {
+        boolean premium = databaseManager.isPlayerPremiumRuntime(authPlayer);
+        UUID premiumUuid = premium ? parsePremiumUuid(authPlayer) : null;
+        if (premiumUuid != null) {
+            authCache.addPremiumPlayer(username, premiumUuid);
+        }
+        if (logger.isDebugEnabled()) {
+            logger.debug(
+                    "Authoritative AUTH premium status for {}: {} (verified UUID stored: {})",
+                    username, premium, premiumUuid != null);
+        }
+        return CompletableFuture.completedFuture(
+                new PremiumResolutionResult(premium, premiumUuid));
     }
 
     private UUID parsePremiumUuid(RegisteredPlayer player) {

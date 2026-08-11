@@ -19,6 +19,7 @@ import java.net.InetAddress;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -120,6 +121,9 @@ class PremiumResolverServiceTest {
         InetAddress address = InetAddress.getByName("192.0.2.10");
         CountDownLatch resolverStarted = new CountDownLatch(1);
         CountDownLatch releaseResolver = new CountDownLatch(1);
+        CountDownLatch secondDatabaseLookupStarted = new CountDownLatch(1);
+        CountDownLatch releaseSecondDatabaseLookup = new CountDownLatch(1);
+        AtomicInteger databaseLookups = new AtomicInteger();
         PremiumResolver resolver = mock(PremiumResolver.class);
         when(resolver.enabled()).thenReturn(true);
         when(resolver.id()).thenReturn("mojang");
@@ -128,7 +132,13 @@ class PremiumResolverServiceTest {
             assertTrue(releaseResolver.await(2, TimeUnit.SECONDS));
             return PremiumResolution.offline(username, "mojang", "not found");
         });
-        when(dao.findByNickname(username)).thenReturn(Optional.empty());
+        when(dao.findByNickname(username)).thenAnswer(ignored -> {
+            if (databaseLookups.incrementAndGet() == 2) {
+                secondDatabaseLookupStarted.countDown();
+                assertTrue(releaseSecondDatabaseLookup.await(2, TimeUnit.SECONDS));
+            }
+            return Optional.empty();
+        });
         service = new PremiumResolverService(
                 logger, dao, List.of(resolver), 10 * 60_000L, 3 * 60_000L, 10, 4);
 
@@ -137,9 +147,11 @@ class PremiumResolverServiceTest {
         assertTrue(resolverStarted.await(2, TimeUnit.SECONDS));
         CompletableFuture<PremiumResolution> second = CompletableFuture.supplyAsync(
                 () -> service.resolve(username, address));
+        assertTrue(secondDatabaseLookupStarted.await(2, TimeUnit.SECONDS));
         releaseResolver.countDown();
 
         assertTrue(first.get(2, TimeUnit.SECONDS).isOffline());
+        releaseSecondDatabaseLookup.countDown();
         assertTrue(second.get(2, TimeUnit.SECONDS).isOffline());
         verify(resolver, times(1)).resolve(username);
     }

@@ -74,6 +74,65 @@ class DatabaseManagerTest {
 
         assertFalse(result.isDatabaseError());
         assertEquals(Boolean.TRUE, result.getValue());
+        assertTrue(manager.getPremiumUuidDao()
+                        .findByNicknameStrict("LegacyAuthPremium").isEmpty(),
+                "A hashless AUTH marker without a parseable PREMIUMUUID must not refresh cache");
+    }
+
+    @Test
+    void isPremium_existingOfflineAuthOwnerShouldIgnoreStalePremiumUuidCache() {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+        UUID previousOwnerUuid = UUID.randomUUID();
+        var cacheWrite = manager.savePremiumUuid("ReassignedName", previousOwnerUuid).join();
+        assertFalse(cacheWrite.isDatabaseError());
+        assertEquals(Boolean.TRUE, cacheWrite.getValue());
+        save(player(
+                "ReassignedName",
+                "$2a$10$offlinehashvalueofflinehashvalueofflinehashval",
+                null));
+
+        DatabaseManager.DbResult<Boolean> result = manager.isPremium("ReassignedName").join();
+
+        assertFalse(result.isDatabaseError());
+        assertEquals(Boolean.FALSE, result.getValue(),
+                "An existing offline AUTH owner must not inherit stale premium cache identity");
+    }
+
+    @Test
+    void isPremium_missingAuthOwnerShouldUseVerifiedPremiumUuidCache() {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+        UUID cachedPremiumUuid = UUID.randomUUID();
+        var cacheWrite = manager.savePremiumUuid("CacheOnlyPremium", cachedPremiumUuid).join();
+        assertFalse(cacheWrite.isDatabaseError());
+        assertEquals(Boolean.TRUE, cacheWrite.getValue());
+
+        DatabaseManager.DbResult<Boolean> result = manager.isPremium("CacheOnlyPremium").join();
+
+        assertFalse(result.isDatabaseError());
+        assertEquals(Boolean.TRUE, result.getValue(),
+                "PREMIUM_UUIDS remains the fallback only when AUTH has no owner");
+    }
+
+    @Test
+    void isPremium_parseableAuthPremiumUuidShouldRefreshDisposableCache() throws Exception {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+        UUID verifiedPremiumUuid = UUID.randomUUID();
+        insertRawPlayer(
+                "VerifiedAuthPremium",
+                "$2a$10$offlinehashvalueofflinehashvalueofflinehashval",
+                verifiedPremiumUuid.toString());
+        assertTrue(manager.getPremiumUuidDao()
+                        .findByNicknameStrict("VerifiedAuthPremium").isEmpty(),
+                "Fixture must start without a cache row");
+
+        DatabaseManager.DbResult<Boolean> result = manager.isPremium("VerifiedAuthPremium").join();
+
+        assertFalse(result.isDatabaseError());
+        assertEquals(Boolean.TRUE, result.getValue());
+        var refreshed = manager.getPremiumUuidDao()
+                .findByNicknameStrict("VerifiedAuthPremium");
+        assertTrue(refreshed.isPresent());
+        assertEquals(verifiedPremiumUuid, refreshed.orElseThrow().getUuid());
     }
 
     @Test
