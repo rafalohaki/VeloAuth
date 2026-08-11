@@ -53,7 +53,7 @@ else
 fi
 
 "${maven_command[@]}" test \
-  -Dtest=PremiumUuidDaoPostgreSqlIT,JdbcAuthDaoDatabaseIT \
+  -Dtest=PremiumUuidDaoPostgreSqlIT,JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT \
   -Dveloauth.postgres.url="${postgres_url}" \
   -Dveloauth.postgres.user="${database_user}" \
   -Dveloauth.postgres.password="${database_password}" \

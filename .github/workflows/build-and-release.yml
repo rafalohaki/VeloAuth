@@ -103,7 +103,7 @@ jobs:
     - name: Verify AUTH and premium UUID behavior on PostgreSQL
       run: >-
         mvn -B test
-        -Dtest=PremiumUuidDaoPostgreSqlIT,JdbcAuthDaoDatabaseIT
+        -Dtest=PremiumUuidDaoPostgreSqlIT,JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT
         -Dveloauth.postgres.url=jdbc:postgresql://127.0.0.1:5432/veloauth_it
         -Dveloauth.postgres.user=veloauth_it
         -Dveloauth.postgres.password=veloauth_it_password
@@ -115,7 +115,7 @@ jobs:
     - name: Verify AUTH behavior on MySQL
       run: >-
         mvn -B test
-        -Dtest=JdbcAuthDaoDatabaseIT
+        -Dtest=JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT
         -Dveloauth.database.type=MYSQL
         -Dveloauth.database.url='jdbc:mysql://127.0.0.1:3306/veloauth_it?useSSL=false&serverTimezone=UTC'
         -Dveloauth.database.user=veloauth_it

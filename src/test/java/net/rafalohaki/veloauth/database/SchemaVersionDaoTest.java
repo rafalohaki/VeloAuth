@@ -8,7 +8,6 @@ import org.junit.jupiter.api.Test;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SchemaVersionDaoTest {
@@ -32,12 +31,12 @@ class SchemaVersionDaoTest {
     }
 
     @Test
-    void baselineRowIsRecordedDuringInitialization() {
+    void requiredSchemaVersionsAreRecordedDuringInitialization() {
         Optional<Integer> current = dao.getCurrentVersion();
         assertTrue(current.isPresent());
-        assertEquals(1, current.get());
+        assertEquals(2, current.get());
         assertTrue(dao.hasVersion(1));
-        assertFalse(dao.hasVersion(2));
+        assertTrue(dao.hasVersion(2));
     }
 
     @Test

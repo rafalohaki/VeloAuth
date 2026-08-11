@@ -29,7 +29,6 @@ class DatabaseMigrationService {
     private static final String ADD_COLUMN = " ADD COLUMN ";
     private static final String AUTH_TABLE = "AUTH";
     private static final String PREMIUM_UUIDS_TABLE = "PREMIUM_UUIDS";
-    private static final String SCHEMA_VERSION_TABLE = "VELOAUTH_SCHEMA_VERSION";
     private static final String AUDIT_LOG_TABLE = "VELOAUTH_AUDIT_LOG";
     private static final String CREATE_SEQUENCE = "CREATE SEQUENCE ";
     private static final String CREATE_SEQUENCE_IF_NOT_EXISTS = "CREATE SEQUENCE IF NOT EXISTS ";
@@ -47,20 +46,21 @@ class DatabaseMigrationService {
     /**
      * Creates tables if they don't exist and migrates schema for limboauth compatibility.
      */
-    public void createTablesAndMigrate(ConnectionSource connectionSource, String createTablesMsg, String tablesCreatedMsg) throws SQLException {
+    public MigrationResult createTablesAndMigrate(ConnectionSource connectionSource, String createTablesMsg,
+                                                   String tablesCreatedMsg) throws SQLException {
         if (logger.isDebugEnabled()) {
             logger.debug(createTablesMsg);
         }
 
-        boolean legacyAuthImport = isLegacyAuthImport(connectionSource);
         createTablesQuietly(connectionSource);
 
-        migrateAuthTableForLimboauth(connectionSource, legacyAuthImport);
+        MigrationResult migrationResult = migrateAuthTableForLimboauth(connectionSource);
         createIndexesIfNotExists(connectionSource);
 
         if (logger.isDebugEnabled()) {
             logger.debug(tablesCreatedMsg);
         }
+        return migrationResult;
     }
 
     /**
@@ -126,55 +126,58 @@ class DatabaseMigrationService {
         return statement;
     }
 
-    private boolean isLegacyAuthImport(ConnectionSource connectionSource) throws SQLException {
+    private MigrationResult migrateAuthTableForLimboauth(ConnectionSource connectionSource) throws SQLException {
         DatabaseConnection dbConnection = connectionSource.getReadWriteConnection(null);
         try {
-            java.sql.Connection connection = dbConnection.getUnderlyingConnection();
-            return tableExists(connection, AUTH_TABLE) && !tableExists(connection, SCHEMA_VERSION_TABLE);
+            return performColumnMigration(dbConnection);
         } finally {
             connectionSource.releaseConnection(dbConnection);
         }
     }
 
-    private void migrateAuthTableForLimboauth(ConnectionSource connectionSource,
-                                               boolean legacyAuthImport) throws SQLException {
-        DatabaseConnection dbConnection = connectionSource.getReadWriteConnection(null);
-        try {
-            performColumnMigration(dbConnection, legacyAuthImport);
-        } finally {
-            connectionSource.releaseConnection(dbConnection);
-        }
-    }
-
-    private void performColumnMigration(DatabaseConnection dbConnection,
-                                        boolean legacyAuthImport) throws SQLException {
+    private MigrationResult performColumnMigration(DatabaseConnection dbConnection) throws SQLException {
         java.sql.Connection connection = dbConnection.getUnderlyingConnection();
         ColumnMigrationResult migrationResult = checkExistingColumns(connection);
         DatabaseType dbType = DatabaseType.fromName(config.getStorageType());
         String quote = identifierQuote(dbType);
 
         addMissingColumns(connection, migrationResult, quote);
-        if (legacyAuthImport) {
-            markLegacyPremiumRowsForUuidPreservation(connection, quote);
-        }
+        MigrationResult legacyUuidMigration = markLegacyPremiumRowsForUuidPreservation(connection, quote);
         logMigrationComplete(migrationResult);
+        return legacyUuidMigration;
     }
 
-    private void markLegacyPremiumRowsForUuidPreservation(java.sql.Connection connection,
-                                                           String quote) throws SQLException {
+    private MigrationResult markLegacyPremiumRowsForUuidPreservation(java.sql.Connection connection,
+                                                                      String quote) throws SQLException {
         String authTable = quoteIdentifier(quote, AUTH_TABLE);
         String preserveUuid = quoteIdentifier(quote, COLUMN_PRESERVE_UUID);
         String hash = quoteIdentifier(quote, "HASH");
-        String sql = "UPDATE " + authTable + " SET " + preserveUuid
-                + " = ? WHERE (" + hash + " IS NULL OR " + hash + " = ?)";
+        String premiumUuid = quoteIdentifier(quote, COLUMN_PREMIUM_UUID);
+        String uuid = quoteIdentifier(quote, "UUID");
+        String predicate = "(" + hash + " IS NULL OR TRIM(" + hash + ") = ?)"
+                + " AND (" + preserveUuid + " IS NULL OR " + preserveUuid + " = ?)"
+                + " AND (" + premiumUuid + " IS NULL OR " + premiumUuid + " = " + uuid + ")";
+        int candidates = countLegacyPremiumUuidCandidates(connection, authTable, predicate);
+        String sql = "UPDATE " + authTable + " SET " + preserveUuid + " = ? WHERE " + predicate;
         try (java.sql.PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setBoolean(1, true);
             statement.setString(2, "");
-            int markedRows = statement.executeUpdate();
-            if (markedRows > 0) {
-                logger.info(DB_MARKER,
-                        "Marked {} imported LimboAuth premium rows for backend UUID preservation",
-                        markedRows);
+            statement.setBoolean(3, false);
+            return new MigrationResult(candidates, statement.executeUpdate());
+        }
+    }
+
+    private int countLegacyPremiumUuidCandidates(java.sql.Connection connection, String authTable,
+                                                   String predicate) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM " + authTable + " WHERE " + predicate;
+        try (java.sql.PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, "");
+            statement.setBoolean(2, false);
+            try (java.sql.ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new SQLException("Legacy UUID candidate count returned no row");
+                }
+                return resultSet.getInt(1);
             }
         }
     }
@@ -279,10 +282,6 @@ class DatabaseMigrationService {
             logger.debug(DB_MARKER, "Column {} does not exist in table {}", columnName, tableName);
         }
         return false;
-    }
-
-    private boolean tableExists(java.sql.Connection connection, String tableName) throws SQLException {
-        return findTableName(connection.getMetaData(), metadataScope(connection), tableName) != null;
     }
 
     private String findTableName(java.sql.DatabaseMetaData metaData, MetadataScope scope,
@@ -402,6 +401,9 @@ class DatabaseMigrationService {
     private record ColumnMigrationResult(boolean hasPremiumUuid, boolean hasTotpToken, boolean hasIssuedTime,
                                          boolean hasConflictMode, boolean hasConflictTimestamp,
                                          boolean hasOriginalNickname, boolean hasPreserveUuid) {
+    }
+
+    record MigrationResult(int legacyUuidCandidates, int legacyUuidRowsMarked) {
     }
 
     private record MetadataScope(String catalog, String schema) {

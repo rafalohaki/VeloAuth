@@ -184,10 +184,13 @@ public class DatabaseManager {
 
         initializeConnection();
         initializeDaos();
-        migrationService.createTablesAndMigrate(connectionSource,
+        DatabaseMigrationService.MigrationResult migrationResult = migrationService.createTablesAndMigrate(connectionSource,
                 messages.get("database.manager.creating_tables"),
                 messages.get("database.manager.tables_created"));
-        recordSchemaBaseline();
+        logger.info(DB_MARKER, "VA-1501 legacy UUID preservation candidates={}, marked={}",
+                migrationResult.legacyUuidCandidates(), migrationResult.legacyUuidRowsMarked());
+        recordRequiredSchemaVersion(1, "baseline v1.2.0 schema");
+        recordRequiredSchemaVersion(2, "VA-1501 legacy UUID preservation backfill");
         markAsConnected();
         healthCheck.start();
 
@@ -250,14 +253,10 @@ public class DatabaseManager {
         jdbcAuthDao = new JdbcAuthDao(config);
     }
 
-    private void recordSchemaBaseline() {
-        if (schemaVersionDao == null) {
-            return;
+    private void recordRequiredSchemaVersion(int version, String description) throws SQLException {
+        if (schemaVersionDao == null || !schemaVersionDao.recordVersion(version, description)) {
+            throw new SQLException("Failed to record required schema version " + version);
         }
-        if (schemaVersionDao.getCurrentVersion().isPresent()) {
-            return;
-        }
-        schemaVersionDao.recordVersion(1, "baseline v1.2.0 schema");
     }
 
     private void markAsConnected() {

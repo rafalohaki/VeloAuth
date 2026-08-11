@@ -55,7 +55,7 @@ else
 fi
 
 "${maven_command[@]}" test \
-  -Dtest=JdbcAuthDaoDatabaseIT \
+  -Dtest=JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT \
   -Dveloauth.database.type="MYSQL" \
   -Dveloauth.database.url="${mysql_url}" \
   -Dveloauth.database.user="${database_user}" \
