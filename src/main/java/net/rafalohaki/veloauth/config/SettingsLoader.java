@@ -1,13 +1,17 @@
 package net.rafalohaki.veloauth.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import net.rafalohaki.veloauth.database.DatabaseType;
 import org.slf4j.Logger;
+import org.spongepowered.configurate.ConfigurationNode;
+import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
 import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @SuppressWarnings("java:S2068") // YAML config key names, not hardcoded credentials
@@ -27,10 +31,14 @@ final class SettingsLoader {
 
     static Settings.Snapshot load(
             Path configFile,
-            ObjectMapper yamlMapper,
             Logger logger)
             throws IOException {
-        Object root = yamlMapper.readValue(configFile.toFile(), Object.class);
+        YamlStructureGuard.validate(configFile);
+        ConfigurationNode document = YamlConfigurationLoader.builder()
+                .path(configFile)
+                .build()
+                .load();
+        Object root = toJavaValue(document, "Config root");
         Map<String, Object> config = requireMap(root, "Config root");
 
         Builder state = new Builder(Settings.Snapshot.defaults());
@@ -49,6 +57,28 @@ final class SettingsLoader {
         loadLanguageSettings(config, state);
         processDatabaseSettings(state, logger);
         return state.build();
+    }
+
+    private static Object toJavaValue(ConfigurationNode node, String location) {
+        if (node.isMap()) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            for (Map.Entry<Object, ? extends ConfigurationNode> entry
+                    : node.childrenMap().entrySet()) {
+                if (!(entry.getKey() instanceof String key)) {
+                    throw new IllegalArgumentException(location + " keys must be strings");
+                }
+                result.put(key, toJavaValue(entry.getValue(), location + '.' + key));
+            }
+            return result;
+        }
+        if (node.isList()) {
+            List<Object> result = new ArrayList<>();
+            for (ConfigurationNode child : node.childrenList()) {
+                result.add(toJavaValue(child, location));
+            }
+            return result;
+        }
+        return node.rawScalar();
     }
 
     private static Map<String, Object> mapSectionOrEmpty(

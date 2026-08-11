@@ -69,13 +69,14 @@ required_dependencies = {
     "net.kyori:adventure-text-serializer-legacy": ("4.26.1", "provided"),
     "net.kyori:adventure-text-serializer-plain": ("4.26.1", "provided"),
     "com.google.code.gson:gson": ("2.13.2", "provided"),
+    "org.spongepowered:configurate-core": ("4.2.0", "provided"),
+    "org.spongepowered:configurate-yaml": ("4.2.0", "provided"),
     "io.netty:netty-common": ("${embedded.netty.version}", "provided"),
     "io.netty:netty-buffer": ("${embedded.netty.version}", "provided"),
     "io.netty:netty-transport": ("${embedded.netty.version}", "provided"),
     "io.netty:netty-codec-base": ("${embedded.netty.version}", "provided"),
     "io.netty:netty-handler": ("${embedded.netty.version}", "provided"),
     "org.bstats:bstats-base": ("3.2.1", "compile"),
-    "com.fasterxml.jackson.core:jackson-core": ("2.21.5", "compile"),
     "org.cloudburstmc.math:immutable": ("2.0", "compile"),
     "org.junit.jupiter:junit-jupiter-api": ("5.12.0", "test"),
     "org.junit.jupiter:junit-jupiter-params": ("5.12.0", "test"),
@@ -117,7 +118,6 @@ expected_ignored = {
     "org.postgresql:postgresql",
     "com.h2database:h2",
     "org.xerial:sqlite-jdbc",
-    "com.google.code.gson:gson",
     "io.netty:netty-handler",
     "org.junit.jupiter:junit-jupiter-engine",
 }
@@ -189,7 +189,6 @@ with zipfile.ZipFile(jar_path) as jar:
         "org/h2/Driver.class",
         "org/sqlite/JDBC.class",
         "net/rafalohaki/veloauth/libs/bstats/charts/CustomChart.class",
-        "net/rafalohaki/veloauth/libs/jackson/core/JsonFactory.class",
         "net/rafalohaki/veloauth/libs/cloudburst/math/vector/Vector3i.class",
         "net/rafalohaki/veloauth/libs/mcprotocollib/network/server/NetworkServer.class",
         "net/rafalohaki/veloauth/libs/ormlite/jdbc/JdbcConnectionSource.class",
@@ -237,6 +236,9 @@ with zipfile.ZipFile(jar_path) as jar:
         "net/kyori/adventure/",
         "com/google/gson/",
         "io/netty/",
+        "org/spongepowered/configurate/",
+        "org/yaml/snakeyaml/",
+        "com/fasterxml/jackson/",
     )
     leaked = sorted(
         name for name in names
@@ -244,6 +246,15 @@ with zipfile.ZipFile(jar_path) as jar:
     )
     if leaked:
         fail(f"proxy-provided classes leaked into shaded JAR: {leaked[:20]}")
+    obsolete_private_json_yaml = sorted(
+        name for name in names
+        if logical_class_path(name).startswith((
+            "net/rafalohaki/veloauth/libs/jackson/",
+            "net/rafalohaki/veloauth/libs/snakeyaml/",
+        ))
+    )
+    if obsolete_private_json_yaml:
+        fail(f"obsolete private JSON/YAML runtime remains shaded: {obsolete_private_json_yaml[:20]}")
     providers = {
         line.strip()
         for line in jar.read("META-INF/services/java.sql.Driver").decode("utf-8").splitlines()
@@ -266,7 +277,8 @@ if sbom_path:
     }
     required_components = {
         ("org.bstats", "bstats-base", "3.2.1"),
-        ("com.fasterxml.jackson.core", "jackson-core", "2.21.5"),
+        ("org.spongepowered", "configurate-core", "4.2.0"),
+        ("org.spongepowered", "configurate-yaml", "4.2.0"),
         ("org.cloudburstmc.math", "immutable", "2.0"),
         ("org.slf4j", "slf4j-api", "2.0.17"),
         ("jakarta.inject", "jakarta.inject-api", "2.0.1"),

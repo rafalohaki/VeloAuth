@@ -1,9 +1,7 @@
 package net.rafalohaki.veloauth.config;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import net.rafalohaki.veloauth.database.DatabaseType;
+import org.spongepowered.configurate.loader.ParsingException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,7 +35,6 @@ public class Settings {
 
     private final Path dataDirectory;
     private final Path configFile;
-    private final ObjectMapper yamlMapper;
     private final ReentrantLock loadLock = new ReentrantLock();
     private volatile Publication publication = Publication.defaults();
     @SuppressWarnings("java:S2068")
@@ -51,8 +48,6 @@ public class Settings {
     public Settings(Path dataDirectory) {
         this.dataDirectory = dataDirectory;
         this.configFile = dataDirectory.resolve("config.yml");
-        this.yamlMapper = new ObjectMapper(new YAMLFactory());
-
         try {
             Files.createDirectories(dataDirectory);
         } catch (IOException e) {
@@ -63,7 +58,6 @@ public class Settings {
     private Settings(Settings source, Snapshot snapshot) {
         this.dataDirectory = source.dataDirectory;
         this.configFile = source.configFile;
-        this.yamlMapper = source.yamlMapper;
         this.publication = Publication.initial(snapshot);
     }
 
@@ -83,7 +77,7 @@ public class Settings {
             logger.debug("Loading configuration from: {}", configFile);
 
             Publication current = publication;
-            Snapshot loadedSnapshot = SettingsLoader.load(configFile, yamlMapper, logger);
+            Snapshot loadedSnapshot = SettingsLoader.load(configFile, logger);
             Settings candidate = new Settings(this, loadedSnapshot);
             if (!candidate.validateLoadedConfig()) {
                 return false;
@@ -101,7 +95,7 @@ public class Settings {
             logger.debug("Configuration loaded successfully");
             return true;
 
-        } catch (JsonProcessingException e) {
+        } catch (ParsingException e) {
             logger.error("YAML parse error in config file: {}", configFile, e);
             return false;
         } catch (IllegalArgumentException e) {

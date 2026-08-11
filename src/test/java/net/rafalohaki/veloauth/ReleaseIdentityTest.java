@@ -1,7 +1,7 @@
 package net.rafalohaki.veloauth;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.w3c.dom.Element;
@@ -49,8 +49,10 @@ class ReleaseIdentityTest {
 
         try (InputStream input = getClass().getClassLoader().getResourceAsStream("velocity-plugin.json")) {
             assertNotNull(input, "Filtered velocity-plugin.json must be available on the test classpath");
-            JsonNode metadata = new ObjectMapper().readTree(input);
-            assertEquals(projectVersion, metadata.path("version").asText(),
+            JsonObject metadata = JsonParser.parseReader(
+                    new java.io.InputStreamReader(input, StandardCharsets.UTF_8))
+                    .getAsJsonObject();
+            assertEquals(projectVersion, metadata.get("version").getAsString(),
                     "Filtered plugin metadata must use the Maven project version");
         }
 
@@ -376,8 +378,13 @@ class ReleaseIdentityTest {
         assertEquals("veloauth-" + expectedVersion + ".jar", jarPath.getFileName().toString(),
                 "Release JAR name must use the Maven version");
         try (JarFile jar = new JarFile(jarPath.toFile())) {
-            JsonNode metadata = new ObjectMapper().readTree(readJarEntry(jar, "velocity-plugin.json"));
-            assertEquals(expectedVersion, metadata.path("version").asText(),
+            JsonObject metadata;
+            try (InputStream input = readJarEntry(jar, "velocity-plugin.json")) {
+                metadata = JsonParser.parseReader(
+                        new java.io.InputStreamReader(input, StandardCharsets.UTF_8))
+                        .getAsJsonObject();
+            }
+            assertEquals(expectedVersion, metadata.get("version").getAsString(),
                     "Packaged plugin metadata must use the Maven version");
 
             Properties pomProperties = new Properties();

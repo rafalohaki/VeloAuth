@@ -6,8 +6,7 @@ import java.util.Arrays;
  * Minimal RFC 4648 Base32 encoder / decoder.
  * <p>
  * Hand-rolled instead of pulled from Apache Commons Codec to keep the dependency
- * footprint minimal — Caffeine + Nayuki + Jackson + ORMLite is enough Java baggage
- * for one Velocity plugin. Just enough surface to serialize TOTP shared secrets:
+ * footprint minimal. Just enough surface to serialize TOTP shared secrets:
  * <ul>
  *   <li>uppercase RFC 4648 alphabet ({@code A-Z 2-7}),</li>
  *   <li>decode accepts lowercase + ignores whitespace and {@code =} padding,</li>

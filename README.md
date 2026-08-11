@@ -753,17 +753,19 @@ same check can be reproduced directly:
 ```
 
 The only unused-declaration exceptions are runtime-discovered dependencies: the four JDBC drivers
-(`java.sql.Driver` SPI and trusted driver class names), Velocity-provided Gson/Netty handler types
-used through embedded-runtime descriptors, and the JUnit Jupiter `TestEngine` SPI. The dependency
-tree proves `netty-resolver` is already supplied by `netty-transport`; the broad `netty-codec`
-aggregator is replaced by the directly used `netty-codec-base` module.
+(`java.sql.Driver` SPI and trusted driver class names), the Velocity-provided Netty handler module
+used through embedded-runtime descriptors, and the JUnit Jupiter `TestEngine` SPI. Configurate 4.2
+and Gson are direct `provided` APIs because configuration and JSON data share Velocity's type
+universe; neither is bundled in the plugin. The dependency tree proves `netty-resolver` is already
+supplied by `netty-transport`; the broad `netty-codec` aggregator is replaced by the directly used
+`netty-codec-base` module.
 
 [CycloneDX Maven Plugin 2.9.3](https://github.com/CycloneDX/cyclonedx-maven-plugin/releases/tag/cyclonedx-maven-plugin-2.9.3)
 generates `target/veloauth-1.5.0.cdx.json` as a CycloneDX 1.6 production SBOM during `package`.
 Compile, runtime and provided dependencies are included; test-only dependencies are excluded.
 After packaging, this fixture verifies the SBOM, the shaded inventory, all four original JDBC
 drivers and their merged SPI descriptor, relocated private libraries, and absence of proxy-owned
-SLF4J, Jakarta Inject, Adventure, Gson and Netty classes:
+SLF4J, Jakarta Inject, Adventure, Gson, Configurate, SnakeYAML and Netty classes:
 
 ```bash
 ./scripts/test-dependency-hygiene.sh

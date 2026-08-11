@@ -233,21 +233,18 @@
             <version>3.1.8</version>
         </dependency>
 
-        <!-- Configuration - YAML -->
+        <!-- Velocity 3.5 owns this Configurate/SnakeYAML type universe. -->
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>2.21.5</version>
+            <groupId>org.spongepowered</groupId>
+            <artifactId>configurate-core</artifactId>
+            <version>4.2.0</version>
+            <scope>provided</scope>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-core</artifactId>
-            <version>2.21.5</version>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.dataformat</groupId>
-            <artifactId>jackson-dataformat-yaml</artifactId>
-            <version>2.21.5</version>
+            <groupId>org.spongepowered</groupId>
+            <artifactId>configurate-yaml</artifactId>
+            <version>4.2.0</version>
+            <scope>provided</scope>
         </dependency>
 
         <!-- bStats -->
@@ -522,8 +519,6 @@
                         <ignoredUnusedDeclaredDependency>org.postgresql:postgresql</ignoredUnusedDeclaredDependency>
                         <ignoredUnusedDeclaredDependency>com.h2database:h2</ignoredUnusedDeclaredDependency>
                         <ignoredUnusedDeclaredDependency>org.xerial:sqlite-jdbc</ignoredUnusedDeclaredDependency>
-                        <!-- Gson types cross Adventure/MCProtocolLib public descriptors at runtime. -->
-                        <ignoredUnusedDeclaredDependency>com.google.code.gson:gson</ignoredUnusedDeclaredDependency>
                         <!-- MCProtocolLib uses timeout/proxy handlers from this provided Netty module. -->
                         <ignoredUnusedDeclaredDependency>io.netty:netty-handler</ignoredUnusedDeclaredDependency>
                         <!-- Surefire discovers the Jupiter engine through TestEngine SPI. -->
@@ -657,6 +652,9 @@
                                          use Velocity's matching Gson type universe as well; bundling
                                          or relocating Gson creates a NoSuchMethodError after Join Game. -->
                                     <exclude>com.google.code.gson:gson</exclude>
+                                    <!-- Velocity owns Configurate and its YAML parser. -->
+                                    <exclude>org.spongepowered:configurate-*</exclude>
+                                    <exclude>org.yaml:snakeyaml</exclude>
                                     <exclude>net.kyori:option</exclude>
                                     <exclude>net.kyori:examination-api</exclude>
                                     <exclude>net.kyori:examination-string</exclude>
@@ -685,20 +683,6 @@
                                 <relocation>
                                     <pattern>at.favre.lib.bytes</pattern>
                                     <shadedPattern>net.rafalohaki.veloauth.libs.bytes</shadedPattern>
-                                </relocation>
-                                <relocation>
-                                    <pattern>com.fasterxml.jackson</pattern>
-                                    <shadedPattern>net.rafalohaki.veloauth.libs.jackson</shadedPattern>
-                                </relocation>
-                                <!--
-                                  SnakeYAML (transitive from jackson-dataformat-yaml) is bundled by
-                                  many other plugins — must be relocated to avoid LinkageError in
-                                  Velocity's per-plugin classloaders. Shade rewrites the references
-                                  inside jackson-dataformat-yaml bytecode automatically.
-                                -->
-                                <relocation>
-                                    <pattern>org.yaml.snakeyaml</pattern>
-                                    <shadedPattern>net.rafalohaki.veloauth.libs.snakeyaml</shadedPattern>
                                 </relocation>
                                 <!--
                                   HikariCP relocation prevents LinkageError when another Velocity plugin
@@ -765,31 +749,6 @@
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
                             </transformers>
                             <filters>
-                                <!--
-                                  Shade also leaves Jackson's multi-release class copies at their
-                                  original com.fasterxml coordinates. VeloAuth ships the relocated
-                                  base classes, so retaining these inert copies would weaken the
-                                  exact shaded-class inventory and could become active if a future
-                                  manifest accidentally enabled Multi-Release semantics.
-                                -->
-                                <filter>
-                                    <artifact>com.fasterxml.jackson.core:jackson-core</artifact>
-                                    <excludes>
-                                        <exclude>META-INF/versions/**</exclude>
-                                    </excludes>
-                                </filter>
-                                <!--
-                                  Shade does not relocate multi-release (META-INF/versions/N) class
-                                  copies — they'd ship at the original org.yaml.snakeyaml coordinates
-                                  and defeat the relocation. The relocated base-version copy is used
-                                  instead; the versioned Logger shims are safe to drop.
-                                -->
-                                <filter>
-                                    <artifact>org.yaml:snakeyaml</artifact>
-                                    <excludes>
-                                        <exclude>META-INF/versions/**</exclude>
-                                    </excludes>
-                                </filter>
                                 <filter>
                                     <artifact>*:*</artifact>
                                     <excludes>

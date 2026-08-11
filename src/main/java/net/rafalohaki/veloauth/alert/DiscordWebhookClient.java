@@ -1,6 +1,6 @@
 package net.rafalohaki.veloauth.alert;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Marker;
@@ -24,7 +24,7 @@ public class DiscordWebhookClient {
 
     private static final Logger logger = LoggerFactory.getLogger(DiscordWebhookClient.class);
     private static final Marker ALERT_MARKER = MarkerFactory.getMarker("ALERT");
-    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
+    private static final Gson JSON_MAPPER = new Gson();
     private static final int MAX_CONTENT_LENGTH = 2000; // Discord limit
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
     private static final String DISCORD_WEBHOOK_URL_PREFIX = "https://discord.com/api/webhooks/";
@@ -123,7 +123,7 @@ public class DiscordWebhookClient {
      */
     private boolean sendPayload(Map<String, Object> payload) {
         try {
-            String jsonBody = JSON_MAPPER.writeValueAsString(payload);
+            String jsonBody = JSON_MAPPER.toJson(payload);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(webhookUrl))

@@ -1099,7 +1099,11 @@ class SettingsValidationTest {
                 "auth-server:\n  embedded: 7\n",
                 "security:\n  password-policy: 7\n",
                 "premium:\n  resolver: 7\n",
-                "alerts:\n  discord: 7\n");
+                "alerts:\n  discord: 7\n",
+                "database: null\n",
+                "auth-server: ~\n",
+                "database:\n  postgresql:\n",
+                "premium:\n  resolver: null\n");
     }
 
     private Object preparePendingConnectionChange() {

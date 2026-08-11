@@ -1,7 +1,9 @@
 package net.rafalohaki.veloauth.premium;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -12,11 +14,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 /**
- * HTTP GET client with Jackson-based JSON field extraction for premium resolver APIs.
+ * HTTP GET client with proxy-provided Gson field extraction for premium resolver APIs.
  */
 final class HttpJsonClient {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final int MAX_RESPONSE_BYTES = 64 * 1024;
 
     private HttpJsonClient() {
@@ -51,13 +52,17 @@ final class HttpJsonClient {
             return null;
         }
         try {
-            JsonNode node = MAPPER.readTree(body);
-            JsonNode value = node.get(field);
-            if (value == null || value.isNull()) {
+            JsonElement document = JsonParser.parseString(body);
+            if (!document.isJsonObject()) {
                 return null;
             }
-            return value.asText();
-        } catch (IOException e) {
+            JsonObject object = document.getAsJsonObject();
+            JsonElement value = object.get(field);
+            if (value == null || value.isJsonNull() || !value.isJsonPrimitive()) {
+                return null;
+            }
+            return value.getAsString();
+        } catch (JsonParseException | IllegalStateException | UnsupportedOperationException e) {
             return null;
         }
     }

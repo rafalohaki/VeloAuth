@@ -1,11 +1,14 @@
 package net.rafalohaki.veloauth;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -18,15 +21,16 @@ class PluginMetadataTest {
         try (InputStream input = getClass().getClassLoader().getResourceAsStream("velocity-plugin.json")) {
             assertNotNull(input, "velocity-plugin.json must be packaged");
 
-            JsonNode metadata = new ObjectMapper().readTree(input);
-            assertEquals(BuildConstants.VERSION, metadata.path("version").asText(),
+            JsonObject metadata = JsonParser.parseReader(
+                    new InputStreamReader(input, StandardCharsets.UTF_8)).getAsJsonObject();
+            assertEquals(BuildConstants.VERSION, metadata.get("version").getAsString(),
                     "Filtered Velocity metadata and generated BuildConstants must share one version");
 
-            JsonNode dependencies = metadata.path("dependencies");
             boolean optionalFloodgateDependency = false;
-            for (JsonNode dependency : dependencies) {
-                if ("floodgate".equals(dependency.path("id").asText())
-                        && dependency.path("optional").asBoolean()) {
+            for (JsonElement element : metadata.getAsJsonArray("dependencies")) {
+                JsonObject dependency = element.getAsJsonObject();
+                if ("floodgate".equals(dependency.get("id").getAsString())
+                        && dependency.get("optional").getAsBoolean()) {
                     optionalFloodgateDependency = true;
                     break;
                 }

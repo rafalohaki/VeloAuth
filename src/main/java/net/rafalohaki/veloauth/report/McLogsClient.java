@@ -1,13 +1,17 @@
 package net.rafalohaki.veloauth.report;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,7 +33,7 @@ final class McLogsClient {
     private static final String API_URL = "https://api.mclo.gs/1/log";
     private static final String SOURCE = "VeloAuth";
     private static final Duration TIMEOUT = Duration.ofSeconds(15);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Gson GSON = new Gson();
 
     /** Result of a mclo.gs upload. */
     record UploadResult(boolean success, String url, String error) {
@@ -73,7 +77,7 @@ final class McLogsClient {
         }
     }
 
-    private static byte[] serializeBody(String content, List<MetadataEntry> metadata) throws IOException {
+    static byte[] serializeBody(String content, List<MetadataEntry> metadata) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("content", content);
         body.put("source", SOURCE);
@@ -83,25 +87,41 @@ final class McLogsClient {
                     .toList();
             body.put("metadata", metaList);
         }
-        return MAPPER.writeValueAsBytes(body);
+        return GSON.toJson(body).getBytes(StandardCharsets.UTF_8);
     }
 
-    private static UploadResult parseResponse(String body) {
+    static UploadResult parseResponse(String body) {
         try {
-            JsonNode root = MAPPER.readTree(body);
-            boolean success = root.path("success").asBoolean(false);
+            JsonElement document = JsonParser.parseString(body);
+            if (!document.isJsonObject()) {
+                return UploadResult.fail("Response root must be a JSON object");
+            }
+            JsonObject root = document.getAsJsonObject();
+            boolean success = booleanValue(root.get("success"));
             if (!success) {
-                String error = root.path("error").asText("Unknown error");
+                String error = stringValue(root.get("error"), "Unknown error");
                 return UploadResult.fail(error);
             }
-            String url = root.path("url").asText(null);
+            String url = stringValue(root.get("url"), null);
             if (url == null || url.isEmpty()) {
                 return UploadResult.fail("Response missing url field");
             }
             return UploadResult.ok(url);
-        } catch (IOException e) {
+        } catch (JsonParseException | IllegalStateException | UnsupportedOperationException e) {
             return UploadResult.fail("Failed to parse response: " + e.getMessage());
         }
+    }
+
+    private static boolean booleanValue(JsonElement value) {
+        return value != null && value.isJsonPrimitive()
+                && value.getAsJsonPrimitive().isBoolean()
+                && value.getAsBoolean();
+    }
+
+    private static String stringValue(JsonElement value, String defaultValue) {
+        return value != null && value.isJsonPrimitive()
+                ? value.getAsString()
+                : defaultValue;
     }
 
     private McLogsClient() {

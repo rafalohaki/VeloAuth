@@ -42,6 +42,9 @@ All notable user-visible changes to VeloAuth are documented in this file.
   resolution and verified artifact publication have independent, testable boundaries.
 - MCProtocolLib and Adventure now share Velocity's Gson runtime instead of relocating a private
   copy, preventing a shaded `NoSuchMethodError` while decoding modern play packets.
+- Configuration now uses Velocity's Configurate 4.2 YAML stack and the three small HTTP clients use
+  Velocity's Gson. Existing files are still read without rewriting, while private Jackson and
+  SnakeYAML copies are no longer shipped in the plugin JAR.
 - Embedded limbo presents its chunk-free holding state as `minecraft:the_end` for a darker
   authentication backdrop. It does not create a world or change the backend dimension after
   transfer.
