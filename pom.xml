@@ -763,6 +763,19 @@
                             </transformers>
                             <filters>
                                 <!--
+                                  Shade also leaves Jackson's multi-release class copies at their
+                                  original com.fasterxml coordinates. VeloAuth ships the relocated
+                                  base classes, so retaining these inert copies would weaken the
+                                  exact shaded-class inventory and could become active if a future
+                                  manifest accidentally enabled Multi-Release semantics.
+                                -->
+                                <filter>
+                                    <artifact>com.fasterxml.jackson.core:jackson-core</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/versions/**</exclude>
+                                    </excludes>
+                                </filter>
+                                <!--
                                   Shade does not relocate multi-release (META-INF/versions/N) class
                                   copies — they'd ship at the original org.yaml.snakeyaml coordinates
                                   and defeat the relocation. The relocated base-version copy is used

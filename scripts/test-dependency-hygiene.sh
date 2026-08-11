@@ -197,6 +197,40 @@ with zipfile.ZipFile(jar_path) as jar:
     missing = required_entries - names
     if missing:
         fail(f"shaded JAR is missing required runtime entries: {sorted(missing)}")
+
+    def logical_class_path(name: str) -> str:
+        parts = name.split("/")
+        if len(parts) > 3 and parts[:2] == ["META-INF", "versions"] and parts[2].isdigit():
+            return "/".join(parts[3:])
+        return name
+
+    allowed_class_prefixes = (
+        "net/rafalohaki/veloauth/",
+        "com/mysql/",
+        "org/postgresql/",
+        "org/h2/",
+        "org/sqlite/",
+    )
+
+    def is_allowed_class(name: str) -> bool:
+        return logical_class_path(name).startswith(allowed_class_prefixes)
+
+    synthetic_forbidden_classes = (
+        "META-INF/versions/21/io/netty/channel/Channel.class",
+        "META-INF/versions/17/com/fasterxml/jackson/core/JsonFactory.class",
+        "example/unowned/Foreign.class",
+    )
+    if any(is_allowed_class(name) for name in synthetic_forbidden_classes):
+        fail("logical shaded inventory fixture accepted an unowned synthetic class")
+
+    unowned_classes = sorted(
+        name for name in names
+        if name.endswith(".class")
+        and not is_allowed_class(name)
+    )
+    if unowned_classes:
+        fail(f"shaded JAR contains classes outside the exact logical allowlist: {unowned_classes[:20]}")
+
     forbidden_prefixes = (
         "org/slf4j/",
         "jakarta/inject/",
@@ -204,7 +238,10 @@ with zipfile.ZipFile(jar_path) as jar:
         "com/google/gson/",
         "io/netty/",
     )
-    leaked = sorted(name for name in names if name.startswith(forbidden_prefixes))
+    leaked = sorted(
+        name for name in names
+        if logical_class_path(name).startswith(forbidden_prefixes)
+    )
     if leaked:
         fail(f"proxy-provided classes leaked into shaded JAR: {leaked[:20]}")
     providers = {
