@@ -112,10 +112,52 @@ class JdbcAuthDaoRegistrationTransactionTest {
                 .insertPlayerIfAbsent(player("DuplicateAlice"), permit);
 
         assertEquals(DatabaseManager.RegistrationResult.DUPLICATE, result);
+        assertEquals(DatabaseManager.RegistrationTimeoutDisposition.NO_ACTION,
+                permit.onTimeout());
         var order = inOrder(controlled.connection(), controlled.statement());
         order.verify(controlled.connection()).setAutoCommit(false);
         order.verify(controlled.statement()).executeUpdate();
         order.verify(controlled.connection()).rollback();
+        verify(controlled.connection(), never()).commit();
+    }
+
+    @Test
+    void insertPlayerIfAbsent_TimeoutWinsAfterDuplicateRollback_ReturnsCancelledConsistently()
+            throws Exception {
+        ControlledJdbc controlled = controlledJdbc();
+        CountDownLatch duplicateClassificationEntered = new CountDownLatch(1);
+        CountDownLatch releaseDuplicateClassification = new CountDownLatch(1);
+        SQLException duplicate = mock(SQLException.class);
+        when(duplicate.getSQLState()).thenAnswer(ignored -> {
+            duplicateClassificationEntered.countDown();
+            assertTrue(releaseDuplicateClassification.await(
+                    LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            return "23505";
+        });
+        when(controlled.statement().executeUpdate()).thenThrow(duplicate);
+        DatabaseManager.RegistrationCommitPermit permit =
+                new DatabaseManager.RegistrationCommitPermit();
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<DatabaseManager.RegistrationResult> result = executor.submit(
+                    () -> controlled.dao().insertPlayerIfAbsent(
+                            player("DuplicateTimeoutAlice"), permit));
+
+            assertTrue(duplicateClassificationEntered.await(
+                    LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            DatabaseManager.RegistrationTimeoutDisposition timeoutDisposition =
+                    permit.onTimeout();
+            releaseDuplicateClassification.countDown();
+
+            assertEquals(
+                    DatabaseManager.RegistrationTimeoutDisposition.CANCELLED_BEFORE_COMMIT,
+                    timeoutDisposition);
+            assertEquals(DatabaseManager.RegistrationResult.CANCELLED,
+                    result.get(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        }
+
+        assertTrue(permit.isCancelled());
+        verify(controlled.connection()).rollback();
         verify(controlled.connection(), never()).commit();
     }
 

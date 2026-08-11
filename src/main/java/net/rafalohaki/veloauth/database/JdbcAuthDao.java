@@ -209,12 +209,11 @@ final class JdbcAuthDao {
             return commitRegistration(connection, permit);
         } catch (SQLException exception) {
             rollbackAfterRegistrationFailure(connection, exception);
+            if (isDuplicateKeyViolation(exception)) {
+                return permit.resolveDuplicateAfterRollback();
+            }
             if (permit.isCancelled()) {
                 return DatabaseManager.RegistrationResult.CANCELLED;
-            }
-            if (isDuplicateKeyViolation(exception)) {
-                permit.markDuplicate();
-                return DatabaseManager.RegistrationResult.DUPLICATE;
             }
             permit.markFailed();
             throw exception;

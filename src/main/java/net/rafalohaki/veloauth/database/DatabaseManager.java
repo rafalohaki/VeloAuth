@@ -1275,10 +1275,17 @@ public class DatabaseManager {
             transitionFromCommitting(RegistrationCommitState.COMMIT_UNKNOWN);
         }
 
-        void markDuplicate() {
-            state.compareAndSet(
+        RegistrationResult resolveDuplicateAfterRollback() {
+            if (state.compareAndSet(
                     RegistrationCommitState.PRE_COMMIT,
-                    RegistrationCommitState.DUPLICATE);
+                    RegistrationCommitState.DUPLICATE)) {
+                return RegistrationResult.DUPLICATE;
+            }
+            if (state.get() == RegistrationCommitState.CANCELLED) {
+                return RegistrationResult.CANCELLED;
+            }
+            throw new IllegalStateException(
+                    "Registration duplicate outcome raced an unexpected permit state");
         }
 
         void markFailed() {
