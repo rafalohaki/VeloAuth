@@ -200,6 +200,34 @@ class DatabaseMigrationServiceTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.UnitTestContainsTooManyAsserts")
+    void initialize_existingVersion2ShouldRecoverEligibleDefaultFalseRow() throws Exception {
+        UUID historicalUuid = UUID.fromString("66666666-6666-4666-8666-666666666666");
+
+        createPre14SchemaWithVeloAuth13Marker();
+        try (Connection connection = DriverManager.getConnection(config.getJdbcUrl());
+             PreparedStatement addMarker = connection.prepareStatement(
+                     "ALTER TABLE AUTH ADD COLUMN PRESERVE_UUID BOOLEAN DEFAULT FALSE")) {
+            addMarker.executeUpdate();
+        }
+        insertSchemaVersion(2, "VA-1501 legacy UUID preservation backfill");
+        insertAuth("recoveryplayer", null, historicalUuid, historicalUuid,
+                "recovery-totp", 101L, 202L);
+
+        AuthRow beforeInitialization = selectAuth("recoveryplayer");
+        assertFalse(beforeInitialization.preserveUuid(), "Fixture must exercise the default-false recovery state");
+
+        assertTrue(manager.initialize().join(), "Version 2 is provenance, not a gate for the backfill");
+
+        AuthRow recovered = selectAuth("recoveryplayer");
+        assertTrue(recovered.preserveUuid(), "Eligible row must be recovered even when version 2 already exists");
+        assertEquals(historicalUuid.toString(), recovered.uuid(), "Backend UUID must remain unchanged");
+        assertEquals(historicalUuid.toString(), recovered.premiumUuid(), "Premium UUID must remain unchanged");
+        assertHistoryEquals(recovered, null, "recovery-totp", 101L, 202L);
+        assertTrue(manager.getSchemaVersionDao().hasVersion(2));
+    }
+
+    @Test
     void initialize_schemaVersion2WriteFailureShouldLeaveManagerDisconnected() throws Exception {
         createPre14SchemaWithVeloAuth13Marker();
         try (Connection connection = DriverManager.getConnection(config.getJdbcUrl());
@@ -243,12 +271,16 @@ class DatabaseMigrationServiceTest {
             createAuth.executeUpdate();
             createVersion.executeUpdate();
         }
+        insertSchemaVersion(1, "baseline v1.2.0 schema");
+    }
+
+    private void insertSchemaVersion(int version, String description) throws SQLException {
         try (Connection connection = DriverManager.getConnection(config.getJdbcUrl());
              PreparedStatement insertVersion = connection.prepareStatement(
                      "INSERT INTO VELOAUTH_SCHEMA_VERSION (VERSION, APPLIED_AT, DESCRIPTION) VALUES (?, ?, ?)")) {
-            insertVersion.setInt(1, 1);
-            insertVersion.setLong(2, 1L);
-            insertVersion.setString(3, "baseline v1.2.0 schema");
+            insertVersion.setInt(1, version);
+            insertVersion.setLong(2, version);
+            insertVersion.setString(3, description);
             insertVersion.executeUpdate();
         }
     }

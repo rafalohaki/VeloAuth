@@ -68,7 +68,7 @@ class DatabaseMigrationDatabaseIT {
             dropMigrationTables();
         }
 
-        createPre14SchemaWithVeloAuth13Marker();
+        createInterruptedVersion2Schema();
         connectionSource = new JdbcConnectionSource(scopedUrl, databaseUser, databasePassword);
     }
 
@@ -94,7 +94,7 @@ class DatabaseMigrationDatabaseIT {
 
     @Test
     @SuppressWarnings("PMD.UnitTestContainsTooManyAsserts")
-    void existingVeloAuth13MarkerShouldBackfillOnlyLineageSafeCandidateAndRemainIdempotent()
+    void existingVersion2MarkerShouldBackfillOnlyLineageSafeCandidateAndRemainIdempotent()
             throws SQLException {
         insertAuth("legacycandidate", null, HISTORICAL_UUID, HISTORICAL_UUID,
                 "totp-secret", 11L, 22L);
@@ -142,7 +142,7 @@ class DatabaseMigrationDatabaseIT {
                 "A second migration must be a row-for-row no-op");
     }
 
-    private void createPre14SchemaWithVeloAuth13Marker() throws SQLException {
+    private void createInterruptedVersion2Schema() throws SQLException {
         try (Connection connection = openScopedConnection();
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("CREATE TABLE " + identifier("AUTH") + " ("
@@ -156,7 +156,8 @@ class DatabaseMigrationDatabaseIT {
                     + identifier("LOGINDATE") + " BIGINT, "
                     + identifier("PREMIUMUUID") + " VARCHAR(36), "
                     + identifier("TOTPTOKEN") + " VARCHAR(32), "
-                    + identifier("ISSUEDTIME") + " BIGINT DEFAULT 0)");
+                    + identifier("ISSUEDTIME") + " BIGINT DEFAULT 0, "
+                    + identifier("PRESERVE_UUID") + " BOOLEAN DEFAULT FALSE)");
             statement.executeUpdate("CREATE TABLE " + identifier("VELOAUTH_SCHEMA_VERSION") + " ("
                     + identifier("VERSION") + " INTEGER PRIMARY KEY, "
                     + identifier("APPLIED_AT") + " BIGINT NOT NULL, "
@@ -170,6 +171,10 @@ class DatabaseMigrationDatabaseIT {
             insert.setInt(1, 1);
             insert.setLong(2, 1L);
             insert.setString(3, "baseline v1.2.0 schema");
+            insert.executeUpdate();
+            insert.setInt(1, 2);
+            insert.setLong(2, 2L);
+            insert.setString(3, "VA-1501 legacy UUID preservation backfill");
             insert.executeUpdate();
         }
     }
