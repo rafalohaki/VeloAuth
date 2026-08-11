@@ -25,17 +25,28 @@ final class RuntimeSnapshotManager {
 
     static final String ACTIVE_MANIFEST = "active-runtime.properties";
     static final String PENDING_MANIFEST = "pending-runtime.properties";
-    static final String REVIEWED_TRUST = "veloauth-reviewed-v1";
+    static final String MANIFEST_FORMAT = "veloauth-runtime-v2";
 
     private static final int MAXIMUM_MANIFEST_BYTES = 4096;
     private static final ReentrantLock STORE_LOCK = new ReentrantLock();
+    private static final Set<String> MANIFEST_KEYS = Set.of(
+            "format", "version", "url", "sha256");
 
     private final Path runtimeDirectory;
     private final ViaVersionRepositoryClient repositoryClient;
     private final Logger logger;
+    private final Set<RuntimeArtifactDescriptor> approvedDescriptors;
 
     RuntimeSnapshotManager(Path dataDirectory, Logger logger) {
-        this(dataDirectory.resolve("runtime"), ViaVersionRepositoryClient.official(), logger);
+        this(dataDirectory, logger, buildApprovedDescriptors());
+    }
+
+    RuntimeSnapshotManager(
+            Path dataDirectory,
+            Logger logger,
+            Set<RuntimeArtifactDescriptor> approvedDescriptors) {
+        this(dataDirectory.resolve("runtime"), ViaVersionRepositoryClient.official(), logger,
+                approvedDescriptors);
     }
 
     RuntimeSnapshotManager(
@@ -44,19 +55,44 @@ final class RuntimeSnapshotManager {
             HttpClient httpClient,
             Logger logger,
             boolean requireHttps) {
+        this(runtimeDirectory, repository, httpClient, logger, requireHttps,
+                buildApprovedDescriptors());
+    }
+
+    RuntimeSnapshotManager(
+            Path runtimeDirectory,
+            URI repository,
+            HttpClient httpClient,
+            Logger logger,
+            boolean requireHttps,
+            Set<RuntimeArtifactDescriptor> approvedDescriptors) {
         this(runtimeDirectory,
                 ViaVersionRepositoryClient.create(repository, httpClient, requireHttps),
-                logger);
+                logger,
+                approvedDescriptors);
     }
 
     private RuntimeSnapshotManager(
             Path runtimeDirectory,
             ViaVersionRepositoryClient repositoryClient,
-            Logger logger) {
+            Logger logger,
+            Set<RuntimeArtifactDescriptor> approvedDescriptors) {
         this.runtimeDirectory = Objects.requireNonNull(runtimeDirectory, "runtimeDirectory")
                 .toAbsolutePath().normalize();
         this.repositoryClient = Objects.requireNonNull(repositoryClient, "repositoryClient");
         this.logger = Objects.requireNonNull(logger, "logger");
+        this.approvedDescriptors = Set.copyOf(
+                Objects.requireNonNull(approvedDescriptors, "approvedDescriptors"));
+        if (this.approvedDescriptors.isEmpty()) {
+            throw new IllegalArgumentException("At least one build-approved runtime is required");
+        }
+    }
+
+    private static Set<RuntimeArtifactDescriptor> buildApprovedDescriptors() {
+        return java.util.stream.Stream.of(
+                        RuntimeArtifactDescriptor.pinned(),
+                        RuntimeArtifactDescriptor.reviewed())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     List<RuntimeCandidate> startupCandidates() {
@@ -131,6 +167,10 @@ final class RuntimeSnapshotManager {
         Objects.requireNonNull(candidate, "candidate");
         STORE_LOCK.lock();
         try {
+            if (!approvedDescriptors.contains(candidate)) {
+                throw new IllegalArgumentException(
+                        "Runtime descriptor is not approved by this VeloAuth build");
+            }
             repositoryClient.validateArtifactTransport(candidate.uri());
             if (!RuntimeArtifactDescriptor.isNewerVersion(
                     candidate.version(), currentRuntimeVersion)
@@ -182,14 +222,19 @@ final class RuntimeSnapshotManager {
             try (InputStream input = Files.newInputStream(manifest)) {
                 properties.load(input);
             }
-            if (!REVIEWED_TRUST.equals(properties.getProperty("trust"))) {
-                throw new IOException("runtime manifest lacks independent maintainer trust");
+            if (!MANIFEST_KEYS.equals(properties.stringPropertyNames())
+                    || !MANIFEST_FORMAT.equals(properties.getProperty("format"))) {
+                throw new IOException("runtime manifest has an unsupported format");
             }
             RuntimeArtifactDescriptor descriptor = new RuntimeArtifactDescriptor(
                     properties.getProperty("version"),
                     URI.create(properties.getProperty("url")),
                     properties.getProperty("sha256"));
             repositoryClient.validateArtifactTransport(descriptor.uri());
+            if (!approvedDescriptors.contains(descriptor)) {
+                throw new IOException(
+                        "runtime manifest descriptor is not approved by this VeloAuth build");
+            }
             return java.util.Optional.of(descriptor);
         } catch (IOException | IllegalArgumentException | IllegalStateException | NullPointerException e) {
             logger.warn("Ignoring invalid embedded protocol runtime manifest {}", manifest, e);
@@ -213,7 +258,10 @@ final class RuntimeSnapshotManager {
     }
 
     private void writeManifest(String fileName, RuntimeArtifactDescriptor artifact) throws IOException {
-        String content = "trust=" + REVIEWED_TRUST + '\n'
+        if (!approvedDescriptors.contains(artifact)) {
+            throw new IOException("Cannot persist a runtime not approved by this VeloAuth build");
+        }
+        String content = "format=" + MANIFEST_FORMAT + '\n'
                 + "version=" + artifact.version() + '\n'
                 + "url=" + artifact.uri() + '\n'
                 + "sha256=" + artifact.sha256() + '\n';

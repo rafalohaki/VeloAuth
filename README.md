@@ -302,21 +302,24 @@ protocol-47 `PacketCodec`; ViaVersion transforms packets inside that already-cre
 Because MCProtocolLib always sees the fixed 1.8 codec, a new client release normally requires only a
 new ViaVersion mapping, not an MCProtocolLib update.
 
-In embedded mode, startup first uses a previously activated reviewed runtime, with the release's
-checksum-pinned ViaVersion `5.11.0` as the final fallback. `reviewed-runtime-updates: false` is the
-default and performs no remote update check. When an operator explicitly enables that restart-only
-setting, VeloAuth may stage only the exact candidate version, HTTPS URL and SHA-256 embedded by the
-VeloAuth maintainers in the installed release. It does not read Maven `latest` metadata or a
-same-origin checksum sidecar. The artifact download has no redirects, is time/size bounded,
-structurally validated and atomically published; a legacy manifest created by the old origin-trust
-model is rejected.
+In embedded mode, startup may use a previously activated reviewed runtime only when its complete
+version, HTTPS URL and SHA-256 still exactly match an immutable descriptor compiled into the
+installed VeloAuth release; the release's checksum-pinned ViaVersion `5.11.0` remains the final
+fallback. `reviewed-runtime-updates: false` is the default and performs no remote update check. When
+an operator explicitly enables that restart-only setting, VeloAuth may stage only the exact
+candidate descriptor embedded by the VeloAuth maintainers in the installed release. It does not
+read Maven `latest` metadata or a same-origin checksum sidecar. The artifact download has no
+redirects, is time/size bounded, structurally validated and atomically published; legacy manifests
+and self-asserted descriptors are rejected.
 
 A staged candidate never replaces classes serving current players. On the next full restart,
 VeloAuth initializes every advertised translation path and completes a real loopback login plus
 keepalive with the bundled client (currently 26.2) before selecting it. Pending remains staged until
 the actual embedded listener is published in Velocity; only then is it promoted. An incompatible,
-corrupt or behaviorally broken candidate falls back to the previous reviewed runtime and then the
-build-pinned runtime in the same startup. Valid cached candidates continue to start offline.
+corrupt or behaviorally broken candidate falls back to an active descriptor still approved by the
+installed release and then the build-pinned runtime in the same startup. Approved cached candidates
+continue to start offline. A plugin upgrade that no longer embeds an old active descriptor removes
+that manifest and safely returns to the new release's build pin.
 Corrupt or off-repository manifests are removed automatically, and concurrent runtime preparation
 is serialized so one proxy process cannot download/publish the same artifact twice.
 

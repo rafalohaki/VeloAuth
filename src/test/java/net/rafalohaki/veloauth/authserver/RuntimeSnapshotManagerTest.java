@@ -5,6 +5,8 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.Logger;
 
 import java.io.ByteArrayOutputStream;
@@ -18,6 +20,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -55,7 +58,7 @@ class RuntimeSnapshotManagerTest {
         AtomicInteger artifactRequests = new AtomicInteger();
         URI repository = serveArtifact(artifact, artifactRequests);
         RuntimeArtifactDescriptor reviewed = descriptor(repository, sha256(artifact));
-        RuntimeSnapshotManager manager = manager(repository);
+        RuntimeSnapshotManager manager = manager(repository, reviewed);
 
         RuntimeSnapshotManager.UpdateResult result =
                 manager.stageReviewedRuntime("5.11.0", reviewed);
@@ -63,7 +66,7 @@ class RuntimeSnapshotManagerTest {
         assertEquals(RuntimeSnapshotManager.UpdateResult.STAGED, result);
         assertEquals(1, artifactRequests.get());
         Path pendingManifest = temporaryDirectory.resolve(RuntimeSnapshotManager.PENDING_MANIFEST);
-        assertTrue(Files.readString(pendingManifest).contains("trust=veloauth-reviewed-v1"));
+        assertTrue(Files.readString(pendingManifest).contains("format=veloauth-runtime-v2"));
         assertFalse(Files.exists(temporaryDirectory.resolve(RuntimeSnapshotManager.ACTIVE_MANIFEST)));
         RuntimeSnapshotManager.RuntimeCandidate pending = manager.startupCandidates().getFirst();
         assertEquals(RuntimeSnapshotManager.CandidateSource.PENDING, pending.source());
@@ -73,7 +76,7 @@ class RuntimeSnapshotManagerTest {
 
         assertFalse(Files.exists(pendingManifest));
         Path activeManifest = temporaryDirectory.resolve(RuntimeSnapshotManager.ACTIVE_MANIFEST);
-        assertTrue(Files.readString(activeManifest).contains("trust=veloauth-reviewed-v1"));
+        assertTrue(Files.readString(activeManifest).contains("format=veloauth-runtime-v2"));
         RuntimeSnapshotManager.RuntimeCandidate active = manager.startupCandidates().getFirst();
         assertEquals(RuntimeSnapshotManager.CandidateSource.ACTIVE, active.source());
         assertEquals(REVIEWED_VERSION, active.artifact().version());
@@ -93,7 +96,7 @@ class RuntimeSnapshotManagerTest {
         URI repository = serveUntrustedOrigin(
                 originBytes, artifactRequests, metadataRequests, checksumRequests);
         RuntimeArtifactDescriptor reviewed = descriptor(repository, sha256(reviewedBytes));
-        RuntimeSnapshotManager manager = manager(repository);
+        RuntimeSnapshotManager manager = manager(repository, reviewed);
 
         assertThrows(IllegalStateException.class,
                 () -> manager.stageReviewedRuntime("5.11.0", reviewed));
@@ -112,7 +115,7 @@ class RuntimeSnapshotManagerTest {
         AtomicInteger requests = new AtomicInteger();
         URI repository = serveArtifact(artifact, requests);
         RuntimeArtifactDescriptor reviewed = descriptor(repository, sha256(artifact));
-        RuntimeSnapshotManager manager = manager(repository);
+        RuntimeSnapshotManager manager = manager(repository, reviewed);
 
         RuntimeSnapshotManager.UpdateResult result = manager.stageReviewedRuntime(
                 "7.0.0-20270203.040506-1", reviewed);
@@ -126,8 +129,8 @@ class RuntimeSnapshotManagerTest {
     void stageReviewedRuntime_EmptyCacheAndOfflineRepository_ShouldFailWithoutPublishingState()
             throws Exception {
         URI repository = stoppedRepository();
-        RuntimeSnapshotManager manager = manager(repository);
         RuntimeArtifactDescriptor reviewed = descriptor(repository, "0".repeat(64));
+        RuntimeSnapshotManager manager = manager(repository, reviewed);
 
         assertThrows(IllegalStateException.class,
                 () -> manager.stageReviewedRuntime("5.11.0", reviewed));
@@ -154,6 +157,45 @@ class RuntimeSnapshotManagerTest {
                 candidates.getFirst().source());
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+            RuntimeSnapshotManager.PENDING_MANIFEST,
+            RuntimeSnapshotManager.ACTIVE_MANIFEST
+    })
+    void startupCandidates_SelfAssertedFormatOnArbitraryDescriptor_ShouldRejectManifest(
+            String manifestName) throws Exception {
+        byte[] forgedBytes = testJar("forged");
+        URI repository = URI.create("http://127.0.0.1:1/repository/");
+        RuntimeArtifactDescriptor forged = descriptor(repository, sha256(forgedBytes));
+        Files.createDirectories(temporaryDirectory);
+        Files.write(temporaryDirectory.resolve(forged.artifactName()), forgedBytes);
+        Path manifest = temporaryDirectory.resolve(manifestName);
+        writeManifest(manifest, forged, true);
+        RuntimeSnapshotManager manager = manager(repository);
+
+        List<RuntimeSnapshotManager.RuntimeCandidate> candidates = manager.startupCandidates();
+
+        assertFalse(Files.exists(manifest),
+                "A mutable format marker must not authorize executable runtime bytes");
+        assertEquals(1, candidates.size());
+        assertEquals(RuntimeSnapshotManager.CandidateSource.PINNED,
+                candidates.getFirst().source());
+    }
+
+    @Test
+    void stageReviewedRuntime_DescriptorNotApprovedByBuild_ShouldRejectBeforeNetwork()
+            throws Exception {
+        URI repository = stoppedRepository();
+        RuntimeArtifactDescriptor unapproved = descriptor(repository, "0".repeat(64));
+        RuntimeSnapshotManager manager = manager(repository);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> manager.stageReviewedRuntime("5.11.0", unapproved));
+
+        assertFalse(Files.exists(temporaryDirectory.resolve(
+                RuntimeSnapshotManager.PENDING_MANIFEST)));
+    }
+
     @Test
     void startupCandidates_TrustedActiveCache_ShouldRemainKnownGoodWhileOffline() throws Exception {
         byte[] activeBytes = testJar("known-good");
@@ -162,7 +204,7 @@ class RuntimeSnapshotManagerTest {
         Files.createDirectories(temporaryDirectory);
         Files.write(temporaryDirectory.resolve(active.artifactName()), activeBytes);
         writeManifest(temporaryDirectory.resolve(RuntimeSnapshotManager.ACTIVE_MANIFEST), active, true);
-        RuntimeSnapshotManager manager = manager(repository);
+        RuntimeSnapshotManager manager = manager(repository, active);
 
         RuntimeSnapshotManager.RuntimeCandidate candidate = manager.startupCandidates().getFirst();
         Path resolved = manager.resolve(candidate);
@@ -177,7 +219,7 @@ class RuntimeSnapshotManagerTest {
         byte[] artifact = testJar("pending");
         URI repository = serveArtifact(artifact, new AtomicInteger());
         RuntimeArtifactDescriptor reviewed = descriptor(repository, sha256(artifact));
-        RuntimeSnapshotManager manager = manager(repository);
+        RuntimeSnapshotManager manager = manager(repository, reviewed);
         manager.stageReviewedRuntime("5.11.0", reviewed);
         RuntimeSnapshotManager.RuntimeCandidate pending = manager.startupCandidates().getFirst();
 
@@ -193,7 +235,7 @@ class RuntimeSnapshotManagerTest {
         byte[] artifact = testJar("pending");
         URI repository = serveArtifact(artifact, new AtomicInteger());
         RuntimeArtifactDescriptor reviewed = descriptor(repository, sha256(artifact));
-        RuntimeSnapshotManager manager = manager(repository);
+        RuntimeSnapshotManager manager = manager(repository, reviewed);
         manager.stageReviewedRuntime("5.11.0", reviewed);
         RuntimeSnapshotManager.RuntimeCandidate pending = manager.startupCandidates().getFirst();
         Path activeManifest = temporaryDirectory.resolve(RuntimeSnapshotManager.ACTIVE_MANIFEST);
@@ -215,13 +257,13 @@ class RuntimeSnapshotManagerTest {
             throws Exception {
         Files.createDirectories(temporaryDirectory);
         Path invalidManifest = temporaryDirectory.resolve(RuntimeSnapshotManager.ACTIVE_MANIFEST);
-        Files.writeString(invalidManifest,
-                "trust=veloauth-reviewed-v1\n"
-                        + "version=" + REVIEWED_VERSION + '\n'
-                        + "url=https://untrusted.example/viaversion-common.jar\n"
-                        + "sha256=" + "0".repeat(64) + '\n');
+        RuntimeArtifactDescriptor outsideRepository = new RuntimeArtifactDescriptor(
+                REVIEWED_VERSION,
+                URI.create("https://untrusted.example/viaversion-common.jar"),
+                "0".repeat(64));
+        writeManifest(invalidManifest, outsideRepository, true);
         RuntimeSnapshotManager manager = manager(
-                URI.create("http://127.0.0.1:1/repository/"));
+                URI.create("http://127.0.0.1:1/repository/"), outsideRepository);
 
         List<RuntimeSnapshotManager.RuntimeCandidate> candidates = manager.startupCandidates();
 
@@ -231,13 +273,18 @@ class RuntimeSnapshotManagerTest {
                 candidates.getFirst().source());
     }
 
-    private RuntimeSnapshotManager manager(URI repository) {
+    private RuntimeSnapshotManager manager(
+            URI repository, RuntimeArtifactDescriptor... approvedDescriptors) {
+        Set<RuntimeArtifactDescriptor> approved = approvedDescriptors.length == 0
+                ? Set.of(RuntimeArtifactDescriptor.pinned())
+                : Set.of(approvedDescriptors);
         return new RuntimeSnapshotManager(
                 temporaryDirectory,
                 repository,
                 HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build(),
                 mock(Logger.class),
-                false);
+                false,
+                approved);
     }
 
     private RuntimeArtifactDescriptor descriptor(URI repository, String checksum) {
@@ -283,10 +330,12 @@ class RuntimeSnapshotManagerTest {
     private static void writeManifest(
             Path manifest,
             RuntimeArtifactDescriptor descriptor,
-            boolean trusted) throws IOException {
-        String trust = trusted ? "trust=veloauth-reviewed-v1\n" : "";
+            boolean currentFormat) throws IOException {
+        String format = currentFormat
+                ? "format=" + RuntimeSnapshotManager.MANIFEST_FORMAT + '\n'
+                : "";
         Files.writeString(manifest,
-                trust
+                format
                         + "version=" + descriptor.version() + '\n'
                         + "url=" + descriptor.uri() + '\n'
                         + "sha256=" + descriptor.sha256() + '\n');

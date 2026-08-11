@@ -79,12 +79,50 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
             Path dataDirectory,
             Logger logger,
             String pluginVersion,
+            java.util.Set<RuntimeArtifactDescriptor> approvedDescriptors) {
+        return open(dataDirectory, logger, pluginVersion,
+                runtime -> EmbeddedLimboRuntimeProbe.verify(runtime, logger),
+                approvedDescriptors);
+    }
+
+    static ManagedProtocolRuntime open(
+            Path dataDirectory,
+            Logger logger,
+            String pluginVersion,
             RuntimeValidator validator) {
+        return open(
+                dataDirectory,
+                logger,
+                pluginVersion,
+                validator,
+                new RuntimeSnapshotManager(dataDirectory, logger));
+    }
+
+    static ManagedProtocolRuntime open(
+            Path dataDirectory,
+            Logger logger,
+            String pluginVersion,
+            RuntimeValidator validator,
+            java.util.Set<RuntimeArtifactDescriptor> approvedDescriptors) {
+        return open(
+                dataDirectory,
+                logger,
+                pluginVersion,
+                validator,
+                new RuntimeSnapshotManager(dataDirectory, logger, approvedDescriptors));
+    }
+
+    private static ManagedProtocolRuntime open(
+            Path dataDirectory,
+            Logger logger,
+            String pluginVersion,
+            RuntimeValidator validator,
+            RuntimeSnapshotManager snapshots) {
         Objects.requireNonNull(dataDirectory, "dataDirectory");
         Objects.requireNonNull(logger, "logger");
         Objects.requireNonNull(pluginVersion, "pluginVersion");
         Objects.requireNonNull(validator, "validator");
-        RuntimeSnapshotManager snapshots = new RuntimeSnapshotManager(dataDirectory, logger);
+        Objects.requireNonNull(snapshots, "snapshots");
         IllegalStateException aggregate = new IllegalStateException(
                 "No verified embedded protocol runtime could be initialized");
         for (RuntimeSnapshotManager.RuntimeCandidate candidate : snapshots.startupCandidates()) {

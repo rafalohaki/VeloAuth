@@ -81,8 +81,9 @@ All notable user-visible changes to VeloAuth are documented in this file.
   artifact twice.
 - Corrupt, malformed or off-repository runtime manifests are removed before the pinned/active
   fallback is selected.
-- Legacy pending/active manifests from the previous same-origin-checksum update model are rejected
-  unless they carry the new maintainer-reviewed provenance marker.
+- Legacy pending/active manifests from the previous same-origin-checksum update model are rejected.
+  The new manifest format is not trusted by itself: its complete version, URL and SHA-256 must
+  exactly match an immutable runtime descriptor compiled into the installed VeloAuth release.
 - Future timestamped runtime versions with three or four numeric release components are ordered
   monotonically and unknown formats fail closed.
 - A staged ViaVersion runtime now completes a bundled-client loopback login and keepalive before
