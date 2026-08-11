@@ -34,6 +34,7 @@ final class ExpectedRedirectRegistry {
     void expect(UUID uniqueId, String username) {
         Objects.requireNonNull(uniqueId, "uniqueId");
         String key = normalizedUsername(username);
+        removeExpired();
         ExpectedRedirect replacement = new ExpectedRedirect(
                 uniqueId, username, clock.instant().plus(timeToLive));
         while (true) {

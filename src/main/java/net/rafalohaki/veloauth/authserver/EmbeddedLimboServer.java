@@ -49,6 +49,10 @@ final class EmbeddedLimboServer implements AutoCloseable {
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(8);
     private static final Duration BIND_ADDRESS_TIMEOUT = Duration.ofSeconds(2);
     private static final LegacyProtocolCodec.JoinGame JOIN_GAME = new LegacyProtocolCodec.JoinGame(1);
+    private static final LegacyProtocolCodec.PlayerAbilities SPECTATOR_ABILITIES =
+            new LegacyProtocolCodec.PlayerAbilities(true, true, true, false, 0.05F, 0.1F);
+    private static final LegacyProtocolCodec.PluginMessage SERVER_BRAND =
+            new LegacyProtocolCodec.PluginMessage("MC|Brand", "VeloAuth");
     // Modern clients can remain on Loading terrain when spawned inside an unloaded void world.
     // Preserve the native 1.8 position and place translated connections above the world instead.
     private static final LegacyProtocolCodec.PlayerPosition LEGACY_INITIAL_POSITION =
@@ -370,6 +374,8 @@ final class EmbeddedLimboServer implements AutoCloseable {
             }
             playersInGame.incrementAndGet();
             session.send(JOIN_GAME);
+            session.send(SPECTATOR_ABILITIES);
+            session.send(SERVER_BRAND);
             session.send(initialPosition(session));
             keepAliveTask = session.getChannel().eventLoop().scheduleAtFixedRate(
                     () -> tickKeepAlive(session),

@@ -43,6 +43,20 @@ class ExpectedRedirectRegistryTest {
     }
 
     @Test
+    void expect_ExpiredRedirectBelowCapacity_ShouldCleanItProactively() {
+        MutableClock clock = new MutableClock(NOW);
+        ExpectedRedirectRegistry registry = new ExpectedRedirectRegistry(
+                4, Duration.ofSeconds(15), clock);
+        registry.expect(UUID.randomUUID(), "Expired");
+        clock.now = NOW.plusSeconds(16);
+
+        registry.expect(UUID.randomUUID(), "Current");
+
+        assertEquals(1, registry.size(),
+                "Moderate traffic should not retain expired redirects until capacity is exhausted");
+    }
+
+    @Test
     void expect_AtCapacity_ShouldRejectNewIdentityButAllowAtomicRefresh() {
         ExpectedRedirectRegistry registry = registry(1, NOW);
         UUID first = UUID.randomUUID();

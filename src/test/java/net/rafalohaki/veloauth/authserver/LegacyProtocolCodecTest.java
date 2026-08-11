@@ -73,4 +73,43 @@ class LegacyProtocolCodecTest {
             buffer.release();
         }
     }
+
+    @Test
+    void playerAbilities_SpectatorWire_ShouldUseProtocol47PacketAndFields() {
+        PacketRegistry registry = LegacyProtocolCodec.CODEC.getCodec(ProtocolState.GAME);
+        assertEquals(0x39, registry.getClientboundId(LegacyProtocolCodec.PlayerAbilities.class));
+
+        ByteBuf encoded = Unpooled.buffer();
+        try {
+            new LegacyProtocolCodec.PlayerAbilities(
+                    true, true, true, false, 0.05F, 0.1F).serialize(encoded);
+
+            assertEquals(0x07, encoded.readUnsignedByte());
+            assertEquals(0.05F, encoded.readFloat());
+            assertEquals(0.1F, encoded.readFloat());
+            assertEquals(0, encoded.readableBytes());
+        } finally {
+            encoded.release();
+        }
+    }
+
+    @Test
+    void pluginMessage_BrandWire_ShouldEncodeChannelAndPayloadAsStrings() {
+        PacketRegistry registry = LegacyProtocolCodec.CODEC.getCodec(ProtocolState.GAME);
+        assertEquals(0x3F, registry.getClientboundId(LegacyProtocolCodec.PluginMessage.class));
+
+        ByteBuf encoded = Unpooled.buffer();
+        try {
+            new LegacyProtocolCodec.PluginMessage("MC|Brand", "VeloAuth").serialize(encoded);
+
+            byte[] actual = new byte[encoded.readableBytes()];
+            encoded.readBytes(actual);
+            assertArrayEquals(new byte[]{
+                    0x08, 'M', 'C', '|', 'B', 'r', 'a', 'n', 'd',
+                    0x08, 'V', 'e', 'l', 'o', 'A', 'u', 't', 'h'
+            }, actual);
+        } finally {
+            encoded.release();
+        }
+    }
 }

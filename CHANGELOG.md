@@ -2,6 +2,31 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `connection.auto-transfer-delay-ms` (default `1500`, range `0-30000`) controls the compatibility
+  buffer before automatic auth/limbo-to-backend transfers.
+- Protocol-47 embedded limbo now sends explicit spectator `PlayerAbilities` and `MC|Brand`
+  (`VeloAuth`) packets before the initial position.
+
+### Changed
+
+- Freshly generated configurations now use `auth-server.mode: external`; embedded mode remains an
+  explicit staging/canary opt-in until its production runtime gates are complete. Existing files
+  are still never rewritten.
+
+### Fixed
+
+- Concurrent manual login, automatic transfer and retry callbacks now share one identity-owned
+  backend connection slot, preventing duplicate Velocity `connect()` attempts for one player.
+- A backend connection result that arrives after player disconnect no longer starts an auth-server
+  fallback or another retry.
+- Failed embedded Velocity forwarding writes now log their cause before the channel is closed.
+- Expired one-time embedded redirect expectations are cleaned during normal redirect traffic,
+  instead of waiting until the registry reaches capacity.
+
 ## [1.5.0] - 2026-08-10
 
 ### Added

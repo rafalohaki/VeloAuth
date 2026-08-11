@@ -49,7 +49,6 @@ public class ConnectionManager {
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final int MAX_AUTH_SERVER_WAIT_ATTEMPTS = 3;
     private static final int BACKEND_WAIT_REMINDER_INTERVAL = 6;
-    private static final long AUTO_TRANSFER_DELAY_MS = 300;
     private static final long BACKEND_FALLBACK_WARN_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
     
     /** Retry attempt counter per player to prevent infinite fallback loops */
@@ -66,6 +65,9 @@ public class ConnectionManager {
     
     /** Backend wait retry tasks per player - allows cancellation on disconnect */
     private final ConcurrentMap<UUID, ScheduledTask> backendWaitTasks = new ConcurrentHashMap<>();
+
+    /** Owns the concrete backend connection attempt, not merely its scheduling task. */
+    private final ConcurrentMap<UUID, Player> backendConnectionOwners = new ConcurrentHashMap<>();
 
     /** Serializes task publication with shutdown so late async completions cannot resurrect work. */
     private final ReentrantLock taskLifecycleLock = new ReentrantLock();
@@ -317,7 +319,37 @@ public class ConnectionManager {
             return false;
         }
 
-        return performTransfer(player, targetServer, serverName, attempts);
+        if (!claimBackendConnection(player)) {
+            logger.debug("Backend transfer already active for {} - coalescing duplicate request",
+                    player.getUsername());
+            return true;
+        }
+        try {
+            return performTransfer(player, targetServer, serverName, attempts);
+        } finally {
+            releaseBackendConnection(player);
+        }
+    }
+
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Velocity Player identity owns the attempt.
+    private boolean claimBackendConnection(Player player) {
+        UUID playerUuid = player.getUniqueId();
+        while (true) {
+            Player currentOwner = backendConnectionOwners.putIfAbsent(playerUuid, player);
+            if (currentOwner == null) {
+                return true;
+            }
+            if (currentOwner == player || currentOwner.isActive()) {
+                return false;
+            }
+            if (backendConnectionOwners.replace(playerUuid, currentOwner, player)) {
+                return true;
+            }
+        }
+    }
+
+    private void releaseBackendConnection(Player player) {
+        backendConnectionOwners.remove(player.getUniqueId(), player);
     }
 
     private boolean validatePlayerActive(Player player, String serverName) {
@@ -366,6 +398,13 @@ public class ConnectionManager {
 
     private boolean handleTransferResult(Player player, RegisteredServer targetServer, String serverName,
                                         int attempts, com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result result) {
+        if (!player.isActive()) {
+            resetTransferState(player.getUniqueId(), false);
+            retryAttempts.remove(player.getUniqueId());
+            logger.debug("Player {} disconnected while connecting to {} - skipping result handling",
+                    player.getUsername(), serverName);
+            return false;
+        }
         if (result.isSuccessful()) {
             return handleSuccessfulTransfer(player, serverName);
         }
@@ -453,7 +492,7 @@ public class ConnectionManager {
         UUID playerUuid = player.getUniqueId();
 
         scheduleOwnedTask(pendingTransfers, playerUuid,
-                AUTO_TRANSFER_DELAY_MS, TimeUnit.MILLISECONDS, () -> {
+                settings.getAutoTransferDelayMillis(), TimeUnit.MILLISECONDS, () -> {
             if (!player.isActive() || !isPlayerOnAuthServer(player)) {
                 return;
             }
@@ -535,6 +574,11 @@ public class ConnectionManager {
     }
 
     private void executeBackendRetryAfterLimbo(Player player, RegisteredServer targetServer, String serverName) {
+        if (!claimBackendConnection(player)) {
+            logger.debug("Backend transfer already active for {} - skipping limbo retry",
+                    player.getUsername());
+            return;
+        }
         try {
             var retry = player.createConnectionRequest(targetServer)
                     .connect()
@@ -549,6 +593,8 @@ public class ConnectionManager {
             logger.error("Error while retrying backend transfer for {}: {}",
                     player.getUsername(), retryEx.getMessage(), retryEx);
             sendErrorMessage(player);
+        } finally {
+            releaseBackendConnection(player);
         }
     }
 
@@ -620,11 +666,24 @@ public class ConnectionManager {
                 timeoutRetryScheduled.remove(player.getUniqueId());
                 return;
             }
+            if (!claimBackendConnection(player)) {
+                timeoutRetryScheduled.remove(player.getUniqueId());
+                logger.debug("Backend transfer already active for {} - skipping timeout retry",
+                        player.getUsername());
+                return;
+            }
             player.createConnectionRequest(targetServer)
                     .connect()
                     .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
-                    .whenComplete((result, ex) -> handleTimeoutRetryResult(player, serverName, result, ex));
+                    .whenComplete((result, ex) -> {
+                        try {
+                            handleTimeoutRetryResult(player, serverName, result, ex);
+                        } finally {
+                            releaseBackendConnection(player);
+                        }
+                    });
         } catch (RuntimeException retryEx) {
+            releaseBackendConnection(player);
             timeoutRetryScheduled.remove(player.getUniqueId());
             logger.error("Error scheduling retry after timeout for {}: {}", player.getUsername(), retryEx.getMessage());
         }
@@ -1054,9 +1113,9 @@ public class ConnectionManager {
                     player.getUsername());
         }
         
-        // Delay dla ViaVersion synchronizacji (300ms), z jednoznaczną własnością tasku.
+        // Configured compatibility buffer plus concrete connection-attempt ownership.
         scheduleOwnedTask(pendingTransfers, playerUuid,
-                AUTO_TRANSFER_DELAY_MS, TimeUnit.MILLISECONDS, () -> {
+                settings.getAutoTransferDelayMillis(), TimeUnit.MILLISECONDS, () -> {
                     // Sprawdź czy gracz nadal jest aktywny i na auth server
                     if (!player.isActive()) {
                         logger.debug("Auto-transfer: player {} is no longer active", player.getUsername());
@@ -1148,6 +1207,7 @@ public class ConnectionManager {
      */
     public void clearRetryAttempts(UUID playerUuid) {
         retryAttempts.remove(playerUuid);
+        backendConnectionOwners.remove(playerUuid);
         resetTransferState(playerUuid, true);
     }
     
@@ -1171,6 +1231,7 @@ public class ConnectionManager {
         // Wyczyść wszystkie mapy stanu
         retryAttempts.clear();
         timeoutRetryScheduled.clear();
+        backendConnectionOwners.clear();
         forcedHostTargets.clear();
         
         logger.info("ConnectionManager shut down");

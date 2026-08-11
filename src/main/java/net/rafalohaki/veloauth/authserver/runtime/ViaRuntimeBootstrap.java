@@ -62,6 +62,7 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
     private final Set<Integer> supportedProtocols;
     private final int maximumProtocol;
     private final String maximumVersionName;
+    private final org.slf4j.Logger logger;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     /** Initializes the private ViaVersion manager and waits for every required mapping. */
@@ -69,6 +70,7 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
         java.util.Objects.requireNonNull(logger, "logger");
         java.util.Objects.requireNonNull(configDirectory, "configDirectory");
         java.util.Objects.requireNonNull(pluginVersion, "pluginVersion");
+        this.logger = logger;
         try {
             Files.createDirectories(configDirectory);
         } catch (IOException e) {
@@ -167,13 +169,30 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
         request.write(Types.VAR_INT, transactionId);
         request.write(Types.STRING, VELOCITY_FORWARDING_CHANNEL);
         request.write(Types.REMAINING_BYTES, new byte[0]);
-        request.sendFutureRaw().addListener(result -> {
-            if (result.isSuccess()) {
-                loginContinuation.run();
-            } else {
-                channel.close();
-            }
-        });
+        request.sendFutureRaw().addListener(result -> handleForwardingRequestCompletion(
+                channel, transactionId, loginContinuation, logger, result));
+    }
+
+    static void handleForwardingRequestCompletion(
+            Channel channel,
+            int transactionId,
+            Runnable loginContinuation,
+            org.slf4j.Logger logger,
+            io.netty.util.concurrent.Future<?> result) {
+        if (result.isSuccess()) {
+            loginContinuation.run();
+            return;
+        }
+        Throwable cause = result.cause();
+        if (cause == null) {
+            logger.warn("Failed to send Velocity forwarding request {} without a reported cause"
+                            + " - closing embedded channel",
+                    transactionId);
+        } else {
+            logger.warn("Failed to send Velocity forwarding request {} - closing embedded channel",
+                    transactionId, cause);
+        }
+        channel.close();
     }
 
     private UserConnection requireConnection(Channel channel) {

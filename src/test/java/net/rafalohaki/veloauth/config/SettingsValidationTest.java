@@ -247,6 +247,47 @@ class SettingsValidationTest {
     }
 
     @Test
+    void shouldUseSafeDefaultAutoTransferDelayMillisWhenNotConfigured() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, "language: en\n");
+
+        assertTrue(settings.load(), "Should load with default configuration");
+        assertEquals(1500, autoTransferDelayMillis(),
+                "Default auto-transfer-delay-ms should leave time for client world initialization");
+    }
+
+    @Test
+    void shouldLoadCustomAutoTransferDelayMillis() {
+        String config = """
+                connection:
+                  auto-transfer-delay-ms: 2500
+                """;
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, config);
+
+        assertTrue(settings.load(), "Should load custom auto-transfer-delay-ms");
+        assertEquals(2500, autoTransferDelayMillis());
+    }
+
+    @ParameterizedTest(name = "shouldReject auto-transfer-delay-ms={0}")
+    @CsvSource({
+        "-1",
+        "30001"
+    })
+    void shouldRejectInvalidAutoTransferDelayMillis(int autoTransferDelayMs) {
+        String invalidConfig = String.format("""
+                connection:
+                  auto-transfer-delay-ms: %d
+                """, autoTransferDelayMs);
+
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, invalidConfig);
+
+        assertFalse(settings.load(), "Should reject negative or over-limit auto-transfer-delay-ms");
+    }
+
+    @Test
     void shouldLoadCustomPingTimeoutMillis() {
         String config = """
                 connection:
@@ -286,6 +327,16 @@ class SettingsValidationTest {
 
         assertTrue(generatedConfig.contains("ping-timeout-ms: 3000"),
                 "Generated default config should document the ping-timeout-ms default");
+        assertTrue(generatedConfig.contains("auto-transfer-delay-ms: 1500"),
+                "Generated default config should document the safe auto-transfer delay");
+    }
+
+    private int autoTransferDelayMillis() {
+        try {
+            return (int) Settings.class.getMethod("getAutoTransferDelayMillis").invoke(settings);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Settings must expose auto-transfer-delay-ms", e);
+        }
     }
 
     @Test
@@ -814,12 +865,14 @@ class SettingsValidationTest {
     }
 
     @Test
-    void generatedConfigShouldEnableSelfContainedEmbeddedAuthServerForNewInstall() throws IOException {
+    void generatedConfigShouldKeepExternalAuthServerForNewInstall() throws IOException {
         assertTrue(settings.load());
 
         String generatedConfig = Files.readString(tempDir.resolve("config.yml"));
 
-        assertTrue(generatedConfig.contains("mode: embedded"));
+        assertTrue(generatedConfig.contains("mode: external"));
+        assertFalse(generatedConfig.contains("mode: embedded"));
+        assertEquals(Settings.AuthServerMode.EXTERNAL, settings.getAuthServerMode());
         assertTrue(generatedConfig.contains("port: 0"));
         assertTrue(generatedConfig.contains("velocity:player_info"));
         assertTrue(generatedConfig.contains("Existing config.yml files are never rewritten"));

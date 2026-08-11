@@ -129,6 +129,13 @@ public final class SettingsValidator {
             throw new IllegalArgumentException("connection.ping-timeout-ms must be <= 30000 (30s)");
         }
 
+        if (settings.getAutoTransferDelayMillis() < 0) {
+            throw new IllegalArgumentException("connection.auto-transfer-delay-ms must be >= 0");
+        }
+        if (settings.getAutoTransferDelayMillis() > 30_000) {
+            throw new IllegalArgumentException("connection.auto-transfer-delay-ms must be <= 30000 (30s)");
+        }
+
         if (settings.getDatabaseConnectionPoolSize() <= 0) {
             throw new IllegalArgumentException("Connection pool size must be > 0");
         }

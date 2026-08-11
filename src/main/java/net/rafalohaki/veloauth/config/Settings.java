@@ -80,13 +80,17 @@ public class Settings {
     private String authServerMode = AuthServerMode.EXTERNAL.configValue;
     private String authServerName = "limbo";
     private int authServerTimeoutSeconds = 300;
-    // Connection settings — requires restart (pingTimeoutMillis captured in transfer paths).
+    // Connection settings — requires restart (captured by long-lived transfer paths).
     private int connectionTimeoutSeconds = 30;
     // Ping timeout (milliseconds) used for pre-transfer availability checks of
     // auth-server, forced-host target and try-list/fallback backend servers.
     // Heavy JVM backend servers (large heap, long GC pauses) may not answer a
     // ping within the default 3000ms — raise this value to give them more room.
     private int pingTimeoutMillis = 3000;
+    // Conservative dwell time on auth/limbo before an automatic backend transfer. This is an
+    // operator-controlled compatibility buffer, not a claim that a Velocity client event proves
+    // the remote game world has finished initializing.
+    private int autoTransferDelayMillis = 1500;
     // Security settings — mixed:
     //   brute-force-* captured as final by IPRateLimiter + AuthCache.BruteForceTracker at init
     //   → requires restart.
@@ -215,6 +219,7 @@ public class Settings {
         embeddedAuthServerSettings.copyFrom(state.embeddedAuthServerSettings);
         connectionTimeoutSeconds = state.connectionTimeoutSeconds;
         pingTimeoutMillis = state.pingTimeoutMillis;
+        autoTransferDelayMillis = state.autoTransferDelayMillis;
         bcryptCost = state.bcryptCost;
         bruteForceMaxAttempts = state.bruteForceMaxAttempts;
         bruteForceTimeoutMinutes = state.bruteForceTimeoutMinutes;
@@ -338,6 +343,10 @@ public class Settings {
 
     public int getPingTimeoutMillis() {
         return pingTimeoutMillis;
+    }
+
+    public int getAutoTransferDelayMillis() {
+        return autoTransferDelayMillis;
     }
 
     public String getDatabaseConnectionParameters() {
@@ -514,8 +523,8 @@ public class Settings {
     // ===== Inner Settings Classes =====
 
     /**
-     * Selects who owns the unauthenticated holding server. Existing configurations without the
-     * key remain {@link #EXTERNAL}; freshly generated configurations select {@link #EMBEDDED}.
+     * Selects who owns the unauthenticated holding server. Both configurations without the key and
+     * freshly generated configurations select {@link #EXTERNAL}; embedded mode is explicit opt-in.
      * Changing topology is always restart-required.
      */
     public enum AuthServerMode {

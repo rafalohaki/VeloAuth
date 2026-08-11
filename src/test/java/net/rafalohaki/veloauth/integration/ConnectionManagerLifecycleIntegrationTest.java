@@ -36,6 +36,10 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
@@ -80,6 +84,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(settings.getAuthServerName()).thenReturn("auth");
         when(settings.getConnectionTimeoutSeconds()).thenReturn(1);
         when(settings.getPingTimeoutMillis()).thenReturn(2000);
+        when(settings.getAutoTransferDelayMillis()).thenReturn(1500);
 
         Metrics.Factory metricsFactory = org.mockito.Mockito.mock(Metrics.Factory.class);
         VeloAuth plugin = new VeloAuth(proxyServer, logger, Path.of("."), metricsFactory);
@@ -153,6 +158,90 @@ class ConnectionManagerLifecycleIntegrationTest {
         assertTrue(getMap("timeoutRetryTasks").isEmpty(), "Timeout retry tasks should be cleared after success");
         assertTrue(getMap("timeoutRetryScheduled").isEmpty(), "Timeout retry flags should be cleared after success");
         assertTrue(getMap("forcedHostTargets").isEmpty(), "Forced-host targets should be consumed after success");
+    }
+
+    @Test
+    void transferToBackend_ConcurrentAttempts_ShouldStartOneConnection() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ConnectionRequestBuilder connectionRequestBuilder = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result result = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        CompletableFuture<ConnectionRequestBuilder.Result> pendingConnection = new CompletableFuture<>();
+        CountDownLatch firstConnectionStarted = new CountDownLatch(1);
+
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("ConcurrentPlayer");
+        when(player.isActive()).thenReturn(true);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(backendServer.ping()).thenReturn(
+                CompletableFuture.completedFuture(org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(player.createConnectionRequest(backendServer)).thenReturn(connectionRequestBuilder);
+        when(connectionRequestBuilder.connect()).thenAnswer(ignored -> {
+            firstConnectionStarted.countDown();
+            return pendingConnection;
+        });
+        when(result.isSuccessful()).thenReturn(true);
+        connectionManager.setForcedHostTarget(playerUuid, "backend");
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Boolean> firstAttempt = executor.submit(() -> connectionManager.transferToBackend(player));
+            assertTrue(firstConnectionStarted.await(1, TimeUnit.SECONDS));
+            Future<Boolean> concurrentAttempt = executor.submit(() -> connectionManager.transferToBackend(player));
+            try {
+                assertTrue(concurrentAttempt.get(500, TimeUnit.MILLISECONDS),
+                        "A duplicate request should coalesce with the active backend transfer");
+                verify(connectionRequestBuilder, times(1)).connect();
+            } finally {
+                pendingConnection.complete(result);
+                assertTrue(firstAttempt.get(2, TimeUnit.SECONDS));
+                concurrentAttempt.get(2, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void transferToBackend_PlayerDisconnectsDuringConnect_ShouldNotScheduleFallback() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ConnectionRequestBuilder backendRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result failedResult = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        CompletableFuture<ConnectionRequestBuilder.Result> pendingConnection = new CompletableFuture<>();
+        CountDownLatch connectionStarted = new CountDownLatch(1);
+
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("DisconnectingPlayer");
+        when(player.isActive()).thenReturn(true);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(backendServer.ping()).thenReturn(
+                CompletableFuture.completedFuture(org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(player.createConnectionRequest(backendServer)).thenReturn(backendRequest);
+        when(backendRequest.connect()).thenAnswer(ignored -> {
+            connectionStarted.countDown();
+            return pendingConnection;
+        });
+        when(failedResult.isSuccessful()).thenReturn(false);
+        connectionManager.setForcedHostTarget(playerUuid, "backend");
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Boolean> attempt = executor.submit(() -> connectionManager.transferToBackend(player));
+            assertTrue(connectionStarted.await(1, TimeUnit.SECONDS));
+            when(player.isActive()).thenReturn(false);
+            pendingConnection.complete(failedResult);
+
+            assertFalse(attempt.get(2, TimeUnit.SECONDS),
+                    "A disconnected player must not be routed through auth fallback");
+        }
+        verify(player, never()).createConnectionRequest(authServer);
     }
 
     @Test

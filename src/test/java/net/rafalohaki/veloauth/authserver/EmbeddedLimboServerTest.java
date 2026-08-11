@@ -7,6 +7,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 
+import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.InetAddress;
@@ -65,6 +66,18 @@ class EmbeddedLimboServerTest {
             assertEquals(1, joinGame.payload().readByte(),
                     "Minecraft 1.8 should enter the End dimension");
 
+            MinecraftWireTestSupport.Frame abilities = readFrame(socket);
+            assertEquals(0x39, abilities.packetId());
+            assertEquals(0x07, abilities.payload().readUnsignedByte(),
+                    "Spectator limbo should be invulnerable, flying and allowed to fly");
+            assertEquals(0.05F, abilities.payload().readFloat());
+            assertEquals(0.1F, abilities.payload().readFloat());
+
+            MinecraftWireTestSupport.Frame brand = readFrame(socket);
+            assertEquals(0x3F, brand.packetId());
+            assertEquals("MC|Brand", readString(brand.payload()));
+            assertEquals("VeloAuth", readString(brand.payload()));
+
             MinecraftWireTestSupport.Frame position = readFrame(socket);
             assertEquals(0x08, position.packetId());
             position.payload().readDouble();
@@ -90,6 +103,8 @@ class EmbeddedLimboServerTest {
             readFrame(socket);
             readFrame(socket);
             readFrame(socket);
+            readFrame(socket);
+            readFrame(socket);
 
             assertFalse(hasReadTimeout(runtime),
                     "GAME sessions should use VeloAuth's keepalive instead of a duplicate Netty timer");
@@ -108,9 +123,57 @@ class EmbeddedLimboServerTest {
             readFrame(socket);
             readFrame(socket);
             readFrame(socket);
+            readFrame(socket);
+            readFrame(socket);
             MinecraftWireTestSupport.Frame keepAlive = readFrame(socket);
             assertEquals(0x00, keepAlive.packetId());
 
+            assertThrows(EOFException.class, () -> readFrame(socket));
+        }
+        assertEquals(1, server.timedOutConnections());
+    }
+
+    @Test
+    void clientSettings_ShouldBeIgnoredSafely() throws Exception {
+        UUID playerId = UUID.randomUUID();
+        server = newServer(0, new NoopProtocolRuntime(), Duration.ofMillis(100));
+        server.start();
+        server.expectPlayer(playerId, "SettingsPlayer");
+
+        try (Socket socket = connect(server.port())) {
+            sendLogin(socket, LegacyProtocolCodec.PROTOCOL_VERSION, "SettingsPlayer");
+            for (int frame = 0; frame < 5; frame++) {
+                readFrame(socket);
+            }
+
+            ByteArrayOutputStream clientSettings = packet(0x15);
+            clientSettings.write(5);
+            clientSettings.writeBytes("en_US".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            clientSettings.write(8); // View distance.
+            clientSettings.write(0); // Chat mode VarInt.
+            clientSettings.write(1); // Chat colors enabled.
+            clientSettings.write(0x7F); // All skin parts.
+            writeFrame(socket, clientSettings);
+
+            MinecraftWireTestSupport.Frame firstKeepAlive = readFrame(socket);
+            assertEquals(0x00, firstKeepAlive.packetId());
+            ByteArrayOutputStream response = packet(0x00);
+            response.writeBytes(firstKeepAlive.payload().readAllBytes());
+            writeFrame(socket, response);
+
+            assertEquals(0x00, readFrame(socket).packetId(),
+                    "Ignored client settings must not terminate the GAME session");
+        }
+    }
+
+    @Test
+    void handshakeTimeout_ShouldDisconnectIdleSockets() throws Exception {
+        EmbeddedLimboServer.Config config = new EmbeddedLimboServer.Config(
+                0, 16, Duration.ofMillis(100), Duration.ofSeconds(4), Duration.ofSeconds(15));
+        server = newServer(config, new NoopProtocolRuntime());
+        server.start();
+
+        try (Socket socket = connect(server.port())) {
             assertThrows(EOFException.class, () -> readFrame(socket));
         }
         assertEquals(1, server.timedOutConnections());
@@ -212,6 +275,11 @@ class EmbeddedLimboServerTest {
             int port, ProtocolRuntime runtime, Duration keepAliveInterval) {
         EmbeddedLimboServer.Config config = new EmbeddedLimboServer.Config(
                 port, 16, Duration.ofSeconds(2), Duration.ofSeconds(4), keepAliveInterval);
+        return newServer(config, runtime);
+    }
+
+    private static EmbeddedLimboServer newServer(
+            EmbeddedLimboServer.Config config, ProtocolRuntime runtime) {
         EmbeddedLimboServer.PlayerMessages messages = new EmbeddedLimboServer.PlayerMessages(
                 Component.text("VeloAuth test"),
                 Component.text("invalid redirect"),

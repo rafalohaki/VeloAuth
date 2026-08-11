@@ -19,6 +19,8 @@ final class LegacyProtocolCodec {
     static final String MINECRAFT_VERSION = "1.8.x";
     private static final int END_DIMENSION_ID = 1;
     private static final int SPECTATOR_GAME_MODE_ID = 3;
+    private static final int PLAYER_ABILITIES_PACKET_ID = 0x39;
+    private static final int PLUGIN_MESSAGE_PACKET_ID = 0x3F;
     private static final int LAST_SERVERBOUND_GAME_PACKET = 0x19;
 
     static final PacketCodec CODEC = PacketCodec.builder()
@@ -62,6 +64,15 @@ final class LegacyProtocolCodec {
             registry.registerClientboundPacket(UnusedClientboundPacket.class, UnusedClientboundPacket::new);
         }
         registry.registerClientboundPacket(PlayerPosition.class, PlayerPosition::new);
+        for (int packetId = 9; packetId < PLAYER_ABILITIES_PACKET_ID; packetId++) {
+            registry.registerClientboundPacket(UnusedClientboundPacket.class, UnusedClientboundPacket::new);
+        }
+        registry.registerClientboundPacket(PlayerAbilities.class, PlayerAbilities::new);
+        for (int packetId = PLAYER_ABILITIES_PACKET_ID + 1;
+             packetId < PLUGIN_MESSAGE_PACKET_ID; packetId++) {
+            registry.registerClientboundPacket(UnusedClientboundPacket.class, UnusedClientboundPacket::new);
+        }
+        registry.registerClientboundPacket(PluginMessage.class, PluginMessage::new);
 
         registry.registerServerboundPacket(KeepAlive.class, KeepAlive::new);
         for (int packetId = 1; packetId <= LAST_SERVERBOUND_GAME_PACKET; packetId++) {
@@ -278,6 +289,72 @@ final class LegacyProtocolCodec {
             output.writeFloat(yaw);
             output.writeFloat(pitch);
             output.writeByte(0); // All coordinates are absolute.
+        }
+    }
+
+    record PlayerAbilities(
+            boolean invulnerable,
+            boolean flying,
+            boolean canFly,
+            boolean creative,
+            float flySpeed,
+            float walkSpeed) implements MinecraftPacket {
+
+        private static final int FLAG_INVULNERABLE = 0x01;
+        private static final int FLAG_FLYING = 0x02;
+        private static final int FLAG_CAN_FLY = 0x04;
+        private static final int FLAG_CREATIVE = 0x08;
+
+        PlayerAbilities(ByteBuf input) {
+            this(input.readUnsignedByte(), input.readFloat(), input.readFloat());
+        }
+
+        private PlayerAbilities(int flags, float flySpeed, float walkSpeed) {
+            this((flags & FLAG_INVULNERABLE) != 0,
+                    (flags & FLAG_FLYING) != 0,
+                    (flags & FLAG_CAN_FLY) != 0,
+                    (flags & FLAG_CREATIVE) != 0,
+                    flySpeed,
+                    walkSpeed);
+        }
+
+        PlayerAbilities {
+            if (!Float.isFinite(flySpeed) || !Float.isFinite(walkSpeed)
+                    || flySpeed < 0.0F || walkSpeed < 0.0F) {
+                throw new IllegalArgumentException("Player ability speeds must be finite and non-negative");
+            }
+        }
+
+        @Override
+        public void serialize(ByteBuf output) {
+            int flags = (invulnerable ? FLAG_INVULNERABLE : 0)
+                    | (flying ? FLAG_FLYING : 0)
+                    | (canFly ? FLAG_CAN_FLY : 0)
+                    | (creative ? FLAG_CREATIVE : 0);
+            output.writeByte(flags);
+            output.writeFloat(flySpeed);
+            output.writeFloat(walkSpeed);
+        }
+    }
+
+    /** Legacy string-payload plugin message used for the protocol-47 server brand. */
+    record PluginMessage(String channel, String stringPayload) implements MinecraftPacket {
+        PluginMessage(ByteBuf input) {
+            this(readString(input, 20), readString(input, 32_767));
+            requireEmpty(input);
+        }
+
+        PluginMessage {
+            if (channel == null || channel.isEmpty() || channel.length() > 20) {
+                throw new IllegalArgumentException("Plugin channel must contain 1-20 characters");
+            }
+            Objects.requireNonNull(stringPayload, "stringPayload");
+        }
+
+        @Override
+        public void serialize(ByteBuf output) {
+            writeString(output, channel);
+            writeString(output, stringPayload);
         }
     }
 

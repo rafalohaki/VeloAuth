@@ -135,10 +135,10 @@ final class DefaultConfigGenerator {
                 # Auth server (limbo/lobby for unauthenticated players)
                 # Compatible with: NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo
                 auth-server:
-                  # New installations use VeloAuth's loopback-only embedded limbo. Existing
-                  # configurations with no mode remain external after an update. Changing the
+                  # External remains the default while embedded limbo completes production canary
+                  # testing. Set this explicitly to embedded only after staging it. Changing the
                   # mode always requires a full proxy restart.
-                  mode: embedded
+                  mode: external
                   # EXTERNAL MODE ONLY: must match a server name in velocity.toml [servers].
                   # This value is ignored in embedded mode; do not register the reserved
                   # veloauth-embedded-limbo name yourself.
@@ -179,7 +179,12 @@ final class DefaultConfigGenerator {
                   # Heavy JVM backend servers with large heaps and long GC pauses may not
                   # answer a ping within the default 3000ms — raise this (e.g. 5000) to give
                   # them more room. Too high delays fallback when a server is genuinely down.
-                  ping-timeout-ms: 3000""";
+                  ping-timeout-ms: 3000
+                  # Minimum dwell time in auth/limbo before an automatic backend transfer.
+                  # This compatibility buffer gives modded clients time to initialize their
+                  # first world. PlayerSettingsChangedEvent is not a world-readiness signal.
+                  # 0 disables the buffer; values above 30000 are rejected.
+                  auto-transfer-delay-ms: 1500""";
 
     private static final String SECURITY_SECTION = """
                 

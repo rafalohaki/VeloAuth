@@ -115,21 +115,20 @@ matches never grant this bypass.
 - **Java 21 or newer**
 - **Velocity proxy** (3.5.x; VeloAuth currently targets the 3.5 API line)
 - **Database**: MySQL, PostgreSQL, H2, or SQLite
-- **Embedded mode:** outbound HTTPS access to `repo.viaversion.com` for the first verified runtime
-  and a small, asynchronous snapshot check after later successful startups; cached startup remains
-  independent of repository availability
-- **Optional external mode:** NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or
+- **Default external mode:** NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or
   another Velocity-compatible auth server registered in `velocity.toml`
+- **Optional embedded mode:** outbound HTTPS access to `repo.viaversion.com` for the first verified
+  runtime and a small, asynchronous snapshot check after later successful startups; cached startup
+  remains independent of repository availability
 
 ## Quick Setup
 
 ### Installation
 
-1. Download VeloAuth from Modrinth.
-2. Place the file in your Velocity `plugins/` folder.
-3. Start Velocity. A new installation creates `config.yml`, downloads and verifies the build-pinned
-   fallback runtime, and binds its limbo to an automatically selected loopback port. After the proxy
-   is ready, VeloAuth may stage a newer ViaVersion snapshot for the next restart.
+1. Prepare a Velocity-compatible external limbo and register it as `limbo` in `velocity.toml`.
+2. Download VeloAuth from Modrinth and place the file in your Velocity `plugins/` folder.
+3. Start Velocity. A new installation creates `config.yml` with `auth-server.mode: external` and
+   uses the registered `limbo` server. Embedded mode remains an explicit staging/canary opt-in.
 4. Stop Velocity and configure the database in `plugins/veloauth/config.yml`.
 5. Restart Velocity. Plugin upgrades and auth-topology changes always require a full proxy restart.
 
@@ -137,10 +136,11 @@ matches never grant this bypass.
 
 ### Velocity Config
 
-With the default embedded mode, configure only real backend servers in `velocity.toml`. Do not add
-the reserved `veloauth-embedded-limbo` name; VeloAuth registers and removes it atomically at runtime.
-When Velocity or Velocity-CTD uses `player-info-forwarding-mode = "modern"`, clients on 1.13 or
-newer complete the standard `velocity:player_info` login query automatically. Velocity reads
+The default external mode requires the configured auth server in `velocity.toml`; keep it out of
+the backend `try` list. If you explicitly opt in to embedded mode, do not add the reserved
+`veloauth-embedded-limbo` name: VeloAuth registers and removes it atomically at runtime. When
+Velocity or Velocity-CTD uses `player-info-forwarding-mode = "modern"`, clients on 1.13 or newer
+complete the standard `velocity:player_info` login query automatically. Velocity reads
 `forwarding-secret-file` and signs its response; VeloAuth never copies, logs or adds that secret to
 `config.yml`. Modern forwarding itself does not support 1.8-1.12 clients, independently of the
 embedded limbo's wider protocol matrix.
@@ -162,6 +162,7 @@ still has no blocks, world ticks, physics, fall damage or persisted gameplay sta
 
 ```toml
 [servers]
+limbo = "127.0.0.1:25566"  # Default external auth server; keep it out of try
 lobby = "127.0.0.1:25565"  # Typical backend server
 survival = "127.0.0.1:25567" # Another backend server
 
@@ -169,7 +170,7 @@ try = ["lobby", "survival"]  # Backend fallback order
 
 [forced-hosts]
 # VeloAuth fully respects Velocity's forced hosts!
-# With the default premium routing, players connecting via this host visit embedded limbo
+# With the default premium routing, players connecting via this host visit the auth server
 # and are then transferred to 'survival'. Verified premium players can keep the
 # direct 'survival' target only when premium.bypass-auth-server is explicitly true.
 "survival.example.com" = ["survival"]
@@ -188,8 +189,8 @@ language: en
 # Built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
 
 auth-server:
-  # New config files use embedded. Existing configs without this key stay external after upgrade.
-  mode: embedded
+  # Fresh configs and files without this key use external. Embedded is an explicit canary opt-in.
+  mode: external
   # External mode only; ignored in embedded mode.
   server-name: limbo
   # Seconds before an unauthenticated player is kicked from the auth server.
@@ -214,6 +215,9 @@ auth-server:
 # GC pause or warmup — raise it (e.g. 5000) so they aren't flagged offline.
 # connection:
 #   ping-timeout-ms: 3000
+#   # Compatibility buffer before automatic auth/limbo -> backend transfer.
+#   # 0-30000ms; default 1500ms. This is especially useful for modded clients.
+#   auto-transfer-delay-ms: 1500
 
 # Optional premium passthrough. Missing key means false, so existing configs keep
 # their current routing after an upgrade. No database migration is involved.
