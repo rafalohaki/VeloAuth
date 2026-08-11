@@ -50,6 +50,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static net.rafalohaki.veloauth.testsupport.EventTaskTestSupport.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -64,6 +65,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -313,7 +316,7 @@ class AuthListenerTest {
         assertNull(task, "First-connection redirect should be resolved synchronously");
         assertSame(authServer, event.getResult().getServer().orElse(null),
                 "Previous server semantics should redirect first connections to auth server");
-        verify(connectionManager).setForcedHostTarget(playerUuid, "backend");
+        verify(connectionManager).setForcedHostTarget(player, "backend");
     }
 
     @Test
@@ -333,7 +336,7 @@ class AuthListenerTest {
 
         assertNull(task, "Direct premium backend routing should remain a synchronous fast path");
         assertSame(backendServer, event.getResult().getServer().orElse(null));
-        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+        verify(connectionManager, never()).setForcedHostTarget(any(Player.class), anyString());
         verify(connectionManager, never()).findAvailableBackendServerForInitialConnectionAsync();
         verify(postLoginHandler, never()).handlePremiumPlayer(eq(player), anyString());
     }
@@ -359,7 +362,7 @@ class AuthListenerTest {
 
         assertNull(task);
         assertSame(authServer, event.getResult().getServer().orElse(null));
-        verify(connectionManager).setForcedHostTarget(playerUuid, "backend");
+        verify(connectionManager).setForcedHostTarget(player, "backend");
     }
 
     @Test
@@ -385,7 +388,7 @@ class AuthListenerTest {
         assertNotNull(task, "Selecting a backend may ping servers and must suspend the event asynchronously");
         await(task);
         assertSame(backendServer, event.getResult().getServer().orElse(null));
-        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+        verify(connectionManager, never()).setForcedHostTarget(any(Player.class), anyString());
         verify(postLoginHandler, never()).handlePremiumPlayer(eq(player), anyString());
     }
 
@@ -475,7 +478,7 @@ class AuthListenerTest {
         assertNull(task, "First connection to auth server should stay synchronous");
         assertTrue(event.getResult().isAllowed(), "Initial auth-server target should be allowed");
         assertSame(authServer, event.getResult().getServer().orElse(null));
-        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+        verify(connectionManager, never()).setForcedHostTarget(any(Player.class), anyString());
     }
 
     @Test
@@ -493,7 +496,7 @@ class AuthListenerTest {
         assertNull(task);
         assertFalse(event.getResult().isAllowed(),
                 "Missing protocol support, capacity or forwarding trust must fail closed");
-        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+        verify(connectionManager, never()).setForcedHostTarget(any(Player.class), anyString());
     }
 
     @Test
@@ -515,7 +518,7 @@ class AuthListenerTest {
 
         assertNull(task);
         assertSame(backendServer, event.getResult().getServer().orElse(null));
-        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+        verify(connectionManager, never()).setForcedHostTarget(any(Player.class), anyString());
     }
 
     @Test
@@ -544,7 +547,7 @@ class AuthListenerTest {
         assertNotNull(task, "Floodgate bypass must not leave a trusted player parked on auth");
         await(task);
         assertSame(backendServer, event.getResult().getServer().orElse(null));
-        verify(connectionManager, never()).setForcedHostTarget(any(UUID.class), anyString());
+        verify(connectionManager, never()).setForcedHostTarget(any(Player.class), anyString());
     }
 
     @Test
@@ -571,7 +574,7 @@ class AuthListenerTest {
         assertNull(task);
         assertSame(authServer, event.getResult().getServer().orElse(null),
                 "A username prefix alone must never grant Bedrock auth bypass");
-        verify(connectionManager).setForcedHostTarget(unverifiedUuid, "backend");
+        verify(connectionManager).setForcedHostTarget(player, "backend");
     }
 
     @Test
@@ -630,7 +633,7 @@ class AuthListenerTest {
 
         verify(authCache).removeAuthorizedPlayer(playerUuid);
         verify(authCache).endSession(playerUuid);
-        verify(connectionManager).clearRetryAttempts(playerUuid);
+        verify(connectionManager).clearTransferState(player);
         verify(timeoutScheduler).cancel(playerUuid);
         assertTrue(pendingTotpStore.get(playerUuid).isEmpty(),
                 "A disconnected connection must not leave a reusable 2FA continuation");
@@ -651,11 +654,11 @@ class AuthListenerTest {
 
         verify(authCache, never()).removeAuthorizedPlayer(sharedOfflineUuid);
         verify(authCache, never()).endSession(sharedOfflineUuid);
-        verify(connectionManager, never()).clearRetryAttempts(sharedOfflineUuid);
+        verify(connectionManager, never()).clearTransferState(any(Player.class));
     }
 
     @Test
-    void onPostLogin_replacementConnection_clearsStaleUuidStateBeforeRouting() {
+    void onPostLogin_replacementConnection_publishesNewOwnerBeforeClearingOldOwnerAndRouting() {
         UUID sharedOfflineUuid = UUID.randomUUID();
         Player oldConnection = org.mockito.Mockito.mock(Player.class);
         Player replacementConnection = org.mockito.Mockito.mock(Player.class);
@@ -668,13 +671,26 @@ class AuthListenerTest {
         when(replacementConnection.getRemoteAddress()).thenReturn(
                 new InetSocketAddress("192.0.2.70", 25565));
 
+        AtomicBoolean delayedDisconnectObservedNewOwner = new AtomicBoolean();
+        doAnswer(ignored -> {
+            authListener.onDisconnect(new DisconnectEvent(
+                    oldConnection, DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN));
+            delayedDisconnectObservedNewOwner.set(true);
+            return null;
+        }).when(connectionManager).beginTransferSession(replacementConnection);
+
         authListener.onPostLogin(new PostLoginEvent(oldConnection));
+        org.mockito.Mockito.clearInvocations(connectionManager, postLoginHandler, authCache);
         authListener.onPostLogin(new PostLoginEvent(replacementConnection));
 
+        assertTrue(delayedDisconnectObservedNewOwner.get(),
+                "Replacement publication hook must observe B as the active listener owner");
         verify(authCache).removeAuthorizedPlayer(sharedOfflineUuid);
         verify(authCache).endSession(sharedOfflineUuid);
-        verify(connectionManager).clearRetryAttempts(sharedOfflineUuid);
-        verify(postLoginHandler).handleOfflinePlayer(replacementConnection, "192.0.2.70");
+        var routingOrder = inOrder(connectionManager, postLoginHandler);
+        routingOrder.verify(connectionManager).beginTransferSession(replacementConnection);
+        routingOrder.verify(connectionManager).clearTransferState(oldConnection);
+        routingOrder.verify(postLoginHandler).handleOfflinePlayer(replacementConnection, "192.0.2.70");
     }
 
     @Test

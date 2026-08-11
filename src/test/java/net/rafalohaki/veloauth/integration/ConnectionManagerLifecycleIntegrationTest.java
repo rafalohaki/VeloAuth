@@ -52,6 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -94,30 +95,29 @@ class ConnectionManagerLifecycleIntegrationTest {
     }
 
     @Test
-    void testClearRetryAttempts_shouldCancelTrackedTasksIncludingTimeoutRetry() throws Exception {
+    void clearTransferState_ConcreteOwner_CancelsAllOwnedTasks() throws Exception {
         UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
         ScheduledTask pendingTransfer = org.mockito.Mockito.mock(ScheduledTask.class);
         ScheduledTask backendWaitTask = org.mockito.Mockito.mock(ScheduledTask.class);
         ScheduledTask timeoutRetryTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        ScheduledTask authReadyRetryTask = org.mockito.Mockito.mock(ScheduledTask.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
 
-        putTask("pendingTransfers", playerUuid, pendingTransfer);
-        putTask("backendWaitTasks", playerUuid, backendWaitTask);
-        putTask("timeoutRetryTasks", playerUuid, timeoutRetryTask);
-        putValue("timeoutRetryScheduled", playerUuid, Boolean.TRUE);
-        putValue("retryAttempts", playerUuid, 2);
-        putValue("forcedHostTargets", playerUuid, "backend");
+        connectionManager.beginTransferSession(player);
+        connectionManager.setForcedHostTarget(player, "backend");
+        putStateTask(playerUuid, "pendingTransfer", pendingTransfer);
+        putStateTask(playerUuid, "backendWait", backendWaitTask);
+        putStateTask(playerUuid, "timeoutRetry", timeoutRetryTask);
+        putStateTask(playerUuid, "authReadyRetry", authReadyRetryTask);
 
-        connectionManager.clearRetryAttempts(playerUuid);
+        connectionManager.clearTransferState(player);
 
         verify(pendingTransfer).cancel();
         verify(backendWaitTask).cancel();
         verify(timeoutRetryTask).cancel();
-        assertTrue(getMap("pendingTransfers").isEmpty(), "Pending transfer tasks should be cleared on disconnect");
-        assertTrue(getMap("backendWaitTasks").isEmpty(), "Backend wait tasks should be cleared on disconnect");
-        assertTrue(getMap("timeoutRetryTasks").isEmpty(), "Timeout retry tasks should be cleared on disconnect");
-        assertTrue(getMap("timeoutRetryScheduled").isEmpty(), "Timeout retry flags should be cleared on disconnect");
-        assertTrue(getMap("retryAttempts").isEmpty(), "Retry counters should be cleared on disconnect");
-        assertTrue(getMap("forcedHostTargets").isEmpty(), "Forced-host targets should be cleared on disconnect");
+        verify(authReadyRetryTask).cancel();
+        assertTrue(getMap("transferStates").isEmpty(), "Owned transfer state should be cleared on disconnect");
     }
 
     @Test
@@ -144,7 +144,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(result.isSuccessful()).thenReturn(true);
 
         connectionManager.beginTransferSession(player);
-        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        connectionManager.setForcedHostTarget(player, "backend");
         putStateTask(playerUuid, "pendingTransfer", pendingTransfer);
         putStateTask(playerUuid, "backendWait", backendWaitTask);
         putStateTask(playerUuid, "timeoutRetry", timeoutRetryTask);
@@ -156,7 +156,6 @@ class ConnectionManagerLifecycleIntegrationTest {
         verify(backendWaitTask).cancel();
         verify(timeoutRetryTask).cancel();
         assertTrue(getMap("transferStates").isEmpty(), "Successful transfer should retire its owner generation");
-        assertTrue(getMap("forcedHostTargets").isEmpty(), "Forced-host targets should be consumed after success");
     }
 
     @Test
@@ -203,7 +202,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
         when(taskBuilder.schedule()).thenReturn(autoTransfer);
         connectionManager.beginTransferSession(player);
-        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        connectionManager.setForcedHostTarget(player, "backend");
         connectionManager.autoTransferFromAuthServerToBackend(player);
         callbackCaptor.getValue().accept(autoTransfer);
         assertTrue(firstConnectionStarted.await(1, TimeUnit.SECONDS));
@@ -249,7 +248,7 @@ class ConnectionManagerLifecycleIntegrationTest {
             return pendingConnection;
         });
         when(failedResult.isSuccessful()).thenReturn(false);
-        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        connectionManager.setForcedHostTarget(player, "backend");
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<Boolean> attempt = executor.submit(() -> connectionManager.transferToBackend(player));
@@ -319,15 +318,15 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
         when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
         when(taskBuilder.schedule()).thenReturn(newAutoTransfer);
-        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        connectionManager.setForcedHostTarget(oldPlayer, "backend");
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<Boolean> oldAttempt = executor.submit(() -> connectionManager.transferToBackend(oldPlayer));
             assertTrue(oldConnectionStarted.await(1, TimeUnit.SECONDS));
 
-            connectionManager.clearRetryAttempts(playerUuid);
+            connectionManager.clearTransferState(oldPlayer);
             connectionManager.beginTransferSession(newPlayer);
-            connectionManager.setForcedHostTarget(playerUuid, "backend");
+            connectionManager.setForcedHostTarget(newPlayer, "backend");
             connectionManager.autoTransferFromAuthServerToBackend(newPlayer);
 
             when(oldPlayer.isActive()).thenReturn(false);
@@ -381,7 +380,7 @@ class ConnectionManagerLifecycleIntegrationTest {
                     "Fallback eligibility hook should be released by the test");
             return Optional.of(authConnection);
         });
-        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        connectionManager.setForcedHostTarget(oldPlayer, "backend");
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<Boolean> oldAttempt = executor.submit(() -> connectionManager.transferToBackend(oldPlayer));
@@ -449,7 +448,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(taskBuilder.schedule()).thenReturn(newPendingTransfer, staleRetry);
 
         connectionManager.beginTransferSession(oldPlayer);
-        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        connectionManager.setForcedHostTarget(oldPlayer, "backend");
         assertTrue(connectionManager.transferToBackend(oldPlayer));
         connectionManager.beginTransferSession(newPlayer);
         connectionManager.autoTransferFromAuthServerToBackend(newPlayer);
@@ -516,13 +515,13 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(taskBuilder.schedule()).thenReturn(oldTimeoutTask, newTimeoutTask);
 
         connectionManager.beginTransferSession(oldPlayer);
-        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        connectionManager.setForcedHostTarget(oldPlayer, "backend");
         assertTrue(connectionManager.transferToBackend(oldPlayer));
         callbackCaptor.getAllValues().get(0).accept(oldTimeoutTask);
 
-        connectionManager.clearRetryAttempts(playerUuid);
+        connectionManager.clearTransferState(oldPlayer);
         connectionManager.beginTransferSession(newPlayer);
-        connectionManager.setForcedHostTarget(playerUuid, "backend");
+        connectionManager.setForcedHostTarget(newPlayer, "backend");
         assertTrue(connectionManager.transferToBackend(newPlayer));
         oldRetry.complete(oldRetrySuccess);
 
@@ -578,7 +577,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(taskBuilder.schedule()).thenReturn(oldWaitTask, newWaitTask, staleReschedule);
 
         connectionManager.beginTransferSession(oldPlayer);
-        connectionManager.setForcedHostTarget(playerUuid, "forced");
+        connectionManager.setForcedHostTarget(oldPlayer, "forced");
         assertTrue(connectionManager.transferToBackend(oldPlayer));
         callbackCaptor.getAllValues().get(0).accept(oldWaitTask);
 
@@ -629,6 +628,272 @@ class ConnectionManagerLifecycleIntegrationTest {
         verify(oldReplacementTask).cancel();
         verify(newTask, never()).cancel();
         verify(taskBuilder, times(3)).schedule();
+    }
+
+    @Test
+    void delayedDisconnect_OldConnection_DoesNotCancelReplacementState() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        ScheduledTask newPendingTransfer = org.mockito.Mockito.mock(ScheduledTask.class);
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+
+        connectionManager.beginTransferSession(oldPlayer);
+        connectionManager.beginTransferSession(newPlayer);
+        putStateTask(playerUuid, "pendingTransfer", newPendingTransfer);
+
+        connectionManager.clearTransferState(oldPlayer);
+
+        verify(newPendingTransfer, never()).cancel();
+        assertSame(newPlayer, getStateOwner(playerUuid),
+                "A delayed disconnect must not retire B's concrete owner state");
+    }
+
+    @Test
+    void beginTransferSession_DisplacedTaskCancellation_HappensOutsideLifecycleLock() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player replacementPlayer = org.mockito.Mockito.mock(Player.class);
+        Player probePlayer = org.mockito.Mockito.mock(Player.class);
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(replacementPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(probePlayer.getUniqueId()).thenReturn(playerUuid);
+        try (CancellationProbe probe = cancellationProbe(probePlayer)) {
+            connectionManager.beginTransferSession(oldPlayer);
+            putStateTask(playerUuid, "pendingTransfer", probe.task());
+
+            connectionManager.beginTransferSession(replacementPlayer);
+        }
+
+        assertSame(probePlayer, getStateOwner(playerUuid));
+    }
+
+    @Test
+    void shutdown_StateTaskCancellation_HappensOutsideLifecycleLock() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        Player probePlayer = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(probePlayer.getUniqueId()).thenReturn(UUID.randomUUID());
+        try (CancellationProbe probe = cancellationProbe(probePlayer)) {
+            connectionManager.beginTransferSession(player);
+            putStateTask(playerUuid, "pendingTransfer", probe.task());
+
+            connectionManager.shutdown();
+        }
+
+        assertTrue(getMap("transferStates").isEmpty());
+    }
+
+    @Test
+    void authReadyPingCompletion_OldGeneration_DoesNotScheduleRetryOrHangTransfer() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        CompletableFuture<ServerPing> pendingPing = new CompletableFuture<>();
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask staleRetry = org.mockito.Mockito.mock(ScheduledTask.class);
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldAuthPingPlayer");
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(authServer.ping()).thenReturn(pendingPing);
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), any(Runnable.class)))
+                .thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(50L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(staleRetry);
+        connectionManager.beginTransferSession(oldPlayer);
+
+        CompletableFuture<Boolean> transfer = connectionManager.transferToAuthServerAsync(oldPlayer);
+        connectionManager.beginTransferSession(newPlayer);
+        pendingPing.completeExceptionally(new IllegalStateException("old ping failed"));
+
+        assertTrue(transfer.isDone(), "Retiring an auth-ready ping must settle its transfer future");
+        assertFalse(transfer.join());
+        verify(scheduler, never()).buildTask(any(), any(Runnable.class));
+        verify(oldPlayer, never()).createConnectionRequest(authServer);
+        assertSame(newPlayer, getStateOwner(playerUuid));
+    }
+
+    @Test
+    void authReadyRetry_Shutdown_CancelsTaskAndSettlesTransferFuture() {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask readinessRetry = org.mockito.Mockito.mock(ScheduledTask.class);
+        AtomicReference<Consumer<ScheduledTask>> callback = new AtomicReference<>();
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("ShutdownAuthReadyPlayer");
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(authServer.ping()).thenReturn(
+                CompletableFuture.failedFuture(new IllegalStateException("not ready")));
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), org.mockito.ArgumentMatchers.<Consumer<ScheduledTask>>any()))
+                .thenAnswer(invocation -> {
+                    callback.set(invocation.getArgument(1));
+                    return taskBuilder;
+                });
+        when(taskBuilder.delay(eq(50L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(readinessRetry);
+        connectionManager.beginTransferSession(player);
+
+        CompletableFuture<Boolean> transfer = connectionManager.transferToAuthServerAsync(player);
+        connectionManager.shutdown();
+        callback.get().accept(readinessRetry);
+
+        verify(readinessRetry).cancel();
+        assertTrue(transfer.isDone(), "Cancelling auth readiness must settle the public transfer future");
+        assertFalse(transfer.join());
+        verify(authServer, times(1)).ping();
+        verify(player, never()).createConnectionRequest(authServer);
+    }
+
+    @Test
+    void authConnectCompletion_OldGeneration_DoesNotMessageOrRetireReplacement() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ConnectionRequestBuilder request = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        CompletableFuture<ConnectionRequestBuilder.Result> pendingConnect = new CompletableFuture<>();
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldAuthConnectPlayer");
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(authServer.ping()).thenReturn(CompletableFuture.completedFuture(
+                org.mockito.Mockito.mock(ServerPing.class)));
+        when(oldPlayer.createConnectionRequest(authServer)).thenReturn(request);
+        when(request.connect()).thenReturn(pendingConnect);
+        connectionManager.beginTransferSession(oldPlayer);
+
+        CompletableFuture<Boolean> transfer = connectionManager.transferToAuthServerAsync(oldPlayer);
+        connectionManager.beginTransferSession(newPlayer);
+        pendingConnect.completeExceptionally(new IllegalStateException("old connect failed"));
+
+        assertFalse(transfer.join());
+        verify(oldPlayer, never()).sendMessage(any(Component.class));
+        assertSame(newPlayer, getStateOwner(playerUuid));
+    }
+
+    @Test
+    void authConnectCompletion_Shutdown_DoesNotMessageOrResurrectState() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ConnectionRequestBuilder request = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        CompletableFuture<ConnectionRequestBuilder.Result> pendingConnect = new CompletableFuture<>();
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("ShutdownAuthConnectPlayer");
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(authServer.ping()).thenReturn(CompletableFuture.completedFuture(
+                org.mockito.Mockito.mock(ServerPing.class)));
+        when(player.createConnectionRequest(authServer)).thenReturn(request);
+        when(request.connect()).thenReturn(pendingConnect);
+        connectionManager.beginTransferSession(player);
+
+        CompletableFuture<Boolean> transfer = connectionManager.transferToAuthServerAsync(player);
+        connectionManager.shutdown();
+        pendingConnect.completeExceptionally(new IllegalStateException("shutdown connect failed"));
+
+        assertFalse(transfer.join());
+        verify(player, never()).sendMessage(any(Component.class));
+        assertTrue(getMap("transferStates").isEmpty());
+    }
+
+    @Test
+    void backendPingCompletion_Shutdown_DoesNotConnectMessageOrResurrectState() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        CompletableFuture<ServerPing> pendingPing = new CompletableFuture<>();
+        CountDownLatch pingStarted = new CountDownLatch(1);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("ShutdownBackendPingPlayer");
+        when(player.isActive()).thenReturn(true);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(backendServer.ping()).thenAnswer(ignored -> {
+            pingStarted.countDown();
+            return pendingPing;
+        });
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        connectionManager.beginTransferSession(player);
+        connectionManager.setForcedHostTarget(player, "backend");
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Boolean> transfer = executor.submit(() -> connectionManager.transferToBackend(player));
+            assertTrue(pingStarted.await(1, TimeUnit.SECONDS));
+            connectionManager.shutdown();
+            pendingPing.complete(org.mockito.Mockito.mock(ServerPing.class));
+
+            assertFalse(transfer.get(2, TimeUnit.SECONDS));
+        }
+
+        verify(player, never()).createConnectionRequest(backendServer);
+        verify(player, never()).sendMessage(any(Component.class));
+        assertTrue(getMap("transferStates").isEmpty());
+    }
+
+    @Test
+    void backendConnectCompletion_Shutdown_DoesNotMessageOrResurrectState() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ConnectionRequestBuilder request = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result failedResult = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        CompletableFuture<ConnectionRequestBuilder.Result> pendingConnect = new CompletableFuture<>();
+        CountDownLatch connectStarted = new CountDownLatch(1);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("ShutdownBackendConnectPlayer");
+        when(player.isActive()).thenReturn(true);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(backendServer.ping()).thenReturn(CompletableFuture.completedFuture(
+                org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(player.createConnectionRequest(backendServer)).thenReturn(request);
+        when(request.connect()).thenAnswer(ignored -> {
+            connectStarted.countDown();
+            return pendingConnect;
+        });
+        when(failedResult.isSuccessful()).thenReturn(false);
+        connectionManager.beginTransferSession(player);
+        connectionManager.setForcedHostTarget(player, "backend");
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Boolean> transfer = executor.submit(() -> connectionManager.transferToBackend(player));
+            assertTrue(connectStarted.await(1, TimeUnit.SECONDS));
+            org.mockito.Mockito.clearInvocations(player);
+            connectionManager.shutdown();
+            pendingConnect.complete(failedResult);
+
+            assertFalse(transfer.get(2, TimeUnit.SECONDS));
+        }
+
+        verify(player, never()).sendMessage(any(Component.class));
+        assertTrue(getMap("transferStates").isEmpty());
+    }
+
+    @Test
+    void shutdown_InFlightCallbacksCannotPublishOrResurrectState() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+
+        connectionManager.shutdown();
+        connectionManager.beginTransferSession(player);
+
+        assertTrue(getMap("transferStates").isEmpty(),
+                "A session beginning after shutdown must not publish transfer ownership");
+        assertFalse(connectionManager.transferToBackend(player));
+        assertTrue(getMap("transferStates").isEmpty(),
+                "A public transfer after shutdown must not lazily resurrect ownership");
     }
 
     @Test
@@ -789,8 +1054,8 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(taskBuilder.delay(eq(5L), eq(TimeUnit.SECONDS))).thenReturn(taskBuilder);
         when(taskBuilder.schedule()).thenReturn(scheduledTask);
 
-        connectionManager.setForcedHostTarget(playerUuid, "forced");
         connectionManager.beginTransferSession(player);
+        connectionManager.setForcedHostTarget(player, "forced");
         Object state = getMap("transferStates").get(playerUuid);
         Method scheduleRetry = ConnectionManager.class
                 .getDeclaredMethod("scheduleBackendWaitRetry", Player.class, state.getClass(), int.class);
@@ -853,12 +1118,44 @@ class ConnectionManagerLifecycleIntegrationTest {
         return (Map<UUID, Object>) field.get(connectionManager);
     }
 
-    private void putTask(String fieldName, UUID playerUuid, ScheduledTask task) throws Exception {
-        getMap(fieldName).put(playerUuid, task);
+    private Player getStateOwner(UUID playerUuid) throws Exception {
+        Object state = getMap("transferStates").get(playerUuid);
+        Method owner = state.getClass().getDeclaredMethod("owner");
+        owner.setAccessible(true);
+        return (Player) owner.invoke(state);
     }
 
-    private void putValue(String fieldName, UUID playerUuid, Object value) throws Exception {
-        getMap(fieldName).put(playerUuid, value);
+    private CancellationProbe cancellationProbe(Player probePlayer) throws Exception {
+        ScheduledTask task = org.mockito.Mockito.mock(ScheduledTask.class);
+        CountDownLatch probeReady = new CountDownLatch(1);
+        CountDownLatch startPublication = new CountDownLatch(1);
+        CountDownLatch publicationFinished = new CountDownLatch(1);
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        Future<?> publication = executor.submit(() -> {
+            probeReady.countDown();
+            awaitLatch(startPublication);
+            connectionManager.beginTransferSession(probePlayer);
+            publicationFinished.countDown();
+        });
+        assertTrue(probeReady.await(1, TimeUnit.SECONDS),
+                "Cancellation probe must be parked before the lifecycle operation starts");
+        doAnswer(ignored -> {
+            startPublication.countDown();
+            assertTrue(publicationFinished.await(1, TimeUnit.SECONDS),
+                    "Task cancellation must not hold the lifecycle publication lock");
+            publication.get(1, TimeUnit.SECONDS);
+            return null;
+        }).when(task).cancel();
+        return new CancellationProbe(task, executor);
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while staging lifecycle cancellation", interrupted);
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -867,5 +1164,12 @@ class ConnectionManagerLifecycleIntegrationTest {
         Field field = state.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         ((java.util.concurrent.atomic.AtomicReference<ScheduledTask>) field.get(state)).set(task);
+    }
+
+    private record CancellationProbe(ScheduledTask task, ExecutorService executor) implements AutoCloseable {
+        @Override
+        public void close() {
+            executor.shutdownNow();
+        }
     }
 }

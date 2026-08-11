@@ -16,7 +16,6 @@ import com.velocitypowered.api.scheduler.ScheduledTask;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -56,14 +55,6 @@ public class ConnectionManager {
     private final ConcurrentMap<UUID, PlayerTransferState> transferStates = new ConcurrentHashMap<>();
     private final AtomicLong transferGeneration = new AtomicLong();
 
-    /** Legacy UUID-scoped state retained until listener/public cleanup conversion in Task 4. */
-    private final Map<UUID, AtomicInteger> retryAttempts = new ConcurrentHashMap<>();
-    private final Map<UUID, Boolean> timeoutRetryScheduled = new ConcurrentHashMap<>();
-    private final ConcurrentMap<UUID, ScheduledTask> timeoutRetryTasks = new ConcurrentHashMap<>();
-    private final ConcurrentMap<UUID, ScheduledTask> pendingTransfers = new ConcurrentHashMap<>();
-    private final ConcurrentMap<UUID, ScheduledTask> backendWaitTasks = new ConcurrentHashMap<>();
-    private final ConcurrentMap<UUID, Player> backendConnectionOwners = new ConcurrentHashMap<>();
-
     /** Serializes task publication with shutdown so late async completions cannot resurrect work. */
     private final ReentrantLock taskLifecycleLock = new ReentrantLock();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -74,9 +65,6 @@ public class ConnectionManager {
     private static final int MAX_BACKEND_WAIT_RETRIES = 60;
     private static final long BACKEND_WAIT_INTERVAL_SECONDS = 5;
     
-    /** Forced host targets per player - preserves original intended server through auth flow */
-    private final Map<UUID, String> forcedHostTargets = new ConcurrentHashMap<>();
-
     private final VeloAuth plugin;
     private final AuthCache authCache;
     private final Settings settings;
@@ -138,13 +126,15 @@ public class ConnectionManager {
         PlayerTransferState replacement = new PlayerTransferState(
                 playerId, player, transferGeneration.incrementAndGet());
         PlayerTransferState displaced;
-        while (true) {
-            displaced = transferStates.putIfAbsent(playerId, replacement);
-            if (displaced == null || transferStates.replace(playerId, displaced, replacement)) {
-                break;
+        taskLifecycleLock.lock();
+        try {
+            if (closed.get()) {
+                return;
             }
+            displaced = transferStates.put(playerId, replacement);
+        } finally {
+            taskLifecycleLock.unlock();
         }
-        initializeForcedHostTarget(replacement);
         if (displaced != null) {
             cancelStateTasks(displaced);
         }
@@ -153,25 +143,25 @@ public class ConnectionManager {
     @SuppressWarnings("PMD.CompareObjectsWithEquals") // Concrete Velocity Player identity owns the generation.
     private PlayerTransferState currentState(Player player) {
         UUID playerId = player.getUniqueId();
-        PlayerTransferState current = transferStates.get(playerId);
-        if (current != null) {
-            return current.owner() == player ? current : null;
-        }
+        taskLifecycleLock.lock();
+        try {
+            if (closed.get()) {
+                return null;
+            }
+            PlayerTransferState current = transferStates.get(playerId);
+            if (current != null) {
+                return current.owner() == player ? current : null;
+            }
 
-        PlayerTransferState candidate = new PlayerTransferState(
-                playerId, player, transferGeneration.incrementAndGet());
-        PlayerTransferState raced = transferStates.putIfAbsent(playerId, candidate);
-        if (raced == null) {
-            initializeForcedHostTarget(candidate);
-            return candidate;
-        }
-        return raced.owner() == player ? raced : null;
-    }
-
-    private void initializeForcedHostTarget(PlayerTransferState state) {
-        String target = forcedHostTargets.remove(state.playerId());
-        if (target != null && isCurrent(state)) {
-            state.forcedHostTarget().compareAndSet(null, target);
+            PlayerTransferState candidate = new PlayerTransferState(
+                    playerId, player, transferGeneration.incrementAndGet());
+            PlayerTransferState raced = transferStates.putIfAbsent(playerId, candidate);
+            if (raced == null) {
+                return candidate;
+            }
+            return raced.owner() == player ? raced : null;
+        } finally {
+            taskLifecycleLock.unlock();
         }
     }
 
@@ -211,9 +201,12 @@ public class ConnectionManager {
     }
 
     public CompletableFuture<Boolean> transferToAuthServerAsync(Player player) {
+        PlayerTransferState state = currentState(player);
+        if (state == null || !resetTasksIfCurrent(state, false)) {
+            return CompletableFuture.completedFuture(false);
+        }
         try {
-            resetTransferState(player.getUniqueId(), false);
-            RegisteredServer targetServer = validateAndGetAuthServer(player);
+            RegisteredServer targetServer = validateAndGetAuthServer(player, state);
             if (targetServer == null) {
                 return CompletableFuture.completedFuture(false);
             }
@@ -222,14 +215,10 @@ public class ConnectionManager {
                 logger.debug(messages.get("player.transfer.attempt", player.getUsername()));
             }
 
-            return executeAuthServerTransferAsync(player, targetServer);
+            return executeAuthServerTransferAsync(player, state, targetServer);
         } catch (RuntimeException e) {
-            return CompletableFuture.completedFuture(handleTransferError(player, e));
+            return CompletableFuture.completedFuture(handleTransferError(player, state, e));
         }
-    }
-    
-    private RegisteredServer validateAndGetAuthServer(Player player) {
-        return validateAndGetAuthServer(player, null);
     }
 
     private RegisteredServer validateAndGetAuthServer(
@@ -252,12 +241,17 @@ public class ConnectionManager {
         return authServer.get();
     }
     
-    private boolean handleTransferError(Player player, Exception e) {
+    private boolean handleTransferError(Player player, PlayerTransferState state, Exception e) {
+        if (isStale(state)) {
+            return false;
+        }
         if (logger.isErrorEnabled()) {
             logger.error("Critical error transferring player to auth server: {}", player.getUsername(), e);
         }
 
-        player.disconnect(messages.component("connection.error.auth_connect", NamedTextColor.RED));
+        if (!isStale(state)) {
+            player.disconnect(messages.component("connection.error.auth_connect", NamedTextColor.RED));
+        }
         return false;
     }
 
@@ -267,30 +261,57 @@ public class ConnectionManager {
      * @param targetServer Serwer docelowy auth
      * @return true jeśli transfer się udał
      */
-    private CompletableFuture<Boolean> executeAuthServerTransferAsync(Player player, RegisteredServer targetServer) {
-        return waitForAuthServerReadyAsync(targetServer, 0)
+    private CompletableFuture<Boolean> executeAuthServerTransferAsync(
+            Player player, PlayerTransferState state, RegisteredServer targetServer) {
+        return waitForAuthServerReadyAsync(state, targetServer, 0)
                 .thenCompose(ready -> {
+                    if (isStale(state)) {
+                        return CompletableFuture.completedFuture(false);
+                    }
                     if (!ready && logger.isWarnEnabled()) {
                         logger.warn("Auth server not responding to ping after retries - attempting connection anyway...");
                     }
 
-                    return player.createConnectionRequest(targetServer)
-                            .connect()
-                            .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS)
-                            .handle((result, throwable) -> handleAuthServerTransferResult(player, result, throwable));
+                    CompletableFuture<com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result> connection =
+                            startAuthServerConnection(player, state, targetServer);
+                    if (connection == null) {
+                        return CompletableFuture.completedFuture(false);
+                    }
+                    return connection.handle((result, throwable) ->
+                            handleAuthServerTransferResult(player, state, result, throwable));
                 });
     }
 
-    private boolean handleAuthServerTransferResult(Player player,
+    private CompletableFuture<com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result> startAuthServerConnection(
+            Player player, PlayerTransferState state, RegisteredServer targetServer) {
+        taskLifecycleLock.lock();
+        try {
+            if (isStale(state)) {
+                return null;
+            }
+            return player.createConnectionRequest(targetServer)
+                    .connect()
+                    .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS);
+        } finally {
+            taskLifecycleLock.unlock();
+        }
+    }
+
+    private boolean handleAuthServerTransferResult(Player player, PlayerTransferState state,
                                                    com.velocitypowered.api.proxy.ConnectionRequestBuilder.Result result,
                                                    Throwable throwable) {
+        if (isStale(state)) {
+            return false;
+        }
         if (throwable != null) {
             if (logger.isErrorEnabled()) {
                 logger.error("Error transferring player {} to auth server: {}",
                         player.getUsername(), throwable.getMessage(), throwable);
             }
 
-            player.sendMessage(messages.component("connection.error.auth_server", NamedTextColor.RED));
+            if (!isStale(state)) {
+                player.sendMessage(messages.component("connection.error.auth_server", NamedTextColor.RED));
+            }
             return false;
         }
 
@@ -307,35 +328,66 @@ public class ConnectionManager {
                     KickReasonRenderer.renderPlain(result));
         }
 
-        player.sendMessage(messages.component("connection.error.auth_connect", NamedTextColor.RED));
+        if (!isStale(state)) {
+            player.sendMessage(messages.component("connection.error.auth_connect", NamedTextColor.RED));
+        }
         return false;
     }
 
-    private CompletableFuture<Boolean> waitForAuthServerReadyAsync(RegisteredServer targetServer, int attempt) {
-        if (attempt >= MAX_AUTH_SERVER_WAIT_ATTEMPTS) {
+    private CompletableFuture<Boolean> waitForAuthServerReadyAsync(
+            PlayerTransferState state, RegisteredServer targetServer, int attempt) {
+        if (isStale(state) || attempt >= MAX_AUTH_SERVER_WAIT_ATTEMPTS) {
             return CompletableFuture.completedFuture(false);
         }
 
-        return targetServer.ping()
-                .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS)
-                .handle((ping, throwable) -> ping != null)
+        CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> ping =
+                startAuthServerPing(state, targetServer);
+        if (ping == null) {
+            return CompletableFuture.completedFuture(false);
+        }
+        return ping.handle((result, throwable) -> !isStale(state) && result != null)
                 .thenCompose(ready -> {
-                    if (ready) {
+                    if (isStale(state)) {
+                        return CompletableFuture.completedFuture(false);
+                    }
+                    if (Boolean.TRUE.equals(ready)) {
                         return CompletableFuture.completedFuture(true);
                     }
                     if (attempt >= 2) {
                         return CompletableFuture.completedFuture(false);
                     }
-                    return scheduleAuthServerReadyRetry(targetServer, attempt + 1);
+                    return scheduleAuthServerReadyRetry(state, targetServer, attempt + 1);
                 });
     }
 
-    private CompletableFuture<Boolean> scheduleAuthServerReadyRetry(RegisteredServer targetServer, int nextAttempt) {
+    private CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> startAuthServerPing(
+            PlayerTransferState state, RegisteredServer targetServer) {
+        taskLifecycleLock.lock();
+        try {
+            if (isStale(state)) {
+                return null;
+            }
+            return targetServer.ping()
+                    .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS);
+        } finally {
+            taskLifecycleLock.unlock();
+        }
+    }
+
+    private CompletableFuture<Boolean> scheduleAuthServerReadyRetry(
+            PlayerTransferState state, RegisteredServer targetServer, int nextAttempt) {
         CompletableFuture<Boolean> retryFuture = new CompletableFuture<>();
-        plugin.getServer().getScheduler().buildTask(plugin, () ->
-                waitForAuthServerReadyAsync(targetServer, nextAttempt)
-                        .whenComplete((ready, throwable) -> completeAsyncResult(retryFuture, ready, throwable))
-        ).delay(50, TimeUnit.MILLISECONDS).schedule();
+        state.authReadyRetryCompletion().set(retryFuture);
+        boolean scheduled = scheduleOwnedTask(state, state.authReadyRetry(), 50, TimeUnit.MILLISECONDS, () ->
+                waitForAuthServerReadyAsync(state, targetServer, nextAttempt)
+                        .whenComplete((ready, throwable) -> {
+                            state.authReadyRetryCompletion().compareAndSet(retryFuture, null);
+                            completeAsyncResult(retryFuture, ready, throwable);
+                        }));
+        if (!scheduled) {
+            state.authReadyRetryCompletion().compareAndSet(retryFuture, null);
+            retryFuture.complete(false);
+        }
         return retryFuture;
     }
 
@@ -1107,7 +1159,7 @@ public class ConnectionManager {
      * retrieves and validates the originally intended server.
      * <p>
      * The target is <b>NOT</b> consumed on retrieval — it stays in the owner state until either
-     * a direct transfer succeeds or {@link #clearRetryAttempts(UUID)} (player disconnected) fires.
+     * a direct transfer succeeds or {@link #clearTransferState(Player)} (player disconnected) fires.
      * This way a temporarily
      * offline forced-host target is retried on subsequent attempts instead of being silently
      * downgraded to a try-list fallback after the first failure.
@@ -1215,18 +1267,18 @@ public class ConnectionManager {
      * Called from AuthListener when intercepting a first connection to preserve
      * the Velocity forced-host or try-list target through the auth flow.
      *
-     * @param playerUuid target player UUID
+     * @param player target player connection
      * @param serverName the name of the originally intended server
      */
-    public void setForcedHostTarget(UUID playerUuid, String serverName) {
-        PlayerTransferState state = transferStates.get(playerUuid);
-        if (state == null) {
-            forcedHostTargets.put(playerUuid, serverName);
-        } else {
-            state.forcedHostTarget().set(serverName);
+    public void setForcedHostTarget(Player player, String serverName) {
+        PlayerTransferState state = currentState(player);
+        if (state == null || isStale(state)) {
+            return;
         }
+        state.forcedHostTarget().set(serverName);
         if (logger.isDebugEnabled()) {
-            logger.debug("Saved forced host target '{}' for player UUID: {}", serverName, playerUuid);
+            logger.debug("Saved forced host target '{}' for player UUID: {}",
+                    serverName, player.getUniqueId());
         }
     }
 
@@ -1316,8 +1368,11 @@ public class ConnectionManager {
      */
     public void forceReauth(Player player) {
         try {
-            resetTransferState(player.getUniqueId(), false);
-            retryAttempts.remove(player.getUniqueId());
+            PlayerTransferState state = currentState(player);
+            if (state == null || !resetTasksIfCurrent(state, false)) {
+                return;
+            }
+            state.retryAttempts().set(0);
 
             // Usuń z cache
             authCache.removeAuthorizedPlayer(player.getUniqueId());
@@ -1345,7 +1400,7 @@ public class ConnectionManager {
      * Używa opóźnienia dla poprawnej synchronizacji ViaVersion/ViaFabric.
      * <p>
      * Task jest zapisywany w stanie konkretnego połączenia i może być anulowany przez
-     * {@link #cancelPendingTransfer(UUID)} przy rozłączeniu gracza, zapobiegając race conditions.
+     * state-local cancellation at disconnect prevents reconnect race conditions.
      *
      * @param player Gracz do transferu
      */
@@ -1407,83 +1462,48 @@ public class ConnectionManager {
                 });
     }
 
-    private void scheduleOwnedTask(
+    private boolean scheduleOwnedTask(
             PlayerTransferState state,
             AtomicReference<ScheduledTask> taskSlot,
             long delay,
             TimeUnit unit,
             Runnable action) {
+        ScheduledTaskRegistry.PreparedTask prepared;
         taskLifecycleLock.lock();
         try {
             if (isStale(state)) {
-                return;
+                return false;
             }
-            ScheduledTaskRegistry.replace(taskSlot, callback ->
-                    plugin.getServer().getScheduler().buildTask(plugin, callback)
-                            .delay(delay, unit)
-                            .schedule(), () -> {
+            prepared = ScheduledTaskRegistry.prepare(taskSlot, () -> {
                 if (!isStale(state)) {
                     action.run();
                 }
             });
-            if (isStale(state)) {
-                ScheduledTaskRegistry.cancel(taskSlot);
-            }
         } finally {
             taskLifecycleLock.unlock();
         }
+        prepared.cancelPrevious();
+        prepared.schedule(callback ->
+                plugin.getServer().getScheduler().buildTask(plugin, callback)
+                        .delay(delay, unit)
+                        .schedule());
+        return true;
     }
 
     /**
-     * Anuluje oczekujący transfer dla gracza.
-     * Wywoływane przy rozłączeniu aby zapobiec race conditions.
+     * Clears transfer state only when it is still owned by the concrete disconnecting connection.
      *
-     * @param playerUuid UUID gracza
+     * @param player disconnecting player connection
      */
-    public void cancelPendingTransfer(UUID playerUuid) {
-        if (ScheduledTaskRegistry.cancel(pendingTransfers, playerUuid) && logger.isDebugEnabled()) {
-            logger.debug("Anulowano pending transfer dla gracza UUID: {}", playerUuid);
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Concrete Velocity Player identity owns the state.
+    public void clearTransferState(Player player) {
+        PlayerTransferState state = transferStates.get(player.getUniqueId());
+        if (state == null || state.owner() != player
+                || !transferStates.remove(state.playerId(), state)) {
+            return;
         }
-    }
-
-    private void cancelBackendWaitTask(UUID playerUuid) {
-        if (ScheduledTaskRegistry.cancel(backendWaitTasks, playerUuid) && logger.isDebugEnabled()) {
-            logger.debug("Anulowano backend wait task dla gracza UUID: {}", playerUuid);
-        }
-    }
-
-    private void cancelTimeoutRetryTask(UUID playerUuid) {
-        if (ScheduledTaskRegistry.cancel(timeoutRetryTasks, playerUuid) && logger.isDebugEnabled()) {
-            logger.debug("Anulowano timeout retry task dla gracza UUID: {}", playerUuid);
-        }
-    }
-
-    private void resetTransferState(UUID playerUuid, boolean clearForcedHostTarget) {
-        timeoutRetryScheduled.remove(playerUuid);
-        cancelPendingTransfer(playerUuid);
-        cancelBackendWaitTask(playerUuid);
-        cancelTimeoutRetryTask(playerUuid);
-
-        if (clearForcedHostTarget) {
-            forcedHostTargets.remove(playerUuid);
-        }
-    }
-    
-    /**
-     * Czyści licznik prób i anuluje pending transfers dla gracza (np. przy rozłączeniu).
-     * Zapobiega race conditions gdy gracz szybko się rozłącza i łączy ponownie.
-     * 
-     * @param playerUuid UUID gracza
-     */
-    public void clearRetryAttempts(UUID playerUuid) {
-        PlayerTransferState state = transferStates.get(playerUuid);
-        if (state != null && transferStates.remove(playerUuid, state)) {
-            state.forcedHostTarget().set(null);
-            cancelStateTasks(state);
-        }
-        retryAttempts.remove(playerUuid);
-        backendConnectionOwners.remove(playerUuid);
-        resetTransferState(playerUuid, true);
+        state.forcedHostTarget().set(null);
+        cancelStateTasks(state);
     }
     
     /**
@@ -1491,28 +1511,19 @@ public class ConnectionManager {
      * Anuluje wszystkie pending transfers i czyści wszystkie mapy stanu.
      */
     public void shutdown() {
+        java.util.List<PlayerTransferState> statesToCancel;
         taskLifecycleLock.lock();
         try {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
-            ScheduledTaskRegistry.cancelAll(pendingTransfers);
-            ScheduledTaskRegistry.cancelAll(backendWaitTasks);
-            ScheduledTaskRegistry.cancelAll(timeoutRetryTasks);
-            transferStates.forEach((playerId, state) -> {
-                if (transferStates.remove(playerId, state)) {
-                    cancelStateTasks(state);
-                }
-            });
+            statesToCancel = new java.util.ArrayList<>(transferStates.values());
+            transferStates.clear();
         } finally {
             taskLifecycleLock.unlock();
         }
-        
-        // Wyczyść wszystkie mapy stanu
-        retryAttempts.clear();
-        timeoutRetryScheduled.clear();
-        backendConnectionOwners.clear();
-        forcedHostTargets.clear();
+
+        statesToCancel.forEach(this::cancelStateTasks);
         
         logger.info("ConnectionManager shut down");
     }

@@ -609,7 +609,7 @@ public class AuthListener {
             return;
         }
 
-        clearConnectionBoundState(playerUuid);
+        clearConnectionBoundState(player);
 
         if (logger.isDebugEnabled()) {
             logger.debug(SECURITY_MARKER,
@@ -641,15 +641,15 @@ public class AuthListener {
                 .orElse(true);
     }
 
-    private void clearConnectionBoundState(UUID playerUuid) {
+    private void clearConnectionBoundState(Player player) {
+        UUID playerUuid = player.getUniqueId();
         authCache.removeAuthorizedPlayer(playerUuid);
         authCache.endSession(playerUuid);
         if (plugin.getPendingTotpStore() != null) {
             plugin.getPendingTotpStore().invalidate(playerUuid);
         }
 
-        // Cleanup retry attempts counter to prevent memory leak
-        connectionManager.clearRetryAttempts(playerUuid);
+        connectionManager.clearTransferState(player);
         if (plugin.getAuthTimeoutScheduler() != null) {
             plugin.getAuthTimeoutScheduler().cancel(playerUuid);
         }
@@ -664,11 +664,11 @@ public class AuthListener {
     public void onPostLogin(PostLoginEvent event) {
         Player player = event.getPlayer();
         Player previousConnection = activeConnections.put(player.getUniqueId(), player);
+        connectionManager.beginTransferSession(player);
         if (previousConnection != null && previousConnection != player) {
-            // The old DisconnectEvent may still be queued. Clear its UUID-keyed state before the
-            // replacement connection can consult it, then let the normal post-login path rebuild
-            // only the authorization justified by the new connection.
-            clearConnectionBoundState(player.getUniqueId());
+            // Publish the replacement generation before invalidating A. Its delayed DisconnectEvent
+            // can no longer retire B's state, while UUID-keyed authorization is still reset before routing.
+            clearConnectionBoundState(previousConnection);
             logger.debug(SECURITY_MARKER,
                     "Replaced stale connection owner for {} - previous auth state invalidated",
                     player.getUsername());
@@ -809,7 +809,7 @@ public class AuthListener {
         // ✅ FORCED HOSTS: Zapamiętaj oryginalny target serwer przed przekierowaniem
         // Velocity resolved forced-hosts PRZED tym eventem, więc targetServerName
         // zawiera poprawny serwer z [forced-hosts] lub [servers.try]
-        connectionManager.setForcedHostTarget(player.getUniqueId(), targetServerName);
+        connectionManager.setForcedHostTarget(player, targetServerName);
 
         // Przekieruj na auth server zamiast backend
         Optional<RegisteredServer> authServer = connectionManager.resolveAuthServer();

@@ -42,7 +42,7 @@ final class ScheduledTaskRegistry {
             Function<Consumer<ScheduledTask>, ScheduledTask> scheduler,
             Runnable action) {
         Objects.requireNonNull(task, "task");
-        return replace(new TaskSlot() {
+        PreparedTask prepared = prepare(new TaskSlot() {
             @Override
             public ScheduledTask replace(ScheduledTask replacement) {
                 return task.getAndSet(replacement);
@@ -52,37 +52,42 @@ final class ScheduledTaskRegistry {
             public boolean clear(ScheduledTask expected) {
                 return task.compareAndSet(expected, null);
             }
-        }, scheduler, action);
+        }, action);
+        prepared.cancelPrevious();
+        return prepared.schedule(scheduler);
+    }
+
+    static PreparedTask prepare(AtomicReference<ScheduledTask> task, Runnable action) {
+        Objects.requireNonNull(task, "task");
+        return prepare(new TaskSlot() {
+            @Override
+            public ScheduledTask replace(ScheduledTask replacement) {
+                return task.getAndSet(replacement);
+            }
+
+            @Override
+            public boolean clear(ScheduledTask expected) {
+                return task.compareAndSet(expected, null);
+            }
+        }, action);
     }
 
     private static ScheduledTask replace(
             TaskSlot taskSlot,
             Function<Consumer<ScheduledTask>, ScheduledTask> scheduler,
             Runnable action) {
-        Objects.requireNonNull(scheduler, "scheduler");
+        PreparedTask prepared = prepare(taskSlot, action);
+        prepared.cancelPrevious();
+        return prepared.schedule(scheduler);
+    }
+
+    private static PreparedTask prepare(TaskSlot taskSlot, Runnable action) {
+        Objects.requireNonNull(taskSlot, "taskSlot");
         Objects.requireNonNull(action, "action");
 
         PendingTask pending = new PendingTask();
         ScheduledTask previous = taskSlot.replace(pending);
-        if (previous != null) {
-            previous.cancel();
-        }
-
-        ScheduledTask scheduled;
-        try {
-            scheduled = Objects.requireNonNull(scheduler.apply(ignored -> {
-                if (taskSlot.clear(pending)) {
-                    action.run();
-                }
-            }), "scheduled task");
-        } catch (RuntimeException | LinkageError failure) {
-            taskSlot.clear(pending);
-            pending.cancel();
-            throw failure;
-        }
-
-        pending.attach(scheduled);
-        return scheduled;
+        return new PreparedTask(taskSlot, pending, previous, action);
     }
 
     static boolean cancel(AtomicReference<ScheduledTask> task) {
@@ -116,6 +121,46 @@ final class ScheduledTaskRegistry {
         ScheduledTask replace(ScheduledTask task);
 
         boolean clear(ScheduledTask task);
+    }
+
+    static final class PreparedTask {
+        private final TaskSlot taskSlot;
+        private final PendingTask pending;
+        private final ScheduledTask previous;
+        private final Runnable action;
+
+        private PreparedTask(
+                TaskSlot taskSlot, PendingTask pending, ScheduledTask previous, Runnable action) {
+            this.taskSlot = taskSlot;
+            this.pending = pending;
+            this.previous = previous;
+            this.action = action;
+        }
+
+        void cancelPrevious() {
+            if (previous != null) {
+                previous.cancel();
+            }
+        }
+
+        ScheduledTask schedule(Function<Consumer<ScheduledTask>, ScheduledTask> scheduler) {
+            Objects.requireNonNull(scheduler, "scheduler");
+            ScheduledTask scheduled;
+            try {
+                scheduled = Objects.requireNonNull(scheduler.apply(ignored -> {
+                    if (taskSlot.clear(pending)) {
+                        action.run();
+                    }
+                }), "scheduled task");
+            } catch (RuntimeException | LinkageError failure) {
+                taskSlot.clear(pending);
+                pending.cancel();
+                throw failure;
+            }
+
+            pending.attach(scheduled);
+            return scheduled;
+        }
     }
 
     private static final class PendingTask implements ScheduledTask {

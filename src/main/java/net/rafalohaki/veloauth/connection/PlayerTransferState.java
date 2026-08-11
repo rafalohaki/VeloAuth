@@ -5,6 +5,7 @@ import com.velocitypowered.api.scheduler.ScheduledTask;
 
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -21,6 +22,8 @@ final class PlayerTransferState {
     private final AtomicReference<ScheduledTask> pendingTransfer = new AtomicReference<>();
     private final AtomicReference<ScheduledTask> backendWait = new AtomicReference<>();
     private final AtomicReference<ScheduledTask> timeoutRetry = new AtomicReference<>();
+    private final AtomicReference<ScheduledTask> authReadyRetry = new AtomicReference<>();
+    private final AtomicReference<CompletableFuture<Boolean>> authReadyRetryCompletion = new AtomicReference<>();
 
     PlayerTransferState(UUID playerId, Player owner, long generation) {
         this.playerId = Objects.requireNonNull(playerId, "playerId");
@@ -68,10 +71,23 @@ final class PlayerTransferState {
         return timeoutRetry;
     }
 
+    AtomicReference<ScheduledTask> authReadyRetry() {
+        return authReadyRetry;
+    }
+
+    AtomicReference<CompletableFuture<Boolean>> authReadyRetryCompletion() {
+        return authReadyRetryCompletion;
+    }
+
     void cancelTasks() {
         timeoutRetryActive.set(false);
         ScheduledTaskRegistry.cancel(pendingTransfer);
         ScheduledTaskRegistry.cancel(backendWait);
         ScheduledTaskRegistry.cancel(timeoutRetry);
+        ScheduledTaskRegistry.cancel(authReadyRetry);
+        CompletableFuture<Boolean> retryCompletion = authReadyRetryCompletion.getAndSet(null);
+        if (retryCompletion != null) {
+            retryCompletion.complete(false);
+        }
     }
 }
