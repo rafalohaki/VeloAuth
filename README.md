@@ -383,9 +383,9 @@ SHA-256 `81b2670c017f4f92d7226b0ad3713ee1597364c724d6186ffc12db1a7f3b1d64`:
 
 | Held clients | Joined / keepalive | Unexpected disconnects / failures | Proxy TCP delta | Heap used | Status p95 / max |
 |---:|---:|---:|---:|---:|---:|
-| 1,000 | 1,000 / 1,000 | 0 / 0 | 3,000 | 38.19% | 0.462 / 6.156 ms |
-| 5,000 | 5,000 / 5,000 | 0 / 0 | 14,999 | 67.21% | 0.356 / 3.725 ms |
-| 10,000 | 10,000 / 10,000 | 0 / 0 | 29,999 | 78.63% | 0.761 / 276.624 ms |
+| 1,000 | 1,000 / 1,000 | 0 / 0 | 3,000 | 36.85% | 0.644 / 7.098 ms |
+| 5,000 | 5,000 / 5,000 | 0 / 0 | 14,999 | 72.92% | 0.432 / 2.760 ms |
+| 10,000 | 10,000 / 10,000 | 0 / 0 | 29,999 | 85.29% | 0.357 / 4.036 ms |
 
 This is a capacity regression baseline, not a universal hosting promise. The 10k run requires a
 high file-descriptor limit and enough separate loopback ephemeral-port capacity; the harness uses
