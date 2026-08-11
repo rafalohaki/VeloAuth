@@ -82,7 +82,8 @@ wget https://github.com/rafalohaki/VeloAuth/releases/download/v{{VERSION}}/veloa
 4. Run `./mvnw -B -V clean verify pmd:cpd-check -DskipTests=false`,
    `./scripts/verify-release-identity.sh v{{VERSION}}`,
    `./scripts/verify-embedded-dependencies.sh`, `./scripts/test-velocity-embedded.sh`,
-   `./scripts/test-postgresql.sh` and `./scripts/test-mysql.sh`; retain the CI logs with the release.
+   `./scripts/test-velocity-external.sh`, `./scripts/test-postgresql.sh` and
+   `./scripts/test-mysql.sh`; retain the CI logs and external-smoke evidence with the release.
    The identity command must validate the adjacent checksum and release manifest. Retain the
    candidate workflow artifact and verify it with `verify-release-candidate.sh --existing`; never
    substitute a later local build.

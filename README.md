@@ -838,6 +838,14 @@ registration/UPSERT invariants on Connector/J. Both use ephemeral containers and
 afterwards. GitHub Actions runs the normal build and both database gates before uploading a release
 artifact.
 
+`./scripts/test-velocity-external.sh` is the external-mode release canary. It downloads only the
+hard-pinned, SHA-256-verified Velocity 3.5 build 609 and NanoLimbo 1.13.0, starts distinct auth and
+backend servers, then drives a real Minecraft 26.2 cracked connection through register, logout,
+login, disconnect, reconnect, reauthentication and backend transfer. It scans generated files for
+the disposable password and retains the process logs plus hashes in `target/external-smoke-evidence.*`.
+This does not impersonate a paid Mojang session or Floodgate identity; those two journeys still
+require real staging credentials/infrastructure.
+
 The normal suite also performs a native 1.8 login, bidirectional protocol-47 keepalive checks,
 translated status handshakes for representative 1.12.2, 1.16.5, 1.20.1 and 1.21.4 clients, and a
 complete MCProtocolLib 26.2 login held through the first keepalive. That latest-client path also
