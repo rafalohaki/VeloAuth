@@ -307,9 +307,10 @@ Maintainers can also preflight and package the current snapshot without editing 
 The script pins the resolved timestamp, URL and hashes into
 `META-INF/veloauth/embedded-runtime.properties`, runs Maven/JaCoCo/PMD/CPD and uses the resulting JAR
 in a real Velocity smoke test. `--resolve-only` tests repository resolution, while `--skip-smoke`
-is intended only for local diagnostics. An ordinary `mvnd clean verify` proves the test, coverage
+is intended only for local diagnostics. An ordinary `./mvnw clean verify` proves the test, coverage
 and static-analysis gates; it does not by itself prove byte-for-byte reproducibility or publication
-provenance. Those are separate release-candidate gates.
+provenance. Those are separate release-candidate gates. The checked-in Maven Wrapper pins Maven
+3.9.16 and verifies the official distribution checksum before use.
 
 For a repeatable local direct-listener baseline, run:
 
@@ -690,8 +691,19 @@ attestation or upload:
 ./scripts/verify-release-identity.sh v1.5.0
 ```
 
-This identity check is necessary but not sufficient for production: reproducibility, provenance,
-the external-limbo canary and explicit operator approval remain separate gates.
+Prove byte-for-byte reproducibility from a clean committed HEAD with the exact Temurin 21.0.12+8
+toolchain. The verifier creates two local, no-hardlink clones, gives each build an isolated Maven
+repository, builds both through the checked-in wrapper and compares their JAR bytes:
+
+```bash
+VELOAUTH_JAVA21_HOME=/path/to/temurin-21.0.12+8/Contents/Home \
+  ./scripts/verify-reproducible-jar.sh
+```
+
+On macOS the verifier also checks `java_home`, then `JAVA_HOME` and `PATH`, but accepts only that
+exact Temurin build. It never installs a JDK silently. This identity and reproducibility evidence is
+necessary but not sufficient for production: provenance, the external-limbo canary and explicit
+operator approval remain separate gates.
 
 The PostgreSQL harness verifies case-insensitive premium nickname reconciliation, batched conflict
 deletion, idempotent LimboAuth migration, insert-only registration ownership and concurrent AUTH

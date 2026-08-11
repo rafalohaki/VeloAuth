@@ -56,10 +56,10 @@ if [[ "${TEST_MODE}" == true ]]; then
   MAVEN=("${MAVEN_OVERRIDE}")
 else
   PROJECT_DIR="${DEFAULT_PROJECT_DIR}"
-  if command -v mvnd >/dev/null 2>&1; then
-    MAVEN=(mvnd)
-  elif [[ -x "${PROJECT_DIR}/mvnw" ]]; then
+  if [[ -x "${PROJECT_DIR}/mvnw" ]]; then
     MAVEN=("${PROJECT_DIR}/mvnw")
+  elif command -v mvnd >/dev/null 2>&1; then
+    MAVEN=(mvnd)
   elif command -v mvn >/dev/null 2>&1; then
     MAVEN=(mvn)
   else
