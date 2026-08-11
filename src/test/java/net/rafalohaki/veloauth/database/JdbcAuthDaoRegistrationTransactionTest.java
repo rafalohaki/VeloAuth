@@ -101,6 +101,18 @@ class JdbcAuthDaoRegistrationTransactionTest {
     }
 
     @Test
+    void registrationCommitPermit_EarlyTerminalDecisionWins_TimeoutDoesNothing() {
+        DatabaseManager.RegistrationCommitPermit permit =
+                new DatabaseManager.RegistrationCommitPermit();
+
+        assertTrue(permit.tryCompleteWithoutCommit());
+        assertEquals(DatabaseManager.RegistrationTimeoutDisposition.NO_ACTION,
+                permit.onTimeout());
+        assertFalse(permit.tryBeginCommit());
+        assertFalse(permit.isCancelled());
+    }
+
+    @Test
     void insertPlayerIfAbsent_Duplicate_RollsBackBeforeReturningDuplicate() throws Exception {
         ControlledJdbc controlled = controlledJdbc();
         when(controlled.statement().executeUpdate())

@@ -78,15 +78,16 @@ class RegisterCommand implements SimpleCommand {
         if (commitPermit.isCancelled()) {
             return;
         }
-        if (!ctx.beginConnectionCommand(player, operation)) {
+        if (!ctx.beginConnectionCommand(player, operation, commitPermit)) {
             return;
         }
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
         if (!canProceedWithoutAddress(
-                player, playerAddress, operation, passwordSettings)) {
+                player, playerAddress, operation, passwordSettings, commitPermit)) {
             return;
         }
-        IpLockState ipLock = tryAcquireRegistrationIpLock(player, playerAddress, operation);
+        IpLockState ipLock = tryAcquireRegistrationIpLock(
+                player, playerAddress, operation, commitPermit);
         if (!ipLock.proceed()) {
             return;
         }
@@ -95,7 +96,8 @@ class RegisterCommand implements SimpleCommand {
                     player, password, playerAddress, operation, passwordSettings,
                     commitPermit);
         } catch (CompletionException e) {
-            if (!commitPermit.isCancelled()) {
+            if (commitPermit.tryCompleteWithoutCommit()
+                    || !commitPermit.isCancelled()) {
                 ctx.logger().error(DB_MARKER,
                         "Database error during registration for player {}",
                         player.getUsername(), e);
@@ -117,14 +119,16 @@ class RegisterCommand implements SimpleCommand {
     private boolean canProceedWithoutAddress(
             Player player, InetAddress playerAddress,
             ConnectionLifecycleRegistry.Operation operation,
-            Settings.PasswordSettings passwordSettings) {
+            Settings.PasswordSettings passwordSettings,
+            DatabaseManager.RegistrationCommitPermit commitPermit) {
         if (playerAddress != null || passwordSettings.ipLimitRegistrations() <= 0) {
             return true;
         }
         ctx.logger().warn(DB_MARKER,
                 "Refusing registration of {} — cannot resolve remote IP (ip-limit-registrations enabled)",
                 player.getUsername());
-        ctx.runIfConnectionCurrent(operation,
+        ctx.completeRegistrationWithoutCommit(
+                operation, commitPermit,
                 () -> player.sendMessage(ctx.sm().bruteForceBlocked()));
         ctx.releaseCommandLock(operation.playerId(), operation);
         return false;
@@ -135,7 +139,8 @@ class RegisterCommand implements SimpleCommand {
     // count < limit and both succeed, exceeding the configured ceiling.
     private IpLockState tryAcquireRegistrationIpLock(
             Player player, InetAddress playerAddress,
-            ConnectionLifecycleRegistry.Operation operation) {
+            ConnectionLifecycleRegistry.Operation operation,
+            DatabaseManager.RegistrationCommitPermit commitPermit) {
         if (playerAddress == null) {
             return new IpLockState(true, null);
         }
@@ -144,7 +149,9 @@ class RegisterCommand implements SimpleCommand {
         if (lease != null) {
             return new IpLockState(true, lease);
         }
-        ctx.runIfConnectionCurrent(operation, () -> ctx.sendCommandInProgress(player));
+        ctx.completeRegistrationWithoutCommit(
+                operation, commitPermit,
+                () -> ctx.sendCommandInProgress(player));
         ctx.releaseCommandLock(operation.playerId(), operation);
         return new IpLockState(false, null);
     }
@@ -160,25 +167,28 @@ class RegisterCommand implements SimpleCommand {
         if (commitPermit.isCancelled()) {
             return;
         }
-        if (ctx.rejectRateLimited(player, playerAddress, operation)) {
+        if (ctx.rejectRateLimited(player, playerAddress, operation, commitPermit)) {
             return;
         }
 
         AuthenticationContext authContext = ctx.validateAndAuthenticatePlayer(
-                player, "registration", operation);
+                player, "registration", operation, commitPermit);
         if (authContext == null) {
             return;
         }
 
         if (authContext.registeredPlayer() != null) {
-            ctx.runIfConnectionCurrent(authContext.connectionOperation(),
+            ctx.completeRegistrationWithoutCommit(
+                    authContext.connectionOperation(), commitPermit,
                     () -> authContext.player().sendMessage(ctx.sm().alreadyRegistered()));
             return;
         }
 
         if (exceedsIpRegistrationLimit(authContext, passwordSettings)) {
-            ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> player.sendMessage(
-                    ctx.messages().component("register.ip_limit_reached", NamedTextColor.RED)));
+            ctx.completeRegistrationWithoutCommit(
+                    authContext.connectionOperation(), commitPermit,
+                    () -> player.sendMessage(ctx.messages().component(
+                            "register.ip_limit_reached", NamedTextColor.RED)));
             return;
         }
 
@@ -230,6 +240,11 @@ class RegisterCommand implements SimpleCommand {
         var saveResult = ctx.databaseManager()
                 .registerPlayerIfAbsent(newPlayer, commitPermit).join();
         if (!ctx.isConnectionCurrent(authContext.connectionOperation())) {
+            return false;
+        }
+        if (saveResult.isDatabaseError()
+                && !commitPermit.tryCompleteWithoutCommit()
+                && commitPermit.isCancelled()) {
             return false;
         }
         if (ctx.handleDatabaseError(saveResult, authContext.username(), authContext.player(),

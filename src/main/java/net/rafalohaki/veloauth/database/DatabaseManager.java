@@ -811,12 +811,12 @@ public class DatabaseManager {
             publishCreatedRegistration(player, outcome);
             return DbResult.success(outcome);
         } catch (SQLException e) {
+            permit.markFailed();
             RegistrationResult resolvedOutcome = permit.resolvedResult();
             if (resolvedOutcome != null) {
                 publishCreatedRegistration(player, resolvedOutcome);
                 return DbResult.success(resolvedOutcome);
             }
-            permit.markFailed();
             logDatabaseOperationFailure("player registration", player.getNickname(), e);
             return genericDatabaseErrorResult();
         }
@@ -1248,9 +1248,20 @@ public class DatabaseManager {
                 case COMMITTING -> RegistrationTimeoutDisposition.COMMIT_IN_PROGRESS;
                 case COMMITTED -> RegistrationTimeoutDisposition.COMMIT_COMPLETED;
                 case COMMIT_UNKNOWN -> RegistrationTimeoutDisposition.COMMIT_UNKNOWN;
-                case PRE_COMMIT, CANCELLED, DUPLICATE, FAILED ->
+                case PRE_COMMIT, CANCELLED, COMPLETED_WITHOUT_COMMIT, DUPLICATE, FAILED ->
                         RegistrationTimeoutDisposition.NO_ACTION;
             };
+        }
+
+        /**
+         * Claims an early terminal command decision that will never reach JDBC commit.
+         * This CAS shares the timeout linearization point, so exactly one side may publish its
+         * player-facing outcome.
+         */
+        public boolean tryCompleteWithoutCommit() {
+            return state.compareAndSet(
+                    RegistrationCommitState.PRE_COMMIT,
+                    RegistrationCommitState.COMPLETED_WITHOUT_COMMIT);
         }
 
         public boolean tryBeginCommit() {
@@ -1307,7 +1318,7 @@ public class DatabaseManager {
                 case COMMIT_UNKNOWN -> RegistrationResult.COMMIT_UNKNOWN;
                 case DUPLICATE -> RegistrationResult.DUPLICATE;
                 case CANCELLED -> RegistrationResult.CANCELLED;
-                case PRE_COMMIT, COMMITTING, FAILED -> null;
+                case PRE_COMMIT, COMPLETED_WITHOUT_COMMIT, COMMITTING, FAILED -> null;
             };
         }
     }
@@ -1315,6 +1326,7 @@ public class DatabaseManager {
     private enum RegistrationCommitState {
         PRE_COMMIT,
         CANCELLED,
+        COMPLETED_WITHOUT_COMMIT,
         COMMITTING,
         COMMITTED,
         COMMIT_UNKNOWN,

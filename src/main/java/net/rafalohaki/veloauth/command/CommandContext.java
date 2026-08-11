@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.command;
 
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.proxy.Player;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
@@ -26,6 +27,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * Shared context for all command implementations.
@@ -142,6 +144,26 @@ class CommandContext {
     AuthenticationContext validateAndAuthenticatePlayer(
             Player player, String commandName,
             ConnectionLifecycleRegistry.Operation operation) {
+        return validateAndAuthenticatePlayer(
+                player, commandName, operation,
+                message -> runIfConnectionCurrent(
+                        operation, () -> player.sendMessage(message)));
+    }
+
+    AuthenticationContext validateAndAuthenticatePlayer(
+            Player player, String commandName,
+            ConnectionLifecycleRegistry.Operation operation,
+            DatabaseManager.RegistrationCommitPermit permit) {
+        return validateAndAuthenticatePlayer(
+                player, commandName, operation,
+                message -> completeRegistrationWithoutCommit(
+                        operation, permit, () -> player.sendMessage(message)));
+    }
+
+    private AuthenticationContext validateAndAuthenticatePlayer(
+            Player player, String commandName,
+            ConnectionLifecycleRegistry.Operation operation,
+            Consumer<Component> messageSender) {
         if (!isConnectionCurrent(operation)) {
             return null;
         }
@@ -149,7 +171,7 @@ class CommandContext {
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
 
         if (playerAddress != null && authCache.isBlocked(playerAddress, player.getUsername())) {
-            runIfConnectionCurrent(operation, () -> player.sendMessage(sm.bruteForceBlocked()));
+            messageSender.accept(sm.bruteForceBlocked());
             if (logger.isWarnEnabled()) {
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} attempted {}", playerAddress.getHostAddress(), commandName);
             }
@@ -162,12 +184,13 @@ class CommandContext {
             dbResult = databaseManager.findPlayerByNickname(username).join();
         } catch (CompletionException e) {
             logger.error(DB_MARKER, "Database error during {} for player {}", commandName, username, e);
-            runIfConnectionCurrent(operation, () -> player.sendMessage(sm.errorDatabase()));
+            messageSender.accept(sm.errorDatabase());
             return null;
         }
 
-        if (handleDatabaseError(
-                dbResult, username, player, commandName + " lookup for", operation)) {
+        if (DatabaseErrorHandler.handleError(
+                dbResult, username, commandName + " lookup for", logger, messages,
+                messageSender)) {
             return null;
         }
 
@@ -332,6 +355,15 @@ class CommandContext {
         return disposition;
     }
 
+    boolean completeRegistrationWithoutCommit(
+            ConnectionLifecycleRegistry.Operation operation,
+            DatabaseManager.RegistrationCommitPermit permit, Runnable effect) {
+        if (!permit.tryCompleteWithoutCommit()) {
+            return false;
+        }
+        return runIfConnectionCurrent(operation, effect);
+    }
+
     private void sendRegistrationDeadlineMessage(
             Player player, ConnectionLifecycleRegistry.Operation operation,
             String messageKey, NamedTextColor color) {
@@ -373,6 +405,20 @@ class CommandContext {
         return false;
     }
 
+    boolean beginConnectionCommand(
+            Player player, ConnectionLifecycleRegistry.Operation operation,
+            DatabaseManager.RegistrationCommitPermit permit) {
+        if (!isConnectionCurrent(operation)) {
+            return false;
+        }
+        if (tryAcquireCommandLock(operation.playerId(), operation)) {
+            return true;
+        }
+        completeRegistrationWithoutCommit(
+                operation, permit, () -> sendCommandInProgress(player));
+        return false;
+    }
+
     boolean rejectRateLimited(
             Player player, InetAddress address,
             ConnectionLifecycleRegistry.Operation operation) {
@@ -380,6 +426,19 @@ class CommandContext {
             return false;
         }
         runIfConnectionCurrent(operation, () -> player.sendMessage(sm.bruteForceBlocked()));
+        return true;
+    }
+
+    boolean rejectRateLimited(
+            Player player, InetAddress address,
+            ConnectionLifecycleRegistry.Operation operation,
+            DatabaseManager.RegistrationCommitPermit permit) {
+        if (address == null || !ipRateLimiter.isRateLimited(address)) {
+            return false;
+        }
+        completeRegistrationWithoutCommit(
+                operation, permit,
+                () -> player.sendMessage(sm.bruteForceBlocked()));
         return true;
     }
 

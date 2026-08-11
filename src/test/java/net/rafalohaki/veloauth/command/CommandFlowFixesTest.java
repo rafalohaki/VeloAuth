@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -542,6 +543,44 @@ class CommandFlowFixesTest {
                 .equals(messages.get("auth.registration.timeout")));
     }
 
+    @ParameterizedTest
+    @EnumSource(LateRegistrationDecision.class)
+    void registrationTimeout_BlockedPreCommitDecisionCompletesLate_EmitsOnlyTimeout(
+            LateRegistrationDecision lateDecision) throws Exception {
+        CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> lookup =
+                new CompletableFuture<>();
+        CountDownLatch lookupEntered = new CountDownLatch(1);
+        databaseManager.setFindResult(TEST_PLAYER_NAME, lookup);
+        databaseManager.setFindEnteredLatch(lookupEntered);
+        if (lateDecision == LateRegistrationDecision.IP_LIMIT) {
+            databaseManager.setRegistrationCount(
+                    CompletableFuture.completedFuture(Long.MAX_VALUE));
+        }
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            CapturingAsyncCommandContext context = new CapturingAsyncCommandContext(
+                    plugin, databaseManager, authCache, settings, messages, executor);
+            new RegisterCommand(context)
+                    .execute(invocation(player, "secret123", "secret123"));
+
+            assertTrue(lookupEntered.await(5, TimeUnit.SECONDS),
+                    "Registration must be parked in the controlled lookup");
+            assertEquals(
+                    DatabaseManager.RegistrationTimeoutDisposition.CANCELLED_BEFORE_COMMIT,
+                    context.triggerRegistrationTimeout());
+            lookup.complete(lateDecision.lookupResult());
+            context.submitted().get(5, TimeUnit.SECONDS);
+        }
+
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
+        assertEquals(List.of(messages.get("auth.registration.timeout")),
+                capturedTexts(messagesCaptor),
+                "The timeout must own the only terminal player message");
+        verify(connectionManager, never()).transferToBackend(player);
+        assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP));
+    }
+
     @Test
     void testRegisterCommand_CommitOutcomeUnknown_ShowsConservativeMessageAndNoSuccess() {
         databaseManager.setFindResult(TEST_PLAYER_NAME,
@@ -838,6 +877,26 @@ class CommandFlowFixesTest {
                 .toList();
     }
 
+    private enum LateRegistrationDecision {
+        ALREADY_REGISTERED,
+        IP_LIMIT,
+        DATABASE_ERROR;
+
+        private DatabaseManager.DbResult<RegisteredPlayer> lookupResult() {
+            return switch (this) {
+                case ALREADY_REGISTERED -> DatabaseManager.DbResult.success(
+                        new RegisteredPlayer(
+                                TEST_PLAYER_NAME,
+                                "$2a$10$offlinehashvalueofflinehashvalueofflinehashval",
+                                TEST_IP,
+                                UUID.randomUUID().toString()));
+                case IP_LIMIT -> DatabaseManager.DbResult.success(null);
+                case DATABASE_ERROR -> DatabaseManager.DbResult.databaseError(
+                        "controlled lookup failure");
+            };
+        }
+    }
+
     private void setConnectionManager(ConnectionManager manager) throws Exception {
         Field connectionManagerField = VeloAuth.class.getDeclaredField("connectionManager");
         connectionManagerField.setAccessible(true);
@@ -900,6 +959,9 @@ class CommandFlowFixesTest {
     private static final class CapturingAsyncCommandContext extends CommandContext {
         private final ExecutorService executor;
         private volatile Future<?> submitted;
+        private volatile Player registrationPlayer;
+        private volatile ConnectionLifecycleRegistry.Operation registrationOperation;
+        private volatile DatabaseManager.RegistrationCommitPermit registrationPermit;
 
         private CapturingAsyncCommandContext(
                 VeloAuth plugin, DatabaseManager databaseManager, AuthCache authCache,
@@ -938,7 +1000,19 @@ class CommandFlowFixesTest {
                 Player player, ConnectionLifecycleRegistry.Operation operation,
                 DatabaseManager.RegistrationCommitPermit permit, Runnable task,
                 String errorKey) {
+            registrationPlayer = player;
+            registrationOperation = operation;
+            registrationPermit = permit;
             submitted = executor.submit(task);
+        }
+
+        private DatabaseManager.RegistrationTimeoutDisposition triggerRegistrationTimeout() {
+            if (registrationPlayer == null || registrationOperation == null
+                    || registrationPermit == null) {
+                throw new IllegalStateException("Registration timeout state was not captured");
+            }
+            return handleRegistrationTimeout(
+                    registrationPlayer, registrationOperation, registrationPermit);
         }
 
         private Future<?> submitted() {
@@ -991,6 +1065,10 @@ class CommandFlowFixesTest {
 
         void setFindEnteredLatch(CountDownLatch latch) {
             findEnteredLatch = latch;
+        }
+
+        void setRegistrationCount(CompletableFuture<Long> result) {
+            registrationCount = result;
         }
 
         void setPremiumResult(String username, CompletableFuture<DbResult<Boolean>> result) {

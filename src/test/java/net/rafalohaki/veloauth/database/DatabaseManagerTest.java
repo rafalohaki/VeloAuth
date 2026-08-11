@@ -13,6 +13,8 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -20,11 +22,15 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
 
 @SuppressWarnings("null") // Eclipse JDT false positives: assertNotNull / isDatabaseError guarantee non-null but JDT cannot track these contracts
 class DatabaseManagerTest {
+
+    private static final long LATCH_TIMEOUT_SECONDS = 5L;
 
     private Messages messages;
     private DatabaseManager manager;
@@ -241,6 +247,41 @@ class DatabaseManagerTest {
         assertTrue(result.isDatabaseError());
         assertEquals(messages.get("database.error"), result.getErrorMessage());
         assertFalse(result.getErrorMessage().contains("secret values"));
+    }
+
+    @Test
+    void registerPlayerIfAbsent_TimeoutWinsBetweenFailureSnapshotAndMarkFailed_ReturnsCancelled()
+            throws Exception {
+        JdbcAuthDao jdbcAuthDao = mock(JdbcAuthDao.class);
+        RegisteredPlayer player = player(
+                "RegisterTimeout", "$2a$10$offlinehashvalueofflinehashvalueofflinehashval", null);
+        DatabaseManager.RegistrationCommitPermit permit =
+                spy(new DatabaseManager.RegistrationCommitPermit());
+        CountDownLatch markFailedEntered = new CountDownLatch(1);
+        CountDownLatch releaseMarkFailed = new CountDownLatch(1);
+        when(jdbcAuthDao.insertPlayerIfAbsent(player, permit))
+                .thenThrow(new SQLException("controlled pre-commit failure"));
+        doAnswer(invocation -> {
+            markFailedEntered.countDown();
+            assertTrue(releaseMarkFailed.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            return invocation.callRealMethod();
+        }).when(permit).markFailed();
+
+        manager.setConnectedForTesting(true);
+        manager.setJdbcAuthDaoForTesting(jdbcAuthDao);
+
+        var resultFuture = manager.registerPlayerIfAbsent(player, permit);
+        assertTrue(markFailedEntered.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Manager must pause at the PRE_COMMIT failure terminalization point");
+        assertEquals(
+                DatabaseManager.RegistrationTimeoutDisposition.CANCELLED_BEFORE_COMMIT,
+                permit.onTimeout());
+        releaseMarkFailed.countDown();
+        DatabaseManager.DbResult<DatabaseManager.RegistrationResult> result =
+                resultFuture.get(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertFalse(result.isDatabaseError());
+        assertEquals(DatabaseManager.RegistrationResult.CANCELLED, result.getValue());
     }
 
     @Test
