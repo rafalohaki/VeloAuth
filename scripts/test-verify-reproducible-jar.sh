@@ -143,15 +143,26 @@ BUILD_AFFECTING_ENVIRONMENT=(
   MAVEN_PROJECTBASEDIR
   MVNW_REPOURL
 )
+CLEAN_BUILD_ENVIRONMENT=(env)
+for variable_name in "${BUILD_AFFECTING_ENVIRONMENT[@]}"; do
+  CLEAN_BUILD_ENVIRONMENT+=(-u "${variable_name}")
+done
 for variable_name in "${BUILD_AFFECTING_ENVIRONMENT[@]}"; do
   ENVIRONMENT_OUTPUT="${TEMP_DIR}/environment-${variable_name}.out"
-  run_expect_failure "${ENVIRONMENT_OUTPUT}" env \
+  run_expect_failure "${ENVIRONMENT_OUTPUT}" "${CLEAN_BUILD_ENVIRONMENT[@]}" \
     VELOAUTH_JAVA21_HOME="${TEMP_DIR}/missing-jdk" \
     "${variable_name}=fixture-override" "${VERIFIER}"
   grep -Fq "Build-affecting environment variable must be empty or unset: ${variable_name}" \
     "${ENVIRONMENT_OUTPUT}" \
     || fail "${variable_name} must fail before JDK discovery or either Maven build"
 done
+EMPTY_ENVIRONMENT_OUTPUT="${TEMP_DIR}/environment-empty.out"
+run_expect_failure "${EMPTY_ENVIRONMENT_OUTPUT}" "${CLEAN_BUILD_ENVIRONMENT[@]}" \
+  VELOAUTH_JAVA21_HOME="${TEMP_DIR}/missing-jdk" MAVEN_ARGS= "${VERIFIER}"
+if grep -Fq "Build-affecting environment variable must be empty or unset" \
+    "${EMPTY_ENVIRONMENT_OUTPUT}"; then
+  fail "an explicitly empty build-affecting variable must remain allowed"
+fi
 
 CLEANUP_PARENT="${TEMP_DIR}/cleanup-parent"
 mkdir -p "${CLEANUP_PARENT}/unrelated-sibling"
