@@ -361,6 +361,41 @@ overhead, so it is useful for before/after regression checks but does not certif
 + ViaVersion topology. Production capacity still requires a real-proxy load test with
 representative protocol versions, file-descriptor monitoring, JFR, heap/RSS, GC and event-loop lag.
 
+The opt-in full-proxy profile supplies that repeatable release baseline for held authentication
+clients:
+
+```bash
+JAVA_HOME=/absolute/path/to/temurin-21 \
+VELOAUTH_CAPACITY_JAVA=/absolute/path/to/temurin-21/bin/java \
+VELOAUTH_PLUGIN_JAR=/absolute/path/to/veloauth-1.5.0.jar \
+./scripts/profile-velocity-embedded.sh
+```
+
+It starts checksum-pinned Velocity 3.5 build 609, drives real Minecraft 26.2 logins through
+Velocity and the translated embedded endpoint, and holds plateaus of 1,000, 5,000 and 10,000
+clients. Every client must join, receive a keepalive and remain connected; each plateau also proves
+the Velocity-owned command path. The gate validates socket ratios, status latency, heap headroom,
+candidate immutability and clean shutdown, and retains JFR, NMT, GC, heap, class-histogram, RSS and
+socket evidence below `target/velocity-capacity-evidence.*`.
+
+The 2026-08-12 macOS reference run used exact Temurin 21.0.12+8, a 10 GiB proxy heap and candidate
+SHA-256 `81b2670c017f4f92d7226b0ad3713ee1597364c724d6186ffc12db1a7f3b1d64`:
+
+| Held clients | Joined / keepalive | Unexpected disconnects / failures | Proxy TCP delta | Heap used | Status p95 / max |
+|---:|---:|---:|---:|---:|---:|
+| 1,000 | 1,000 / 1,000 | 0 / 0 | 3,000 | 38.19% | 0.462 / 6.156 ms |
+| 5,000 | 5,000 / 5,000 | 0 / 0 | 14,999 | 67.21% | 0.356 / 3.725 ms |
+| 10,000 | 10,000 / 10,000 | 0 / 0 | 29,999 | 78.63% | 0.761 / 276.624 ms |
+
+This is a capacity regression baseline, not a universal hosting promise. The 10k run requires a
+high file-descriptor limit and enough separate loopback ephemeral-port capacity; the harness uses
+IPv6 for the client-to-proxy leg on macOS so it does not consume the same IPv4 port pool as the
+proxy-to-limbo leg. One recoverable macOS kqueue `EINVAL` warning occurred during the 10k ramp with
+zero lost clients. Before selecting a production cap, repeat the profile and a longer soak on the
+actual Linux kernel, JVM flags, forwarding mode and plugin set. Keep at least 20% measured heap
+headroom; 12 GiB is the conservative starting heap for a 10k canary even though the reference gate
+passed with 10 GiB.
+
 To retain an existing standalone limbo, use:
 
 ```yaml

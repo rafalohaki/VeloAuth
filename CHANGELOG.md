@@ -21,6 +21,10 @@ All notable user-visible changes to VeloAuth are documented in this file.
   family, language bucket and premium/Floodgate/2FA feature adoption.
 - An opt-in embedded listener/framing benchmark with configurable held connections and login
   concurrency for repeatable before/after capacity checks.
+- An opt-in real Velocity capacity profile with 1k/5k/10k Minecraft 26.2 plateaus, socket and heap
+  budgets, JFR/NMT/GC evidence, candidate re-hashing and clean-shutdown verification. The recorded
+  10k reference run completed every login and keepalive with zero client failures; production caps
+  still require a target-Linux soak.
 - `connection.auto-transfer-delay-ms` (default `1500`, range `0-30000`) controls the compatibility
   buffer before automatic auth/limbo-to-backend transfers.
 - Protocol-47 embedded limbo sends explicit spectator `PlayerAbilities` and `MC|Brand`
