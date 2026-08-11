@@ -166,18 +166,86 @@ final class JdbcAuthDao {
      * @return {@code true} when the row was created; {@code false} when it already existed
      */
     public boolean insertPlayerIfAbsent(RegisteredPlayer player) throws SQLException {
+        DatabaseManager.RegistrationCommitPermit permit =
+                new DatabaseManager.RegistrationCommitPermit();
+        DatabaseManager.RegistrationResult result = insertPlayerIfAbsent(player, permit);
+        if (result == DatabaseManager.RegistrationResult.COMMIT_UNKNOWN) {
+            throw new SQLException("Registration commit outcome is unknown");
+        }
+        return result == DatabaseManager.RegistrationResult.CREATED;
+    }
+
+    DatabaseManager.RegistrationResult insertPlayerIfAbsent(
+            RegisteredPlayer player,
+            DatabaseManager.RegistrationCommitPermit permit) throws SQLException {
         Objects.requireNonNull(player, "player must not be null");
+        Objects.requireNonNull(permit, "permit must not be null");
+        if (permit.isCancelled()) {
+            return DatabaseManager.RegistrationResult.CANCELLED;
+        }
 
         try (Connection connection = openConnection()) {
-            try {
-                executeInsert(connection, player);
-                return true;
-            } catch (SQLException e) {
-                if (isDuplicateKeyViolation(e)) {
-                    return false;
-                }
-                throw e;
+            connection.setAutoCommit(false);
+            if (permit.isCancelled()) {
+                connection.rollback();
+                return DatabaseManager.RegistrationResult.CANCELLED;
             }
+            return executeRegistrationTransaction(connection, player, permit);
+        }
+    }
+
+    private DatabaseManager.RegistrationResult executeRegistrationTransaction(
+            Connection connection, RegisteredPlayer player,
+            DatabaseManager.RegistrationCommitPermit permit) throws SQLException {
+        try {
+            int inserted = executeInsert(connection, player);
+            if (inserted != 1) {
+                throw new SQLException("AUTH registration inserted an unexpected row count");
+            }
+            if (!permit.tryBeginCommit()) {
+                connection.rollback();
+                return DatabaseManager.RegistrationResult.CANCELLED;
+            }
+            return commitRegistration(connection, permit);
+        } catch (SQLException exception) {
+            rollbackAfterRegistrationFailure(connection, exception);
+            if (permit.isCancelled()) {
+                return DatabaseManager.RegistrationResult.CANCELLED;
+            }
+            if (isDuplicateKeyViolation(exception)) {
+                permit.markDuplicate();
+                return DatabaseManager.RegistrationResult.DUPLICATE;
+            }
+            permit.markFailed();
+            throw exception;
+        }
+    }
+
+    private DatabaseManager.RegistrationResult commitRegistration(
+            Connection connection,
+            DatabaseManager.RegistrationCommitPermit permit) {
+        try {
+            connection.commit();
+            permit.markCommitted();
+            return DatabaseManager.RegistrationResult.CREATED;
+        } catch (SQLException commitException) {
+            permit.markCommitUnknown();
+            try {
+                connection.rollback();
+            } catch (SQLException rollbackException) {
+                commitException.addSuppressed(rollbackException);
+            }
+            return DatabaseManager.RegistrationResult.COMMIT_UNKNOWN;
+        }
+    }
+
+    private void rollbackAfterRegistrationFailure(
+            Connection connection, SQLException failure) throws SQLException {
+        try {
+            connection.rollback();
+        } catch (SQLException rollbackException) {
+            rollbackException.addSuppressed(failure);
+            throw rollbackException;
         }
     }
 
@@ -278,10 +346,10 @@ final class JdbcAuthDao {
         }
     }
 
-    private void executeInsert(Connection connection, RegisteredPlayer player) throws SQLException {
+    private int executeInsert(Connection connection, RegisteredPlayer player) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(insertPlayerSql)) {
             bindInsert(statement, player);
-            statement.executeUpdate();
+            return statement.executeUpdate();
         }
     }
 

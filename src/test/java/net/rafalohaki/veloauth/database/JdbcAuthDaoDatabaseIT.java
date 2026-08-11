@@ -6,6 +6,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import javax.sql.DataSource;
 import java.net.InetAddress;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -86,6 +87,44 @@ class JdbcAuthDaoDatabaseIT {
 
     @Test
     @SuppressWarnings("PMD.UnitTestContainsTooManyAsserts")
+    void insertPlayerIfAbsentTimeoutDuringBlockedInsertShouldRollbackWithoutCreatingRow()
+            throws Exception {
+        String nickname = uniqueNickname("Cancel");
+        RegisteredPlayer registration = player(nickname, OWNER_HASH);
+        CountDownLatch insertEntered = new CountDownLatch(1);
+        DatabaseManager.RegistrationCommitPermit permit =
+                new DatabaseManager.RegistrationCommitPermit();
+
+        try (Connection blocker = DriverManager.getConnection(
+                databaseUrl, databaseUser, databasePassword);
+             ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            blocker.setAutoCommit(false);
+            insertAuthRow(blocker, registration);
+            JdbcAuthDao controlledDao = daoWithObservedInsert(insertEntered);
+            Future<DatabaseManager.RegistrationResult> result = executor.submit(
+                    () -> controlledDao.insertPlayerIfAbsent(registration, permit));
+            try {
+                assertTrue(insertEntered.await(5, java.util.concurrent.TimeUnit.SECONDS),
+                        "Registration insert must reach the database lock");
+                assertEquals(
+                        DatabaseManager.RegistrationTimeoutDisposition.CANCELLED_BEFORE_COMMIT,
+                        permit.onTimeout(),
+                        "The command deadline must cancel before the transaction claims commit");
+            } finally {
+                blocker.rollback();
+            }
+
+            assertEquals(DatabaseManager.RegistrationResult.CANCELLED,
+                    result.get(5, java.util.concurrent.TimeUnit.SECONDS),
+                    "The DAO must return the cancellation outcome after releasing the lock");
+        }
+
+        assertEquals(0, countRows(registration.getLowercaseNickname()),
+                "A timeout that owns PRE_COMMIT must leave no AUTH row");
+    }
+
+    @Test
+    @SuppressWarnings("PMD.UnitTestContainsTooManyAsserts")
     void upsertPlayerConcurrentWritersShouldCompleteWithoutDuplicateRows()
             throws SQLException, InterruptedException, ExecutionException {
         String nickname = uniqueNickname("Race");
@@ -113,6 +152,69 @@ class JdbcAuthDaoDatabaseIT {
             throws InterruptedException, SQLException {
         start.await();
         return dao.upsertPlayer(player);
+    }
+
+    private JdbcAuthDao daoWithObservedInsert(CountDownLatch insertEntered) throws SQLException {
+        Connection realConnection = DriverManager.getConnection(
+                databaseUrl, databaseUser, databasePassword);
+        Connection observedConnection = org.mockito.Mockito.mock(
+                Connection.class, org.mockito.AdditionalAnswers.delegatesTo(realConnection));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            PreparedStatement realStatement = realConnection.prepareStatement(
+                    invocation.getArgument(0, String.class));
+            PreparedStatement observedStatement =
+                    org.mockito.Mockito.mock(
+                            PreparedStatement.class,
+                            org.mockito.AdditionalAnswers.delegatesTo(realStatement));
+            org.mockito.Mockito.doAnswer(ignored -> {
+                insertEntered.countDown();
+                return realStatement.executeUpdate();
+            }).when(observedStatement).executeUpdate();
+            return observedStatement;
+        }).when(observedConnection).prepareStatement(
+                org.mockito.ArgumentMatchers.anyString());
+        DataSource dataSource = org.mockito.Mockito.mock(DataSource.class);
+        org.mockito.Mockito.when(dataSource.getConnection()).thenReturn(observedConnection);
+        DatabaseConfig observedConfig = org.mockito.Mockito.mock(DatabaseConfig.class);
+        org.mockito.Mockito.when(observedConfig.getStorageType()).thenReturn(databaseType);
+        org.mockito.Mockito.when(observedConfig.getDataSource()).thenReturn(dataSource);
+        return new JdbcAuthDao(observedConfig);
+    }
+
+    private void insertAuthRow(Connection connection, RegisteredPlayer player) throws SQLException {
+        boolean postgres = "POSTGRESQL".equalsIgnoreCase(databaseType);
+        String quote = postgres ? "\"" : "";
+        String sql = "INSERT INTO " + quote + "AUTH" + quote + " ("
+                + quotedColumns(quote,
+                        "LOWERCASENICKNAME", "NICKNAME", "HASH", "IP", "LOGINIP",
+                        "UUID", "REGDATE", "LOGINDATE", "PREMIUMUUID", "PRESERVE_UUID",
+                        "TOTPTOKEN", "ISSUEDTIME", "CONFLICT_MODE", "CONFLICT_TIMESTAMP",
+                        "ORIGINAL_NICKNAME")
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, player.getLowercaseNickname());
+            statement.setString(2, player.getNickname());
+            statement.setString(3, player.getHash());
+            statement.setString(4, player.getIp());
+            statement.setString(5, player.getLoginIp());
+            statement.setString(6, player.getUuid());
+            statement.setLong(7, player.getRegDate());
+            statement.setLong(8, player.getLoginDate());
+            statement.setString(9, player.getPremiumUuid());
+            statement.setBoolean(10, player.isPreserveUuid());
+            statement.setString(11, player.getTotpToken());
+            statement.setLong(12, player.getIssuedTime());
+            statement.setBoolean(13, player.getConflictMode());
+            statement.setLong(14, player.getConflictTimestamp());
+            statement.setString(15, player.getOriginalNickname());
+            statement.executeUpdate();
+        }
+    }
+
+    private String quotedColumns(String quote, String... columns) {
+        return java.util.Arrays.stream(columns)
+                .map(column -> quote + column + quote)
+                .collect(java.util.stream.Collectors.joining(", "));
     }
 
     private RegisteredPlayer player(String nickname, String hash) {

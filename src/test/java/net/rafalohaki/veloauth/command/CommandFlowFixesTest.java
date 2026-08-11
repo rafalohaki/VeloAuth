@@ -501,6 +501,84 @@ class CommandFlowFixesTest {
     }
 
     @Test
+    void registrationTimeout_TimeoutWinsBeforeCommit_ShowsRetrySafeTimeoutAndCancelsPermit() {
+        DatabaseManager.RegistrationCommitPermit permit =
+                new DatabaseManager.RegistrationCommitPermit();
+        ConnectionLifecycleRegistry.Operation operation =
+                plugin.getConnectionLifecycleRegistry().capture(player);
+
+        DatabaseManager.RegistrationTimeoutDisposition disposition =
+                inlineContext.handleRegistrationTimeout(player, operation, permit);
+
+        assertEquals(DatabaseManager.RegistrationTimeoutDisposition.CANCELLED_BEFORE_COMMIT,
+                disposition);
+        assertTrue(permit.isCancelled());
+        assertFalse(permit.tryBeginCommit());
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player).sendMessage(messagesCaptor.capture());
+        assertEquals(messages.get("auth.registration.timeout"),
+                PLAIN_TEXT.serialize(messagesCaptor.getValue()));
+    }
+
+    @Test
+    void registrationTimeout_CommitWinsBeforeTimeout_ShowsDoNotRetryMessage() {
+        DatabaseManager.RegistrationCommitPermit permit =
+                new DatabaseManager.RegistrationCommitPermit();
+        assertTrue(permit.tryBeginCommit());
+        ConnectionLifecycleRegistry.Operation operation =
+                plugin.getConnectionLifecycleRegistry().capture(player);
+
+        DatabaseManager.RegistrationTimeoutDisposition disposition =
+                inlineContext.handleRegistrationTimeout(player, operation, permit);
+
+        assertEquals(DatabaseManager.RegistrationTimeoutDisposition.COMMIT_IN_PROGRESS,
+                disposition);
+        assertFalse(permit.isCancelled());
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player).sendMessage(messagesCaptor.capture());
+        assertEquals(messages.get("auth.registration.commit_pending"),
+                PLAIN_TEXT.serialize(messagesCaptor.getValue()));
+        assertFalse(PLAIN_TEXT.serialize(messagesCaptor.getValue())
+                .equals(messages.get("auth.registration.timeout")));
+    }
+
+    @Test
+    void testRegisterCommand_CommitOutcomeUnknown_ShowsConservativeMessageAndNoSuccess() {
+        databaseManager.setFindResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
+        databaseManager.enqueueRegistrationOutcome(
+                DatabaseManager.DbResult.success(
+                        DatabaseManager.RegistrationResult.COMMIT_UNKNOWN));
+
+        new RegisterCommand(inlineContext)
+                .execute(invocation(player, "secret123", "secret123"));
+
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
+        List<String> sentMessages = capturedTexts(messagesCaptor);
+        assertTrue(sentMessages.contains(messages.get("auth.registration.commit_unknown")));
+        assertFalse(sentMessages.contains(messages.get("auth.register.success")));
+        assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP));
+        verify(connectionManager, never()).transferToBackend(player);
+    }
+
+    @Test
+    void testRegisterCommand_TimeoutCancelledTransaction_DoesNotRunPostAuthFlow() {
+        databaseManager.setFindResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
+        databaseManager.enqueueRegistrationOutcome(
+                DatabaseManager.DbResult.success(DatabaseManager.RegistrationResult.CANCELLED));
+
+        new RegisterCommand(inlineContext)
+                .execute(invocation(player, "secret123", "secret123"));
+
+        verify(player, never()).sendMessage(org.mockito.ArgumentMatchers.any(Component.class));
+        assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP));
+        assertFalse(authCache.hasActiveSession(playerUuid, TEST_PLAYER_NAME, TEST_IP));
+        verify(connectionManager, never()).transferToBackend(player);
+    }
+
+    @Test
     void testLoginCommand_AuthorizedButSessionExpired_ProceedsToPasswordCheckInsteadOfAlreadyLogged() throws Exception {
         // Regression for the authorized-but-no-session deadlock: pre-1.3.3 /login checked
         // isPlayerAuthorized alone and replied "already logged in" while ServerPreConnectEvent
@@ -809,6 +887,14 @@ class CommandFlowFixesTest {
                 String errorKey, String timeoutKey) {
             task.run();
         }
+
+        @Override
+        void runRegistrationCommandWithTimeout(
+                Player player, ConnectionLifecycleRegistry.Operation operation,
+                DatabaseManager.RegistrationCommitPermit permit, Runnable task,
+                String errorKey) {
+            task.run();
+        }
     }
 
     private static final class CapturingAsyncCommandContext extends CommandContext {
@@ -847,6 +933,14 @@ class CommandFlowFixesTest {
             submitted = executor.submit(task);
         }
 
+        @Override
+        void runRegistrationCommandWithTimeout(
+                Player player, ConnectionLifecycleRegistry.Operation operation,
+                DatabaseManager.RegistrationCommitPermit permit, Runnable task,
+                String errorKey) {
+            submitted = executor.submit(task);
+        }
+
         private Future<?> submitted() {
             if (submitted == null) {
                 throw new IllegalStateException("Command task was not submitted");
@@ -862,6 +956,8 @@ class CommandFlowFixesTest {
                 new ConcurrentLinkedDeque<>();
         private final ConcurrentLinkedDeque<CompletableFuture<DbResult<Boolean>>> registrationResults =
                 new ConcurrentLinkedDeque<>();
+        private final ConcurrentLinkedDeque<CompletableFuture<DbResult<RegistrationResult>>>
+                registrationOutcomes = new ConcurrentLinkedDeque<>();
         private CompletableFuture<DbResult<Boolean>> defaultSavePlayerResult =
                 CompletableFuture.completedFuture(DbResult.success(true));
         private CompletableFuture<DbResult<Boolean>> savePremiumUuidResult =
@@ -915,6 +1011,10 @@ class CommandFlowFixesTest {
 
         void enqueueRegistrationResult(DbResult<Boolean> result) {
             registrationResults.add(CompletableFuture.completedFuture(result));
+        }
+
+        void enqueueRegistrationOutcome(DbResult<RegistrationResult> result) {
+            registrationOutcomes.add(CompletableFuture.completedFuture(result));
         }
 
         void setSavePremiumUuidResult(CompletableFuture<DbResult<Boolean>> result) {
@@ -971,6 +1071,29 @@ class CommandFlowFixesTest {
             return queuedResult != null
                     ? queuedResult
                     : CompletableFuture.completedFuture(DbResult.success(true));
+        }
+
+        @Override
+        public CompletableFuture<DbResult<RegistrationResult>> registerPlayerIfAbsent(
+                RegisteredPlayer player, RegistrationCommitPermit permit) {
+            CompletableFuture<DbResult<RegistrationResult>> queuedOutcome =
+                    registrationOutcomes.poll();
+            if (queuedOutcome != null) {
+                return queuedOutcome;
+            }
+            CompletableFuture<DbResult<Boolean>> queuedResult = registrationResults.poll();
+            if (queuedResult == null) {
+                return CompletableFuture.completedFuture(
+                        DbResult.success(RegistrationResult.CREATED));
+            }
+            return queuedResult.thenApply(result -> {
+                if (result.isDatabaseError()) {
+                    return DbResult.databaseError(result.getErrorMessage());
+                }
+                return DbResult.success(Boolean.TRUE.equals(result.getValue())
+                        ? RegistrationResult.CREATED
+                        : RegistrationResult.DUPLICATE);
+            });
         }
 
         @Override

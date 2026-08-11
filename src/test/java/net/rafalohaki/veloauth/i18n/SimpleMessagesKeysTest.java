@@ -186,6 +186,8 @@ class SimpleMessagesKeysTest {
             "premium.check_enabled",
             // Command helper messages
             "auth.registration.timeout",
+            "auth.registration.commit_pending",
+            "auth.registration.commit_unknown",
             // Admin cache/stats messages
             "admin.cache_reset.success",
             "admin.cache_reset.player",

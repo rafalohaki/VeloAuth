@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 @SuppressWarnings("null") // Eclipse JDT false positives: assertNotNull / isDatabaseError guarantee non-null but JDT cannot track these contracts
 class DatabaseManagerTest {
@@ -208,7 +209,10 @@ class DatabaseManagerTest {
         JdbcAuthDao jdbcAuthDao = mock(JdbcAuthDao.class);
         RegisteredPlayer player = player(
                 "RegisterUser", "$2a$10$offlinehashvalueofflinehashvalueofflinehashval", null);
-        when(jdbcAuthDao.insertPlayerIfAbsent(player)).thenReturn(false);
+        when(jdbcAuthDao.insertPlayerIfAbsent(
+                org.mockito.ArgumentMatchers.eq(player),
+                any(DatabaseManager.RegistrationCommitPermit.class)))
+                .thenReturn(DatabaseManager.RegistrationResult.DUPLICATE);
 
         manager.setConnectedForTesting(true);
         manager.setJdbcAuthDaoForTesting(jdbcAuthDao);
@@ -224,7 +228,9 @@ class DatabaseManagerTest {
         JdbcAuthDao jdbcAuthDao = mock(JdbcAuthDao.class);
         RegisteredPlayer player = player(
                 "RegisterUser", "$2a$10$offlinehashvalueofflinehashvalueofflinehashval", null);
-        when(jdbcAuthDao.insertPlayerIfAbsent(player))
+        when(jdbcAuthDao.insertPlayerIfAbsent(
+                org.mockito.ArgumentMatchers.eq(player),
+                any(DatabaseManager.RegistrationCommitPermit.class)))
                 .thenThrow(new SQLException("duplicate details with secret values"));
 
         manager.setConnectedForTesting(true);

@@ -7,6 +7,7 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.config.Settings;
+import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
@@ -61,15 +62,22 @@ class RegisterCommand implements SimpleCommand {
         if (operation == null) {
             return;
         }
-        ctx.runAsyncCommandWithTimeout(player, operation,
-                () -> processRegistration(player, password, operation, passwordSettings),
-                ERROR_DATABASE_QUERY, "auth.registration.timeout");
+        var commitPermit = new DatabaseManager.RegistrationCommitPermit();
+        ctx.runRegistrationCommandWithTimeout(
+                player, operation, commitPermit,
+                () -> processRegistration(
+                        player, password, operation, passwordSettings, commitPermit),
+                ERROR_DATABASE_QUERY);
     }
 
     private void processRegistration(
             Player player, String password,
             ConnectionLifecycleRegistry.Operation operation,
-            Settings.PasswordSettings passwordSettings) {
+            Settings.PasswordSettings passwordSettings,
+            DatabaseManager.RegistrationCommitPermit commitPermit) {
+        if (commitPermit.isCancelled()) {
+            return;
+        }
         if (!ctx.beginConnectionCommand(player, operation)) {
             return;
         }
@@ -84,10 +92,16 @@ class RegisterCommand implements SimpleCommand {
         }
         try {
             executeRegistrationFlow(
-                    player, password, playerAddress, operation, passwordSettings);
+                    player, password, playerAddress, operation, passwordSettings,
+                    commitPermit);
         } catch (CompletionException e) {
-            ctx.logger().error(DB_MARKER, "Database error during registration for player {}", player.getUsername(), e);
-            ctx.runIfConnectionCurrent(operation, () -> ctx.sendDatabaseErrorMessage(player));
+            if (!commitPermit.isCancelled()) {
+                ctx.logger().error(DB_MARKER,
+                        "Database error during registration for player {}",
+                        player.getUsername(), e);
+                ctx.runIfConnectionCurrent(
+                        operation, () -> ctx.sendDatabaseErrorMessage(player));
+            }
         } finally {
             ctx.releaseCommandLock(operation.playerId(), operation);
             ctx.releaseRegistrationLock(ipLock.lease());
@@ -141,7 +155,11 @@ class RegisterCommand implements SimpleCommand {
     private void executeRegistrationFlow(
             Player player, String password, InetAddress playerAddress,
             ConnectionLifecycleRegistry.Operation operation,
-            Settings.PasswordSettings passwordSettings) {
+            Settings.PasswordSettings passwordSettings,
+            DatabaseManager.RegistrationCommitPermit commitPermit) {
+        if (commitPermit.isCancelled()) {
+            return;
+        }
         if (ctx.rejectRateLimited(player, playerAddress, operation)) {
             return;
         }
@@ -164,12 +182,13 @@ class RegisterCommand implements SimpleCommand {
             return;
         }
 
-        if (!ctx.isConnectionCurrent(authContext.connectionOperation())) {
+        if (commitPermit.isCancelled()
+                || !ctx.isConnectionCurrent(authContext.connectionOperation())) {
             return;
         }
 
         RegisteredPlayer newPlayer = buildNewPlayer(authContext, password, passwordSettings);
-        if (!persistNewPlayer(authContext, newPlayer)) {
+        if (!persistNewPlayer(authContext, newPlayer, commitPermit)) {
             return;
         }
 
@@ -201,11 +220,15 @@ class RegisterCommand implements SimpleCommand {
                 authContext.player().getUniqueId().toString());
     }
 
-    private boolean persistNewPlayer(AuthenticationContext authContext, RegisteredPlayer newPlayer) {
-        if (!ctx.isConnectionCurrent(authContext.connectionOperation())) {
+    private boolean persistNewPlayer(
+            AuthenticationContext authContext, RegisteredPlayer newPlayer,
+            DatabaseManager.RegistrationCommitPermit commitPermit) {
+        if (commitPermit.isCancelled()
+                || !ctx.isConnectionCurrent(authContext.connectionOperation())) {
             return false;
         }
-        var saveResult = ctx.databaseManager().registerPlayerIfAbsent(newPlayer).join();
+        var saveResult = ctx.databaseManager()
+                .registerPlayerIfAbsent(newPlayer, commitPermit).join();
         if (!ctx.isConnectionCurrent(authContext.connectionOperation())) {
             return false;
         }
@@ -213,12 +236,36 @@ class RegisterCommand implements SimpleCommand {
                 "Failed to register new player", authContext.connectionOperation())) {
             return false;
         }
-        if (!Boolean.TRUE.equals(saveResult.getValue())) {
+        return handleRegistrationOutcome(
+                authContext, saveResult.getValue(), commitPermit);
+    }
+
+    private boolean handleRegistrationOutcome(
+            AuthenticationContext authContext,
+            DatabaseManager.RegistrationResult outcome,
+            DatabaseManager.RegistrationCommitPermit commitPermit) {
+        if (outcome == null) {
             ctx.runIfConnectionCurrent(authContext.connectionOperation(),
-                    () -> authContext.player().sendMessage(ctx.sm().alreadyRegistered()));
+                    () -> ctx.sendDatabaseErrorMessage(authContext.player()));
             return false;
         }
-        return true;
+        return switch (outcome) {
+            case CREATED -> true;
+            case DUPLICATE -> {
+                ctx.runIfConnectionCurrent(authContext.connectionOperation(),
+                        () -> authContext.player().sendMessage(ctx.sm().alreadyRegistered()));
+                yield false;
+            }
+            case CANCELLED -> false;
+            case COMMIT_UNKNOWN -> {
+                if (commitPermit.claimCommitUnknownMessage()) {
+                    ctx.runIfConnectionCurrent(authContext.connectionOperation(),
+                            () -> authContext.player().sendMessage(ctx.messages().component(
+                                    "auth.registration.commit_unknown", NamedTextColor.RED)));
+                }
+                yield false;
+            }
+        };
     }
 
     private void emitRegisterAudit(AuthenticationContext authContext) {

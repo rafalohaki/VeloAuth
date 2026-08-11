@@ -26,6 +26,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
@@ -743,7 +744,32 @@ public class DatabaseManager {
             return CompletableFuture.completedFuture(DbResult.success(false));
         }
 
-        return submitConnectedTask(() -> executePlayerRegistration(player));
+        RegistrationCommitPermit permit = new RegistrationCommitPermit();
+        return registerPlayerIfAbsent(player, permit).thenApply(result -> {
+            if (result.isDatabaseError()) {
+                return DbResult.databaseError(result.getErrorMessage());
+            }
+            RegistrationResult outcome = result.getValue();
+            if (outcome == RegistrationResult.COMMIT_UNKNOWN) {
+                return genericDatabaseErrorResult();
+            }
+            return DbResult.success(outcome == RegistrationResult.CREATED);
+        });
+    }
+
+    /**
+     * Creates a registration using a timeout-aware commit permit shared with the command layer.
+     * The permit linearizes timeout cancellation against the database commit boundary: either the
+     * timeout cancels before commit, or the transaction owns the right to finish committing.
+     */
+    public CompletableFuture<DbResult<RegistrationResult>> registerPlayerIfAbsent(
+            RegisteredPlayer player, RegistrationCommitPermit permit) {
+        Objects.requireNonNull(permit, "permit must not be null");
+        if (player == null) {
+            return CompletableFuture.completedFuture(DbResult.success(RegistrationResult.CANCELLED));
+        }
+
+        return submitConnectedTask(() -> executePlayerRegistration(player, permit));
     }
 
     private DbResult<Void> validateDatabaseConnection() {
@@ -774,19 +800,36 @@ public class DatabaseManager {
         }
     }
 
-    private DbResult<Boolean> executePlayerRegistration(RegisteredPlayer player) {
+    private DbResult<RegistrationResult> executePlayerRegistration(
+            RegisteredPlayer player, RegistrationCommitPermit permit) {
         try {
-            boolean created = jdbcAuthDao.insertPlayerIfAbsent(player);
-            if (created) {
-                playerCache.put(player.getLowercaseNickname(), player);
-                if (logger.isDebugEnabled()) {
-                    logger.debug(DB_MARKER, "Registered new player: {}", player.getNickname());
-                }
+            RegistrationResult outcome = jdbcAuthDao.insertPlayerIfAbsent(player, permit);
+            if (outcome == RegistrationResult.COMMIT_UNKNOWN) {
+                logger.error(DB_MARKER,
+                        "Registration commit outcome is unknown for {}", player.getNickname());
             }
-            return DbResult.success(created);
+            publishCreatedRegistration(player, outcome);
+            return DbResult.success(outcome);
         } catch (SQLException e) {
+            RegistrationResult resolvedOutcome = permit.resolvedResult();
+            if (resolvedOutcome != null) {
+                publishCreatedRegistration(player, resolvedOutcome);
+                return DbResult.success(resolvedOutcome);
+            }
+            permit.markFailed();
             logDatabaseOperationFailure("player registration", player.getNickname(), e);
             return genericDatabaseErrorResult();
+        }
+    }
+
+    private void publishCreatedRegistration(
+            RegisteredPlayer player, RegistrationResult outcome) {
+        if (outcome != RegistrationResult.CREATED) {
+            return;
+        }
+        playerCache.put(player.getLowercaseNickname(), player);
+        if (logger.isDebugEnabled()) {
+            logger.debug(DB_MARKER, "Registered new player: {}", player.getNickname());
         }
     }
     
@@ -1162,6 +1205,114 @@ public class DatabaseManager {
         public static PremiumProfileBinding standard(UUID verifiedPremiumUuid) {
             return new PremiumProfileBinding(verifiedPremiumUuid, verifiedPremiumUuid, false);
         }
+    }
+
+    /** Terminal result of the insert-only registration transaction. */
+    public enum RegistrationResult {
+        CREATED,
+        DUPLICATE,
+        CANCELLED,
+        COMMIT_UNKNOWN
+    }
+
+    /** Player-message decision when the command deadline races the transaction. */
+    public enum RegistrationTimeoutDisposition {
+        CANCELLED_BEFORE_COMMIT,
+        COMMIT_IN_PROGRESS,
+        COMMIT_COMPLETED,
+        COMMIT_UNKNOWN,
+        NO_ACTION
+    }
+
+    /**
+     * Single-use linearization permit shared by the registration command and JDBC transaction.
+     * A timeout may cancel only while the state is {@code PRE_COMMIT}; the DAO atomically claims
+     * {@code COMMITTING} immediately before {@link java.sql.Connection#commit()}.
+     */
+    public static final class RegistrationCommitPermit {
+        private final AtomicReference<RegistrationCommitState> state =
+                new AtomicReference<>(RegistrationCommitState.PRE_COMMIT);
+        private final AtomicBoolean timeoutObserved = new AtomicBoolean(false);
+        private final AtomicBoolean commitUnknownMessageClaimed = new AtomicBoolean(false);
+
+        public RegistrationTimeoutDisposition onTimeout() {
+            if (!timeoutObserved.compareAndSet(false, true)) {
+                return RegistrationTimeoutDisposition.NO_ACTION;
+            }
+            if (state.compareAndSet(
+                    RegistrationCommitState.PRE_COMMIT,
+                    RegistrationCommitState.CANCELLED)) {
+                return RegistrationTimeoutDisposition.CANCELLED_BEFORE_COMMIT;
+            }
+            return switch (state.get()) {
+                case COMMITTING -> RegistrationTimeoutDisposition.COMMIT_IN_PROGRESS;
+                case COMMITTED -> RegistrationTimeoutDisposition.COMMIT_COMPLETED;
+                case COMMIT_UNKNOWN -> RegistrationTimeoutDisposition.COMMIT_UNKNOWN;
+                case PRE_COMMIT, CANCELLED, DUPLICATE, FAILED ->
+                        RegistrationTimeoutDisposition.NO_ACTION;
+            };
+        }
+
+        public boolean tryBeginCommit() {
+            return state.compareAndSet(
+                    RegistrationCommitState.PRE_COMMIT,
+                    RegistrationCommitState.COMMITTING);
+        }
+
+        public boolean isCancelled() {
+            return state.get() == RegistrationCommitState.CANCELLED;
+        }
+
+        public boolean claimCommitUnknownMessage() {
+            return commitUnknownMessageClaimed.compareAndSet(false, true);
+        }
+
+        void markCommitted() {
+            transitionFromCommitting(RegistrationCommitState.COMMITTED);
+        }
+
+        void markCommitUnknown() {
+            transitionFromCommitting(RegistrationCommitState.COMMIT_UNKNOWN);
+        }
+
+        void markDuplicate() {
+            state.compareAndSet(
+                    RegistrationCommitState.PRE_COMMIT,
+                    RegistrationCommitState.DUPLICATE);
+        }
+
+        void markFailed() {
+            state.compareAndSet(
+                    RegistrationCommitState.PRE_COMMIT,
+                    RegistrationCommitState.FAILED);
+        }
+
+        private void transitionFromCommitting(RegistrationCommitState terminalState) {
+            if (!state.compareAndSet(RegistrationCommitState.COMMITTING, terminalState)) {
+                throw new IllegalStateException(
+                        "Registration commit permit left COMMITTING unexpectedly");
+            }
+        }
+
+        private RegistrationResult resolvedResult() {
+            return switch (state.get()) {
+                case COMMITTED -> RegistrationResult.CREATED;
+                case COMMIT_UNKNOWN -> RegistrationResult.COMMIT_UNKNOWN;
+                case DUPLICATE -> RegistrationResult.DUPLICATE;
+                case CANCELLED -> RegistrationResult.CANCELLED;
+                case PRE_COMMIT, COMMITTING, FAILED -> null;
+            };
+        }
+    }
+
+    private enum RegistrationCommitState {
+        PRE_COMMIT,
+        CANCELLED,
+        COMMITTING,
+        COMMITTED,
+        COMMIT_UNKNOWN,
+        DUPLICATE,
+        FAILED
     }
 
     /**

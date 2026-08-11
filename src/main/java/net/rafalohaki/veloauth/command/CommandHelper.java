@@ -379,6 +379,16 @@ public final class CommandHelper {
             Runnable task, Messages messages, String errorKey,
             String timeoutKey,
             java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
+        runAsyncCommandWithTimeout(
+                task, messages, errorKey, messageSender,
+                () -> messageSender.accept(
+                        messages.component(timeoutKey, NamedTextColor.RED)));
+    }
+
+    static void runAsyncCommandWithTimeout(
+            Runnable task, Messages messages, String errorKey,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender,
+            Runnable timeoutHandler) {
         CompletableFuture<Void> future = submitAsyncCommand(task, messages, messageSender);
         if (future == null) {
             return;
@@ -387,7 +397,7 @@ public final class CommandHelper {
         future.orTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                 .exceptionally(throwable -> {
                     if (throwable instanceof java.util.concurrent.TimeoutException) {
-                        messageSender.accept(messages.component(timeoutKey, NamedTextColor.RED));
+                        timeoutHandler.run();
                     } else {
                         handleAsyncCommandException(throwable, messages, errorKey, messageSender);
                     }

@@ -622,6 +622,11 @@ PostgreSQL schema cannot suppress an additive migration.
 | `/vauth 2fa-remove <nickname>` | `veloauth.admin` | Recovery: wipe a player's 2FA token (see [2FA.md](2FA.md)) |
 | `/vauth report` | `veloauth.admin` | Generate a diagnostic report and upload to [mclo.gs](https://mclo.gs) |
 
+If `/register` times out before its database commit permit is claimed, VeloAuth rolls the insert
+back and the localized response explicitly allows a retry. If the commit has already started, the
+response instead says **not to retry**: reconnect and use `/login` to check the account. A JDBC
+commit error is reported as an unknown outcome rather than a false success or a retry-safe failure.
+
 ## How It Works
 
 ### Authentication Flow
@@ -827,10 +832,11 @@ identity and reproducibility evidence is necessary but not sufficient for produc
 the external-limbo canary and explicit operator approval remain separate gates.
 
 The PostgreSQL harness verifies case-insensitive premium nickname reconciliation, batched conflict
-deletion, idempotent LimboAuth migration, insert-only registration ownership and concurrent AUTH
-UPSERT. The MySQL harness verifies the same registration/UPSERT invariants on Connector/J. Both use
-ephemeral containers and remove them afterwards. GitHub Actions runs the normal build and both
-database gates before uploading a release artifact.
+deletion, idempotent LimboAuth migration, insert-only registration ownership, explicit transaction
+commit/cancellation semantics and concurrent AUTH UPSERT. The MySQL harness verifies the same
+registration/UPSERT invariants on Connector/J. Both use ephemeral containers and remove them
+afterwards. GitHub Actions runs the normal build and both database gates before uploading a release
+artifact.
 
 The normal suite also performs a native 1.8 login, bidirectional protocol-47 keepalive checks,
 translated status handshakes for representative 1.12.2, 1.16.5, 1.20.1 and 1.21.4 clients, and a

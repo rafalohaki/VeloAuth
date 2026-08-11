@@ -298,6 +298,47 @@ class CommandContext {
                         operation, () -> player.sendMessage(message)));
     }
 
+    void runRegistrationCommandWithTimeout(
+            Player player, ConnectionLifecycleRegistry.Operation operation,
+            DatabaseManager.RegistrationCommitPermit permit, Runnable task,
+            String errorKey) {
+        CommandHelper.runAsyncCommandWithTimeout(
+                task, messages, errorKey,
+                message -> runIfConnectionCurrent(
+                        operation, () -> player.sendMessage(message)),
+                () -> handleRegistrationTimeout(player, operation, permit));
+    }
+
+    DatabaseManager.RegistrationTimeoutDisposition handleRegistrationTimeout(
+            Player player, ConnectionLifecycleRegistry.Operation operation,
+            DatabaseManager.RegistrationCommitPermit permit) {
+        DatabaseManager.RegistrationTimeoutDisposition disposition = permit.onTimeout();
+        switch (disposition) {
+            case CANCELLED_BEFORE_COMMIT -> sendRegistrationDeadlineMessage(
+                    player, operation, "auth.registration.timeout", NamedTextColor.RED);
+            case COMMIT_IN_PROGRESS, COMMIT_COMPLETED -> sendRegistrationDeadlineMessage(
+                    player, operation, "auth.registration.commit_pending", NamedTextColor.YELLOW);
+            case COMMIT_UNKNOWN -> {
+                if (permit.claimCommitUnknownMessage()) {
+                    sendRegistrationDeadlineMessage(
+                            player, operation, "auth.registration.commit_unknown",
+                            NamedTextColor.RED);
+                }
+            }
+            case NO_ACTION -> {
+                // The command already reached a terminal result and owns its player message.
+            }
+        }
+        return disposition;
+    }
+
+    private void sendRegistrationDeadlineMessage(
+            Player player, ConnectionLifecycleRegistry.Operation operation,
+            String messageKey, NamedTextColor color) {
+        runIfConnectionCurrent(operation,
+                () -> player.sendMessage(messages.component(messageKey, color)));
+    }
+
     /**
      * Ensures the database is currently connected before continuing an admin command.
      */
