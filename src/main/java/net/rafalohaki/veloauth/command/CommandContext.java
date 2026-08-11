@@ -9,7 +9,6 @@ import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
-import net.rafalohaki.veloauth.i18n.SimpleMessages;
 import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.util.DatabaseErrorHandler;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
@@ -44,7 +43,6 @@ class CommandContext {
     private final Settings settings;
     private final Messages messages;
     private final Logger logger;
-    private final SimpleMessages sm;
     private final IPRateLimiter ipRateLimiter;
     private final net.rafalohaki.veloauth.auth.ConflictModeService conflictModeService;
     private final ConcurrentHashMap<UUID, ConnectionLifecycleRegistry.Operation> activeCommands =
@@ -78,7 +76,6 @@ class CommandContext {
         authCache.setIpRateLimiter(this.ipRateLimiter);
         this.conflictModeService = new net.rafalohaki.veloauth.auth.ConflictModeService(
                 databaseManager, bruteForceSettings.conflictModeTtlHours());
-        this.sm = new SimpleMessages(messages);
     }
 
     VeloAuth plugin() { return plugin; }
@@ -87,7 +84,6 @@ class CommandContext {
     Settings settings() { return settings; }
     Messages messages() { return messages; }
     Logger logger() { return logger; }
-    SimpleMessages sm() { return sm; }
     IPRateLimiter ipRateLimiter() { return ipRateLimiter; }
     net.rafalohaki.veloauth.auth.ConflictModeService conflictModeService() { return conflictModeService; }
 
@@ -171,7 +167,8 @@ class CommandContext {
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
 
         if (playerAddress != null && authCache.isBlocked(playerAddress, player.getUsername())) {
-            messageSender.accept(sm.bruteForceBlocked());
+            messageSender.accept(messages.component(
+                    "security.brute_force.blocked", NamedTextColor.RED));
             if (logger.isWarnEnabled()) {
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} attempted {}", playerAddress.getHostAddress(), commandName);
             }
@@ -184,7 +181,7 @@ class CommandContext {
             dbResult = databaseManager.findPlayerByNickname(username).join();
         } catch (CompletionException e) {
             logger.error(DB_MARKER, "Database error during {} for player {}", commandName, username, e);
-            messageSender.accept(sm.errorDatabase());
+            messageSender.accept(messages.component("error.database.query", NamedTextColor.RED));
             return null;
         }
 
@@ -209,14 +206,14 @@ class CommandContext {
             result = databaseManager.isPremium(player.getUsername()).join();
         } catch (CompletionException e) {
             logger.error(DB_MARKER, "[DATABASE ERROR] {} failed for {}", operation, player.getUsername(), e);
-            player.sendMessage(sm.errorDatabase());
+            player.sendMessage(messages.component("error.database.query", NamedTextColor.RED));
             return DatabaseManager.DbResult.databaseError("CompletionException: " + e.getMessage());
         }
         if (result.isDatabaseError()) {
             if (logger.isErrorEnabled()) {
                 logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}", operation, player.getUsername(), result.getErrorMessage());
             }
-            player.sendMessage(sm.errorDatabase());
+            player.sendMessage(messages.component("error.database.query", NamedTextColor.RED));
         }
         return result;
     }
@@ -230,7 +227,8 @@ class CommandContext {
         } catch (RuntimeException e) {
             logger.error(DB_MARKER, "[DATABASE ERROR] {} failed for {}", operation, username, e);
             runIfConnectionCurrent(connectionOperation,
-                    () -> player.sendMessage(sm.errorDatabase()));
+                    () -> player.sendMessage(messages.component(
+                            "error.database.query", NamedTextColor.RED)));
             return DatabaseManager.DbResult.databaseError(
                     e.getClass().getSimpleName() + ": " + e.getMessage());
         }
@@ -240,7 +238,8 @@ class CommandContext {
                         operation, username, result.getErrorMessage());
             }
             runIfConnectionCurrent(connectionOperation,
-                    () -> player.sendMessage(sm.errorDatabase()));
+                    () -> player.sendMessage(messages.component(
+                            "error.database.query", NamedTextColor.RED)));
         }
         return result;
     }
@@ -425,7 +424,8 @@ class CommandContext {
         if (address == null || !ipRateLimiter.isRateLimited(address)) {
             return false;
         }
-        runIfConnectionCurrent(operation, () -> player.sendMessage(sm.bruteForceBlocked()));
+        runIfConnectionCurrent(operation, () -> player.sendMessage(messages.component(
+                "security.brute_force.blocked", NamedTextColor.RED)));
         return true;
     }
 
@@ -438,7 +438,8 @@ class CommandContext {
         }
         completeRegistrationWithoutCommit(
                 operation, permit,
-                () -> player.sendMessage(sm.bruteForceBlocked()));
+                () -> player.sendMessage(messages.component(
+                        "security.brute_force.blocked", NamedTextColor.RED)));
         return true;
     }
 

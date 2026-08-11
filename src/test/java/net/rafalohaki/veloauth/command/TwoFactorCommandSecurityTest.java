@@ -8,7 +8,6 @@ import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.auth.totp.TotpService;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
-import net.rafalohaki.veloauth.i18n.SimpleMessages;
 import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import org.junit.jupiter.api.Test;
@@ -46,14 +45,12 @@ class TwoFactorCommandSecurityTest {
 
         Messages messages = new Messages();
         messages.setLanguage("en");
-        SimpleMessages simpleMessages = new SimpleMessages(messages);
         Settings settings = mock(Settings.class);
         when(settings.getTwoFactorSettings()).thenReturn(new Settings.TwoFactorSettings());
         AuthCache authCache = mock(AuthCache.class);
         when(authCache.isPlayerAuthorized(uuid, "192.0.2.60")).thenReturn(true);
         CommandContext context = mock(CommandContext.class);
         when(context.messages()).thenReturn(messages);
-        when(context.sm()).thenReturn(simpleMessages);
         when(context.settings()).thenReturn(settings);
         when(context.authCache()).thenReturn(authCache);
         ConnectionLifecycleRegistry.Operation operation = allowConnection(context, player);
@@ -104,7 +101,6 @@ class TwoFactorCommandSecurityTest {
 
         CommandContext context = mock(CommandContext.class);
         when(context.messages()).thenReturn(messages);
-        when(context.sm()).thenReturn(new SimpleMessages(messages));
         when(context.settings()).thenReturn(settings);
         when(context.authCache()).thenReturn(authCache);
         when(context.totpService()).thenReturn(totpService);

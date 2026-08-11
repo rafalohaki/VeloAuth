@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.command;
 import at.favre.lib.crypto.bcrypt.BCrypt;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.config.Settings;
@@ -100,7 +101,8 @@ class ChangePasswordCommand implements SimpleCommand {
         }
         if (authCtx.registeredPlayer() == null) {
             ctx.runIfConnectionCurrent(operation,
-                    () -> authCtx.player().sendMessage(ctx.sm().notRegistered()));
+                    () -> authCtx.player().sendMessage(ctx.messages().component(
+                            "auth.login.not_registered", NamedTextColor.RED)));
             return null;
         }
         return authCtx;
@@ -112,7 +114,8 @@ class ChangePasswordCommand implements SimpleCommand {
             // Premium accounts have no password hash — same guard as LoginCommand,
             // otherwise BCrypt.verify throws IllegalArgumentException on null hash.
             ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
-                    () -> authCtx.player().sendMessage(ctx.sm().notRegistered()));
+                    () -> authCtx.player().sendMessage(ctx.messages().component(
+                            "auth.login.not_registered", NamedTextColor.RED)));
             return false;
         }
         BCrypt.Result result = BCrypt.verifyer().verify(oldPassword.toCharArray(), hash);
@@ -121,7 +124,8 @@ class ChangePasswordCommand implements SimpleCommand {
         }
         if (!result.verified) {
             ctx.runIfConnectionCurrent(authCtx.connectionOperation(), () -> {
-                authCtx.player().sendMessage(ctx.sm().incorrectOldPassword());
+                authCtx.player().sendMessage(ctx.messages().component(
+                        "auth.changepassword.incorrect_old_password", NamedTextColor.RED));
                 SecurityUtils.registerFailedLogin(
                         authCtx.playerAddress(), authCtx.username(), ctx.authCache());
             });
@@ -179,7 +183,8 @@ class ChangePasswordCommand implements SimpleCommand {
         disconnectDuplicateSessions(origin, authCtx.username(), playerIp);
 
         ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
-                () -> authCtx.player().sendMessage(ctx.sm().changePasswordSuccess()));
+                () -> authCtx.player().sendMessage(ctx.messages().component(
+                        "auth.changepassword.success", NamedTextColor.GREEN)));
         if (ctx.logger().isInfoEnabled()) {
             ctx.logger().info(AUTH_MARKER, "Player {} changed password from IP {}",
                     authCtx.username(), playerIp);
@@ -218,7 +223,8 @@ class ChangePasswordCommand implements SimpleCommand {
                 if (!connected.getUsername().equalsIgnoreCase(username)) {
                     continue;
                 }
-                connected.disconnect(ctx.sm().kickMessage());
+                connected.disconnect(ctx.messages().component(
+                        "general.kick.message", NamedTextColor.YELLOW));
                 if (ctx.logger().isWarnEnabled()) {
                     ctx.logger().warn(
                             "Disconnected duplicate player {} — password changed from IP {}",

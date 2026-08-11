@@ -91,7 +91,8 @@ class TwoFactorCommand implements SimpleCommand {
     @Override
     public void execute(Invocation invocation) {
         CommandHelper.CommandInputs inputs = CommandHelper.requirePlayerWithAtLeastOneArg(
-                invocation, ctx.messages(), ctx.sm().twoFactorUsage());
+                invocation, ctx.messages(),
+                ctx.messages().component("2fa.usage", NamedTextColor.YELLOW));
         if (inputs == null) {
             return;
         }
@@ -109,7 +110,8 @@ class TwoFactorCommand implements SimpleCommand {
             case "disable" -> processDisable(player, args, operation);
             case "qr" -> processQr(player, operation);
             case "status" -> processStatus(player, operation);
-            default -> sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorUsage()));
+            default -> sendIfCurrent(operation, () -> player.sendMessage(
+                    ctx.messages().component("2fa.usage", NamedTextColor.YELLOW)));
         }
     }
 
@@ -132,7 +134,8 @@ class TwoFactorCommand implements SimpleCommand {
             return;
         }
         if (hasTotp(dbPlayer)) {
-            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorSetupAlreadyEnabled()));
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.messages().component(
+                    "2fa.setup.already_enabled", NamedTextColor.YELLOW)));
             return;
         }
 
@@ -150,16 +153,20 @@ class TwoFactorCommand implements SimpleCommand {
 
     private void sendSetupPanel(Player player, String nickname, String secret, String otpUri,
                                 Settings.TwoFactorSettings settings) {
-        player.sendMessage(ctx.sm().key("2fa.setup.generated_header", NamedTextColor.GOLD));
-        player.sendMessage(ctx.sm().key("2fa.setup.scan_instruction", NamedTextColor.YELLOW));
+        player.sendMessage(ctx.messages().component("2fa.setup.generated_header", NamedTextColor.GOLD));
+        player.sendMessage(ctx.messages().component("2fa.setup.scan_instruction", NamedTextColor.YELLOW));
         if (settings.isQrLinkEnabled()) {
             sendQrLink(player, secret);
         }
-        player.sendMessage(ctx.sm().key("2fa.setup.secret_label", NamedTextColor.YELLOW, secret));
-        player.sendMessage(ctx.sm().key("2fa.setup.issuer_label", NamedTextColor.YELLOW, settings.getIssuer()));
-        player.sendMessage(ctx.sm().key("2fa.setup.account_label", NamedTextColor.YELLOW, nickname));
-        player.sendMessage(ctx.sm().key("2fa.setup.uri_label", NamedTextColor.YELLOW, otpUri));
-        player.sendMessage(ctx.sm().key("2fa.setup.verify_prompt", NamedTextColor.GRAY));
+        player.sendMessage(ctx.messages().component(
+                "2fa.setup.secret_label", NamedTextColor.YELLOW, secret));
+        player.sendMessage(ctx.messages().component(
+                "2fa.setup.issuer_label", NamedTextColor.YELLOW, settings.getIssuer()));
+        player.sendMessage(ctx.messages().component(
+                "2fa.setup.account_label", NamedTextColor.YELLOW, nickname));
+        player.sendMessage(ctx.messages().component(
+                "2fa.setup.uri_label", NamedTextColor.YELLOW, otpUri));
+        player.sendMessage(ctx.messages().component("2fa.setup.verify_prompt", NamedTextColor.GRAY));
     }
 
     /**
@@ -179,11 +186,11 @@ class TwoFactorCommand implements SimpleCommand {
      */
     private void sendQrLink(Player player, String secret) {
         String resolvedUrl = QR_LINK_URL + URLEncoder.encode(secret, StandardCharsets.UTF_8);
-        Component label = ctx.sm().key("2fa.setup.qr_link_label", NamedTextColor.AQUA)
+        Component label = ctx.messages().component("2fa.setup.qr_link_label", NamedTextColor.AQUA)
                 .decoration(TextDecoration.UNDERLINED, true)
                 .clickEvent(ClickEvent.openUrl(resolvedUrl))
                 .hoverEvent(HoverEvent.showText(
-                        ctx.sm().key("2fa.setup.qr_link_hover", NamedTextColor.GRAY)));
+                        ctx.messages().component("2fa.setup.qr_link_hover", NamedTextColor.GRAY)));
         player.sendMessage(label);
     }
 
@@ -192,7 +199,8 @@ class TwoFactorCommand implements SimpleCommand {
     private void processVerify(
             Player player, String[] args, ConnectionLifecycleRegistry.Operation operation) {
         String code = validatedCodeOrNull(
-                player, args, operation, ctx.sm().twoFactorVerifyUsage());
+                player, args, operation,
+                ctx.messages().component("2fa.verify.usage", NamedTextColor.YELLOW));
         if (code == null) {
             return;
         }
@@ -203,7 +211,8 @@ class TwoFactorCommand implements SimpleCommand {
 
         Optional<PendingTotpState> pendingOpt = ctx.pendingTotpStore().get(player.getUniqueId());
         if (pendingOpt.isEmpty()) {
-            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorVerifyNoPending()));
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.messages().component(
+                    "2fa.verify.no_pending", NamedTextColor.RED)));
             return;
         }
 
@@ -230,7 +239,8 @@ class TwoFactorCommand implements SimpleCommand {
         }
         long matchedWindow = ctx.totpService().matchedWindow(pending.newSecret(), code);
         if (!claimTotpWindow(player, dbPlayer.getNickname(), matchedWindow,
-                "setup", ctx.sm().twoFactorVerifyWrongCode(), operation)) {
+                "setup", ctx.messages().component("2fa.verify.wrong_code", NamedTextColor.RED),
+                operation)) {
             return;
         }
 
@@ -246,7 +256,8 @@ class TwoFactorCommand implements SimpleCommand {
             ctx.pendingTotpStore().invalidate(player.getUniqueId());
             emit(AuditEventType.TWO_FACTOR_ENABLED, dbPlayer.getNickname(),
                     PlayerAddressUtils.getPlayerIp(player), null);
-            player.sendMessage(ctx.sm().twoFactorVerifySetupSuccess());
+            player.sendMessage(ctx.messages().component(
+                    "2fa.verify.setup_success", NamedTextColor.GREEN));
             if (ctx.logger().isInfoEnabled()) {
                 ctx.logger().info(AUTH_MARKER, "Player {} enabled 2FA from IP {}",
                         dbPlayer.getNickname(), PlayerAddressUtils.getPlayerIp(player));
@@ -261,7 +272,8 @@ class TwoFactorCommand implements SimpleCommand {
         String storedSecret = dbPlayer.getTotpToken();
         long matchedWindow = ctx.totpService().matchedWindow(storedSecret, code);
         if (!claimTotpWindow(player, dbPlayer.getNickname(), matchedWindow,
-                "login", ctx.sm().twoFactorVerifyWrongCode(), operation)) {
+                "login", ctx.messages().component("2fa.verify.wrong_code", NamedTextColor.RED),
+                operation)) {
             return;
         }
 
@@ -277,7 +289,8 @@ class TwoFactorCommand implements SimpleCommand {
             ctx.runIfConnectionCurrent(operation, () -> {
                 emit(AuditEventType.TWO_FACTOR_VERIFY_OK, dbPlayer.getNickname(),
                         PlayerAddressUtils.getPlayerIp(player), null);
-                player.sendMessage(ctx.sm().twoFactorVerifyLoginSuccess());
+                player.sendMessage(ctx.messages().component(
+                        "2fa.verify.login_success", NamedTextColor.GREEN));
             });
         }
     }
@@ -290,7 +303,8 @@ class TwoFactorCommand implements SimpleCommand {
             return;
         }
         String code = validatedCodeOrNull(
-                player, args, operation, ctx.sm().twoFactorDisableUsage());
+                player, args, operation,
+                ctx.messages().component("2fa.disable.usage", NamedTextColor.YELLOW));
         if (code == null) {
             return;
         }
@@ -302,12 +316,14 @@ class TwoFactorCommand implements SimpleCommand {
             return;
         }
         if (!hasTotp(dbPlayer)) {
-            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorDisableNotEnabled()));
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.messages().component(
+                    "2fa.disable.not_enabled", NamedTextColor.YELLOW)));
             return;
         }
         long matchedWindow = ctx.totpService().matchedWindow(dbPlayer.getTotpToken(), code);
         if (!claimTotpWindow(player, dbPlayer.getNickname(), matchedWindow,
-                "disable", ctx.sm().twoFactorDisableWrongCode(), operation)) {
+                "disable", ctx.messages().component("2fa.disable.wrong_code", NamedTextColor.RED),
+                operation)) {
             return;
         }
 
@@ -322,7 +338,7 @@ class TwoFactorCommand implements SimpleCommand {
         ctx.runIfConnectionCurrent(operation, () -> {
             emit(AuditEventType.TWO_FACTOR_DISABLED, dbPlayer.getNickname(),
                     PlayerAddressUtils.getPlayerIp(player), "self-disable");
-            player.sendMessage(ctx.sm().twoFactorDisableSuccess());
+            player.sendMessage(ctx.messages().component("2fa.disable.success", NamedTextColor.GREEN));
             if (ctx.logger().isInfoEnabled()) {
                 ctx.logger().info(AUTH_MARKER, "Player {} disabled 2FA from IP {}",
                         dbPlayer.getNickname(), PlayerAddressUtils.getPlayerIp(player));
@@ -359,11 +375,13 @@ class TwoFactorCommand implements SimpleCommand {
             return;
         }
         if (!hasTotp(dbPlayer)) {
-            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorQrNotEnabled()));
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.messages().component(
+                    "2fa.qr.not_enabled", NamedTextColor.YELLOW)));
             return;
         }
 
-        sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorQrWarning()));
+        sendIfCurrent(operation, () -> player.sendMessage(
+                ctx.messages().component("2fa.qr.warning", NamedTextColor.GOLD)));
     }
 
     // ===== status =====
@@ -374,9 +392,11 @@ class TwoFactorCommand implements SimpleCommand {
             return;
         }
         if (hasTotp(dbPlayer)) {
-            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorStatusEnabled()));
+            sendIfCurrent(operation, () -> player.sendMessage(
+                    ctx.messages().component("2fa.status.enabled", NamedTextColor.GREEN)));
         } else {
-            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorStatusDisabled()));
+            sendIfCurrent(operation, () -> player.sendMessage(
+                    ctx.messages().component("2fa.status.disabled", NamedTextColor.GRAY)));
         }
     }
 
@@ -389,7 +409,8 @@ class TwoFactorCommand implements SimpleCommand {
     private RegisteredPlayer loadAuthorizedPlayerOrNull(
             Player player, String opName, ConnectionLifecycleRegistry.Operation operation) {
         if (!ctx.authCache().isPlayerAuthorized(player.getUniqueId(), PlayerAddressUtils.getPlayerIp(player))) {
-            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().authMustLogin()));
+            sendIfCurrent(operation, () -> player.sendMessage(
+                    ctx.messages().component("auth.must_login", NamedTextColor.RED)));
             return null;
         }
         AuthenticationContext authCtx = ctx.validateAndAuthenticatePlayer(
@@ -398,7 +419,8 @@ class TwoFactorCommand implements SimpleCommand {
             return null;
         }
         if (authCtx.registeredPlayer() == null) {
-            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().notRegistered()));
+            sendIfCurrent(operation, () -> player.sendMessage(
+                    ctx.messages().component("auth.login.not_registered", NamedTextColor.RED)));
             return null;
         }
         return authCtx.registeredPlayer();
@@ -409,7 +431,8 @@ class TwoFactorCommand implements SimpleCommand {
         if (ctx.settings().getTwoFactorSettings().isEnabled()) {
             return false;
         }
-        sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorDisabledInConfig()));
+        sendIfCurrent(operation, () -> player.sendMessage(
+                ctx.messages().component("2fa.disabled_in_config", NamedTextColor.YELLOW)));
         return true;
     }
 
@@ -419,7 +442,8 @@ class TwoFactorCommand implements SimpleCommand {
         if (address == null || !ctx.authCache().isBlocked(address, player.getUsername())) {
             return false;
         }
-        sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().bruteForceBlocked()));
+        sendIfCurrent(operation, () -> player.sendMessage(
+                ctx.messages().component("security.brute_force.blocked", NamedTextColor.RED)));
         return true;
     }
 
@@ -437,7 +461,8 @@ class TwoFactorCommand implements SimpleCommand {
         String code = args[1];
         if (!isWellFormedCode(code)) {
             sendIfCurrent(operation,
-                    () -> player.sendMessage(ctx.sm().twoFactorVerifyInvalidFormat()));
+                    () -> player.sendMessage(ctx.messages().component(
+                            "2fa.verify.invalid_format", NamedTextColor.RED)));
             return null;
         }
         return code;

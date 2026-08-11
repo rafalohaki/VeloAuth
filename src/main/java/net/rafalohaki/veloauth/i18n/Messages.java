@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.i18n;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,6 +16,7 @@ import java.util.MissingResourceException;
 import java.util.Properties;
 import java.util.ResourceBundle;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 /**
  * Internationalization manager for VeloAuth messages.
@@ -27,12 +29,19 @@ public class Messages {
             "auth.register.password_too_short", "validation.password.too_short",
             "error.connection.generic", "connection.error.generic"
     );
+    private static final Pattern MINIMESSAGE_HEX_COLOR = Pattern.compile("(?i)<#([0-9a-f]{6})>");
+    private static final Pattern SECTION_LEGACY_CODE = Pattern.compile("(?i)§([0-9a-fk-orx#])");
+    private static final Pattern AMPERSAND_LEGACY_CODE = Pattern.compile(
+            "(?i)&(?:#[0-9a-f]{6}|x(?:&[0-9a-f]){6}|[0-9a-fk-or])");
+    private static final String LITERAL_AMPERSAND_MARKER = "\uFDD0";
+    private static final String LITERAL_SECTION_MARKER = "\uFDD1";
+    private static final String LITERAL_MINIMESSAGE_HEX_MARKER = "\uFDD2";
+    private static final LegacyComponentSerializer LEGACY_COMPONENT_SERIALIZER =
+            LegacyComponentSerializer.builder().character('&').hexColors().build();
 
     // Cache for loaded message files (legacy support)
     private static final Map<String, Properties> messageCache = new ConcurrentHashMap<>();
     private static final Map<String, String> normalizedPatternCache = new ConcurrentHashMap<>();
-
-    private final SimpleMessages componentRenderer = new SimpleMessages(this);
 
     // Current language
     private String currentLanguage;
@@ -192,8 +201,8 @@ public class Messages {
 
     /**
      * Resolves a localized player-facing message and parses its supported color codes.
-     * Template formatting is handled by {@link SimpleMessages}, including protection of
-     * placeholder values from accidental color parsing.
+     * Placeholder values are protected from accidental color parsing, so color syntax belongs
+     * exclusively to the trusted translation template.
      *
      * @param key message key
      * @param fallbackColor color used when the template contains no formatting codes
@@ -201,7 +210,8 @@ public class Messages {
      * @return rendered Adventure component
      */
     public Component component(String key, NamedTextColor fallbackColor, Object... args) {
-        return componentRenderer.key(key, fallbackColor, args);
+        String text = get(key, protectFormattingArguments(args));
+        return restoreFormattingArguments(parseWithColors(text, fallbackColor));
     }
 
     /**
@@ -214,7 +224,51 @@ public class Messages {
      * @return rendered Adventure component
      */
     public Component componentFromResolvedText(String resolvedText, NamedTextColor fallbackColor) {
-        return componentRenderer.resolvedText(resolvedText, fallbackColor);
+        return parseWithColors(resolvedText, fallbackColor);
+    }
+
+    private static Component parseWithColors(String text, NamedTextColor fallbackColor) {
+        if (text == null || text.isEmpty()) {
+            return Component.empty();
+        }
+
+        String normalizedText = MINIMESSAGE_HEX_COLOR.matcher(text).replaceAll("&#$1");
+        normalizedText = SECTION_LEGACY_CODE.matcher(normalizedText).replaceAll("&$1");
+        if (AMPERSAND_LEGACY_CODE.matcher(normalizedText).find()) {
+            return LEGACY_COMPONENT_SERIALIZER.deserialize(normalizedText);
+        }
+        return Component.text(normalizedText, fallbackColor);
+    }
+
+    private static Object[] protectFormattingArguments(Object[] args) {
+        if (args.length == 0) {
+            return args;
+        }
+
+        Object[] protectedArgs = args.clone();
+        for (int index = 0; index < protectedArgs.length; index++) {
+            Object argument = protectedArgs[index];
+            if (argument instanceof String stringArgument) {
+                protectedArgs[index] = protectFormattingArgument(stringArgument);
+            } else if (argument instanceof Character characterArgument) {
+                protectedArgs[index] = protectFormattingArgument(characterArgument.toString());
+            }
+        }
+        return protectedArgs;
+    }
+
+    private static String protectFormattingArgument(String argument) {
+        return argument
+                .replace("&", LITERAL_AMPERSAND_MARKER)
+                .replace("§", LITERAL_SECTION_MARKER)
+                .replace("<#", LITERAL_MINIMESSAGE_HEX_MARKER);
+    }
+
+    private static Component restoreFormattingArguments(Component component) {
+        return component
+                .replaceText(builder -> builder.matchLiteral(LITERAL_AMPERSAND_MARKER).replacement("&"))
+                .replaceText(builder -> builder.matchLiteral(LITERAL_SECTION_MARKER).replacement("§"))
+                .replaceText(builder -> builder.matchLiteral(LITERAL_MINIMESSAGE_HEX_MARKER).replacement("<#"));
     }
 
     /**

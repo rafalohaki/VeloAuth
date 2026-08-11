@@ -10,7 +10,6 @@ import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.i18n.Messages;
-import net.rafalohaki.veloauth.i18n.SimpleMessages;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -69,7 +68,6 @@ class LogoutCommandTest {
         messages = new Messages();
         messages.setLanguage("en");
         when(context.messages()).thenReturn(messages);
-        when(context.sm()).thenReturn(new SimpleMessages(messages));
         when(context.auditLogService()).thenReturn(auditLogService);
         when(context.plugin()).thenReturn(plugin);
         when(context.logger()).thenReturn(org.mockito.Mockito.mock(org.slf4j.Logger.class));

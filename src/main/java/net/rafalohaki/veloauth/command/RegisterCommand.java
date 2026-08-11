@@ -129,7 +129,8 @@ class RegisterCommand implements SimpleCommand {
                 player.getUsername());
         ctx.completeRegistrationWithoutCommit(
                 operation, commitPermit,
-                () -> player.sendMessage(ctx.sm().bruteForceBlocked()));
+                () -> player.sendMessage(ctx.messages().component(
+                        "security.brute_force.blocked", NamedTextColor.RED)));
         ctx.releaseCommandLock(operation.playerId(), operation);
         return false;
     }
@@ -180,7 +181,8 @@ class RegisterCommand implements SimpleCommand {
         if (authContext.registeredPlayer() != null) {
             ctx.completeRegistrationWithoutCommit(
                     authContext.connectionOperation(), commitPermit,
-                    () -> authContext.player().sendMessage(ctx.sm().alreadyRegistered()));
+                    () -> authContext.player().sendMessage(ctx.messages().component(
+                            "auth.register.already_registered", NamedTextColor.RED)));
             return;
         }
 
@@ -204,7 +206,8 @@ class RegisterCommand implements SimpleCommand {
 
         if (PostAuthFlow.execute(ctx, authContext, newPlayer, "registered")) {
             ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> {
-                authContext.player().sendMessage(ctx.sm().registerSuccess());
+                authContext.player().sendMessage(ctx.messages().component(
+                        "auth.register.success", NamedTextColor.GREEN));
                 emitRegisterAudit(authContext);
             });
         }
@@ -268,7 +271,8 @@ class RegisterCommand implements SimpleCommand {
             case CREATED -> true;
             case DUPLICATE -> {
                 ctx.runIfConnectionCurrent(authContext.connectionOperation(),
-                        () -> authContext.player().sendMessage(ctx.sm().alreadyRegistered()));
+                        () -> authContext.player().sendMessage(ctx.messages().component(
+                                "auth.register.already_registered", NamedTextColor.RED)));
                 yield false;
             }
             case CANCELLED -> false;

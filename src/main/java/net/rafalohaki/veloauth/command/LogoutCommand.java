@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.command;
 
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
@@ -43,7 +44,7 @@ class LogoutCommand implements SimpleCommand {
                     "Failed to retire logout connection for {}", username, cleanupFailure);
         }
         try {
-            player.disconnect(context.sm().authLoggedOut());
+            player.disconnect(context.messages().component("auth.logged_out", NamedTextColor.YELLOW));
         } catch (RuntimeException disconnectFailure) {
             context.logger().error(
                     "Failed to request terminal logout disconnect for {}", username,

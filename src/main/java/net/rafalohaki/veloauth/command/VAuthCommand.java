@@ -121,7 +121,7 @@ class VAuthCommand implements SimpleCommand {
         // verification against the soon-to-be-deleted token. Belt and suspenders.
         ctx.plugin().getServer().getPlayer(nickname).ifPresent(p -> {
             ctx.pendingTotpStore().invalidate(p.getUniqueId());
-            p.disconnect(ctx.sm().kickMessage());
+            p.disconnect(ctx.messages().component("general.kick.message", NamedTextColor.YELLOW));
             if (ctx.logger().isInfoEnabled()) {
                 ctx.logger().info(AUTH_MARKER, "Disconnected {} after admin 2FA wipe", nickname);
             }
@@ -147,10 +147,10 @@ class VAuthCommand implements SimpleCommand {
     private void handleReloadCommand(CommandSource source) {
         boolean success = ctx.plugin().reloadConfig();
         if (success) {
-            source.sendMessage(ctx.sm().adminReloadSuccess());
+            source.sendMessage(ctx.messages().component("admin.reload.success", NamedTextColor.GREEN));
             sendLocalizedReloadWarning(source, ctx.settings().getPendingRestartChanges());
         } else {
-            source.sendMessage(ctx.sm().adminReloadFailed());
+            source.sendMessage(ctx.messages().component("admin.reload.failed", NamedTextColor.RED));
         }
     }
 
@@ -203,15 +203,13 @@ class VAuthCommand implements SimpleCommand {
     }
 
     private void sendAdminHelp(CommandSource source) {
-        source.sendMessage(ctx.sm().adminHelpHeader());
-        source.sendMessage(ctx.sm().adminHelpReload());
-        source.sendMessage(ctx.sm().adminHelpCache());
-        source.sendMessage(ctx.sm().adminHelpStats());
-        source.sendMessage(ctx.sm().adminHelpConflicts());
-        source.sendMessage(ctx.sm().key("admin.help.2fa_remove",
-                net.kyori.adventure.text.format.NamedTextColor.YELLOW));
-        source.sendMessage(ctx.sm().key("admin.help.report",
-                net.kyori.adventure.text.format.NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.help.header", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.help.reload", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.help.cache", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.help.stats", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.help.conflicts", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.help.2fa_remove", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().component("admin.help.report", NamedTextColor.YELLOW));
     }
 
     @Override
