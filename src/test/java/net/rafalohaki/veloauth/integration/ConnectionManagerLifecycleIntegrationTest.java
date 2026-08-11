@@ -10,6 +10,7 @@ import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.api.proxy.server.ServerPing;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.api.scheduler.Scheduler;
+import net.kyori.adventure.text.Component;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
@@ -342,6 +343,61 @@ class ConnectionManagerLifecycleIntegrationTest {
 
         verify(oldRequest, times(1)).connect();
         verify(newRequest, times(1)).connect();
+    }
+
+    @Test
+    void directFailure_OldPlayerReplacedDuringFallbackEligibility_DoesNotSendError() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player oldPlayer = org.mockito.Mockito.mock(Player.class);
+        Player newPlayer = org.mockito.Mockito.mock(Player.class);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerConnection authConnection = org.mockito.Mockito.mock(ServerConnection.class);
+        ConnectionRequestBuilder backendRequest = org.mockito.Mockito.mock(ConnectionRequestBuilder.class);
+        ConnectionRequestBuilder.Result failedResult = org.mockito.Mockito.mock(ConnectionRequestBuilder.Result.class);
+        CountDownLatch fallbackEligibilityReached = new CountDownLatch(1);
+        CountDownLatch releaseFallbackEligibility = new CountDownLatch(1);
+
+        when(oldPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(oldPlayer.getUsername()).thenReturn("OldFailurePlayer");
+        when(oldPlayer.isActive()).thenReturn(true);
+        when(newPlayer.getUniqueId()).thenReturn(playerUuid);
+        when(newPlayer.getUsername()).thenReturn("NewFailurePlayer");
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        when(authConnection.getServer()).thenReturn(authServer);
+        when(backendServer.ping()).thenReturn(
+                CompletableFuture.completedFuture(org.mockito.Mockito.mock(ServerPing.class)));
+        when(proxyServer.getServer("backend")).thenReturn(Optional.of(backendServer));
+        when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        when(oldPlayer.createConnectionRequest(backendServer)).thenReturn(backendRequest);
+        when(backendRequest.connect()).thenReturn(CompletableFuture.completedFuture(failedResult));
+        when(failedResult.isSuccessful()).thenReturn(false);
+        when(oldPlayer.getCurrentServer()).thenAnswer(ignored -> {
+            fallbackEligibilityReached.countDown();
+            assertTrue(releaseFallbackEligibility.await(2, TimeUnit.SECONDS),
+                    "Fallback eligibility hook should be released by the test");
+            return Optional.of(authConnection);
+        });
+        connectionManager.setForcedHostTarget(playerUuid, "backend");
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Boolean> oldAttempt = executor.submit(() -> connectionManager.transferToBackend(oldPlayer));
+            try {
+                assertTrue(fallbackEligibilityReached.await(1, TimeUnit.SECONDS),
+                        "A should pass the initial failure guard before replacement");
+                org.mockito.Mockito.clearInvocations(oldPlayer);
+                connectionManager.beginTransferSession(newPlayer);
+                releaseFallbackEligibility.countDown();
+
+                assertFalse(oldAttempt.get(2, TimeUnit.SECONDS));
+                verify(oldPlayer, never()).sendMessage(any(Component.class));
+            } finally {
+                releaseFallbackEligibility.countDown();
+            }
+        }
     }
 
     @Test

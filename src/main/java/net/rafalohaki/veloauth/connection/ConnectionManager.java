@@ -241,13 +241,23 @@ public class ConnectionManager {
     }
     
     private RegisteredServer validateAndGetAuthServer(Player player) {
+        return validateAndGetAuthServer(player, null);
+    }
+
+    private RegisteredServer validateAndGetAuthServer(
+            Player player, @javax.annotation.Nullable PlayerTransferState state) {
         Optional<RegisteredServer> authServer = authServerProvider.resolve();
 
         if (authServer.isEmpty()) {
+            if (state != null && isStale(state)) {
+                return null;
+            }
             logger.error("Auth server '{}' is not registered!",
                     authServerProvider.serverName());
 
-            player.disconnect(messages.component("connection.error.auth_server", NamedTextColor.RED));
+            if (state == null || !isStale(state)) {
+                player.disconnect(messages.component("connection.error.auth_server", NamedTextColor.RED));
+            }
             return null;
         }
         
@@ -405,7 +415,7 @@ public class ConnectionManager {
             }
             logger.error("Error transferring player to backend: {}", player.getUsername(), e);
 
-            sendErrorMessage(player);
+            sendErrorMessageIfCurrent(player, state);
             return false;
         }
     }
@@ -526,7 +536,7 @@ public class ConnectionManager {
                 return false;
             }
             logTransferError(player, serverName, e);
-            sendErrorMessage(player);
+            sendErrorMessageIfCurrent(player, state);
             return false;
         }
     }
@@ -578,7 +588,7 @@ public class ConnectionManager {
         }
 
         String reason = KickReasonRenderer.renderPlain(result);
-        sendErrorMessage(player, reason);
+        sendErrorMessageIfCurrent(player, state, reason);
         return false;
     }
 
@@ -587,7 +597,7 @@ public class ConnectionManager {
         if (isStale(state)) {
             return false;
         }
-        RegisteredServer authServer = validateAndGetAuthServer(player);
+        RegisteredServer authServer = validateAndGetAuthServer(player, state);
         if (authServer == null || isPlayerOnAuthServer(player)) {
             return false;
         }
@@ -757,7 +767,7 @@ public class ConnectionManager {
             return true;
         }
         logger.error("Error transferring player {} to server {}", player.getUsername(), serverName, e);
-        sendErrorMessage(player);
+        sendErrorMessageIfCurrent(player, state);
         return false;
     }
 
@@ -774,6 +784,18 @@ public class ConnectionManager {
 
     private void sendErrorMessage(Player player, String reason) {
         player.sendMessage(messages.component(CONNECTION_ERROR_GAME_SERVER, NamedTextColor.RED, reason));
+    }
+
+    private void sendErrorMessageIfCurrent(Player player, PlayerTransferState state) {
+        if (!isStale(state)) {
+            sendErrorMessage(player);
+        }
+    }
+
+    private void sendErrorMessageIfCurrent(Player player, PlayerTransferState state, String reason) {
+        if (!isStale(state)) {
+            sendErrorMessage(player, reason);
+        }
     }
 
     /**
