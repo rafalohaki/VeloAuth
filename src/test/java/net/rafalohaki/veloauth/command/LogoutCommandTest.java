@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -71,6 +72,7 @@ class LogoutCommandTest {
         when(context.sm()).thenReturn(new SimpleMessages(messages));
         when(context.auditLogService()).thenReturn(auditLogService);
         when(context.plugin()).thenReturn(plugin);
+        when(context.logger()).thenReturn(org.mockito.Mockito.mock(org.slf4j.Logger.class));
         when(plugin.getConnectionManager()).thenReturn(connectionManager);
         command = new LogoutCommand(context);
     }
@@ -90,6 +92,7 @@ class LogoutCommandTest {
         ArgumentCaptor<Component> reason = ArgumentCaptor.forClass(Component.class);
         verify(player).disconnect(reason.capture());
         assertEquals(messages.get("auth.logged_out"), PLAIN_TEXT.serialize(reason.getValue()));
+        verify(context).retireConnectionOperation(player);
         verifyNoInteractions(connectionManager);
     }
 
@@ -112,12 +115,30 @@ class LogoutCommandTest {
 
         command.execute(invocation(player));
 
-        InOrder order = inOrder(player, auditLogService);
+        InOrder order = inOrder(context, player, auditLogService);
+        order.verify(context).retireConnectionOperation(player);
         order.verify(player).disconnect(any(Component.class));
         order.verify(auditLogService).save(
                 AuditEventType.LOGOUT, PLAYER_NAME, PLAYER_IP,
                 "connection-termination-requested");
         assertTrue(disconnected.get());
+    }
+
+    @Test
+    void execute_RetirementCleanupFailure_StillDisconnectsAndAuditsTerminalRequest() {
+        when(player.isActive()).thenReturn(true);
+        when(player.getUsername()).thenReturn(PLAYER_NAME);
+        when(player.getRemoteAddress()).thenReturn(
+                new InetSocketAddress(PLAYER_IP, 25565));
+        doThrow(new IllegalStateException("controlled cleanup failure"))
+                .when(context).retireConnectionOperation(player);
+
+        command.execute(invocation(player));
+
+        verify(player).disconnect(any(Component.class));
+        verify(auditLogService).save(
+                AuditEventType.LOGOUT, PLAYER_NAME, PLAYER_IP,
+                "connection-termination-requested");
     }
 
     @Test

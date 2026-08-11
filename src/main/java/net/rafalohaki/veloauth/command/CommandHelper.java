@@ -315,12 +315,13 @@ public final class CommandHelper {
      * @param messages  Messages for error reporting
      * @param errorKey  Message key for database errors
      */
-    private static void handleAsyncCommandException(Throwable throwable, CommandSource source, 
-                                                     Messages messages, String errorKey) {
+    private static void handleAsyncCommandException(
+            Throwable throwable, Messages messages, String errorKey,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
         if (throwable instanceof java.util.concurrent.RejectedExecutionException) {
-            source.sendMessage(messages.component(MSG_KEY_SERVER_OVERLOADED, NamedTextColor.RED));
+            messageSender.accept(messages.component(MSG_KEY_SERVER_OVERLOADED, NamedTextColor.RED));
         } else {
-            source.sendMessage(messages.component(errorKey, NamedTextColor.RED));
+            messageSender.accept(messages.component(errorKey, NamedTextColor.RED));
         }
     }
 
@@ -334,22 +335,21 @@ public final class CommandHelper {
      */
     public static void runAsyncCommand(Runnable task, Messages messages,
                                        CommandSource source, String errorKey) {
-        // Check if executor is shutting down
-        if (VirtualThreadExecutorProvider.isShutdown()) {
-            source.sendMessage(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
+        runAsyncCommand(task, messages, errorKey, source::sendMessage);
+    }
+
+    static void runAsyncCommand(
+            Runnable task, Messages messages, String errorKey,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
+        CompletableFuture<Void> future = submitAsyncCommand(task, messages, messageSender);
+        if (future == null) {
             return;
         }
-
-        try {
-            // skipcq: JAVA-W1087 - Future handled with exceptionally, fire-and-forget operation
-            CompletableFuture.runAsync(task, VirtualThreadExecutorProvider.getVirtualExecutor())
-                    .exceptionally(throwable -> {
-                        handleAsyncCommandException(throwable, source, messages, errorKey);
-                        return null;
-                    });
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            source.sendMessage(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
-        }
+        // skipcq: JAVA-W1087 - Future handled with exceptionally, fire-and-forget operation
+        future.exceptionally(throwable -> {
+            handleAsyncCommandException(throwable, messages, errorKey, messageSender);
+            return null;
+        });
     }
 
     /**
@@ -363,26 +363,43 @@ public final class CommandHelper {
      */
     public static void runAsyncCommandWithTimeout(Runnable task, Messages messages,
                                                   CommandSource source, String errorKey, String timeoutKey) {
-        // Check if executor is shutting down
-        if (VirtualThreadExecutorProvider.isShutdown()) {
-            source.sendMessage(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
+        runAsyncCommandWithTimeout(
+                task, messages, errorKey, timeoutKey, source::sendMessage);
+    }
+
+    static void runAsyncCommandWithTimeout(
+            Runnable task, Messages messages, String errorKey,
+            String timeoutKey,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
+        CompletableFuture<Void> future = submitAsyncCommand(task, messages, messageSender);
+        if (future == null) {
             return;
         }
+        // skipcq: JAVA-W1087 - Future handled with exceptionally, fire-and-forget operation
+        future.orTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .exceptionally(throwable -> {
+                    if (throwable instanceof java.util.concurrent.TimeoutException) {
+                        messageSender.accept(messages.component(timeoutKey, NamedTextColor.RED));
+                    } else {
+                        handleAsyncCommandException(throwable, messages, errorKey, messageSender);
+                    }
+                    return null;
+                });
+    }
 
+    private static CompletableFuture<Void> submitAsyncCommand(
+            Runnable task, Messages messages,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
+        if (VirtualThreadExecutorProvider.isShutdown()) {
+            messageSender.accept(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
+            return null;
+        }
         try {
-            // skipcq: JAVA-W1087 - Future handled with exceptionally, fire-and-forget operation
-            CompletableFuture.runAsync(task, VirtualThreadExecutorProvider.getVirtualExecutor())
-                    .orTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .exceptionally(throwable -> {
-                        if (throwable instanceof java.util.concurrent.TimeoutException) {
-                            source.sendMessage(messages.component(timeoutKey, NamedTextColor.RED));
-                        } else {
-                            handleAsyncCommandException(throwable, source, messages, errorKey);
-                        }
-                        return null;
-                    });
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            source.sendMessage(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
+            return CompletableFuture.runAsync(
+                    task, VirtualThreadExecutorProvider.getVirtualExecutor());
+        } catch (java.util.concurrent.RejectedExecutionException exception) {
+            messageSender.accept(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
+            return null;
         }
     }
 }

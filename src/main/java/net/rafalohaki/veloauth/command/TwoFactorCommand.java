@@ -12,6 +12,7 @@ import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.auth.totp.PendingTotpState;
 import net.rafalohaki.veloauth.auth.totp.TotpService;
 import net.rafalohaki.veloauth.config.Settings;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import org.slf4j.Marker;
@@ -21,6 +22,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Handles the {@code /2fa} command and all its sub-commands.
@@ -94,15 +96,19 @@ class TwoFactorCommand implements SimpleCommand {
         }
         Player player = inputs.player();
         String[] args = inputs.args();
+        ConnectionLifecycleRegistry.Operation operation = ctx.captureConnectionOperation(player);
+        if (operation == null) {
+            return;
+        }
 
         String sub = args[0].toLowerCase(java.util.Locale.ROOT);
         switch (sub) {
-            case "setup" -> processSetup(player);
-            case "verify" -> processVerify(player, args);
-            case "disable" -> processDisable(player, args);
-            case "qr" -> processQr(player);
-            case "status" -> processStatus(player);
-            default -> player.sendMessage(ctx.sm().twoFactorUsage());
+            case "setup" -> processSetup(player, operation);
+            case "verify" -> processVerify(player, args, operation);
+            case "disable" -> processDisable(player, args, operation);
+            case "qr" -> processQr(player, operation);
+            case "status" -> processStatus(player, operation);
+            default -> sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorUsage()));
         }
     }
 
@@ -116,16 +122,16 @@ class TwoFactorCommand implements SimpleCommand {
 
     // ===== setup =====
 
-    private void processSetup(Player player) {
-        if (twoFactorDisabledRejection(player)) {
+    private void processSetup(Player player, ConnectionLifecycleRegistry.Operation operation) {
+        if (twoFactorDisabledRejection(player, operation)) {
             return;
         }
-        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa setup");
+        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa setup", operation);
         if (dbPlayer == null) {
             return;
         }
         if (hasTotp(dbPlayer)) {
-            player.sendMessage(ctx.sm().twoFactorSetupAlreadyEnabled());
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorSetupAlreadyEnabled()));
             return;
         }
 
@@ -134,10 +140,11 @@ class TwoFactorCommand implements SimpleCommand {
         String secret = totp.generateSecret();
         String otpUri = totp.otpAuthUri(settings.getIssuer(), dbPlayer.getNickname(), secret);
 
-        ctx.pendingTotpStore().put(
-                PendingTotpState.forSetup(player.getUniqueId(), secret, PlayerAddressUtils.getPlayerIp(player)));
-
-        sendSetupPanel(player, dbPlayer.getNickname(), secret, otpUri, settings);
+        ctx.runIfConnectionCurrent(operation, () -> {
+            ctx.pendingTotpStore().put(PendingTotpState.forSetup(
+                    player.getUniqueId(), secret, PlayerAddressUtils.getPlayerIp(player)));
+            sendSetupPanel(player, dbPlayer.getNickname(), secret, otpUri, settings);
+        });
     }
 
     private void sendSetupPanel(Player player, String nickname, String secret, String otpUri,
@@ -181,193 +188,194 @@ class TwoFactorCommand implements SimpleCommand {
 
     // ===== verify =====
 
-    private void processVerify(Player player, String[] args) {
-        if (args.length != 2) {
-            player.sendMessage(ctx.sm().twoFactorVerifyUsage());
-            return;
-        }
-        String code = args[1];
-        if (!isWellFormedCode(code)) {
-            player.sendMessage(ctx.sm().twoFactorVerifyInvalidFormat());
+    private void processVerify(
+            Player player, String[] args, ConnectionLifecycleRegistry.Operation operation) {
+        String code = validatedCodeOrNull(
+                player, args, operation, ctx.sm().twoFactorVerifyUsage());
+        if (code == null) {
             return;
         }
 
-        if (rejectBlockedTotpAttempt(player)) {
+        if (rejectBlockedTotpAttempt(player, operation)) {
             return;
         }
 
         Optional<PendingTotpState> pendingOpt = ctx.pendingTotpStore().get(player.getUniqueId());
         if (pendingOpt.isEmpty()) {
-            player.sendMessage(ctx.sm().twoFactorVerifyNoPending());
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorVerifyNoPending()));
             return;
         }
 
         PendingTotpState pending = pendingOpt.get();
-        switch (pending.kind()) {
-            case SETUP -> completeSetup(player, pending, code);
-            case LOGIN -> completeLogin(player, pending, code);
+        if (pending.kind() == PendingTotpState.Kind.SETUP) {
+            completeSetup(player, pending, code, operation);
+        } else {
+            completeLogin(player, pending, code, operation);
         }
     }
 
-    private void completeSetup(Player player, PendingTotpState pending, String code) {
-        if (twoFactorDisabledRejection(player)) {
-            ctx.pendingTotpStore().invalidate(player.getUniqueId());
+    private void completeSetup(
+            Player player, PendingTotpState pending, String code,
+            ConnectionLifecycleRegistry.Operation operation) {
+        if (twoFactorDisabledRejection(player, operation)) {
+            ctx.runIfConnectionCurrent(operation,
+                    () -> ctx.pendingTotpStore().invalidate(player.getUniqueId()));
             return;
         }
-        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa verify (setup)");
+        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(
+                player, "2fa verify (setup)", operation);
         if (dbPlayer == null) {
             return;
         }
         long matchedWindow = ctx.totpService().matchedWindow(pending.newSecret(), code);
-        if (matchedWindow == net.rafalohaki.veloauth.auth.totp.TotpService.NO_WINDOW_MATCH) {
-            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "setup-wrong-code");
-            player.sendMessage(ctx.sm().twoFactorVerifyWrongCode());
-            return;
-        }
-        // RFC 6238 §5.2 — claim the window so the same code can't be re-used (covers concurrent
-        // /2fa verify from a parallel session in the tolerance band).
-        if (!ctx.totpReplayGuard().consume(player.getUniqueId(), matchedWindow)) {
-            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "setup-replay");
-            player.sendMessage(ctx.sm().twoFactorVerifyWrongCode());
+        if (!claimTotpWindow(player, dbPlayer.getNickname(), matchedWindow,
+                "setup", ctx.sm().twoFactorVerifyWrongCode(), operation)) {
             return;
         }
 
+        if (!ctx.isConnectionCurrent(operation)) {
+            return;
+        }
         dbPlayer.setTotpToken(pending.newSecret());
-        var saveResult = ctx.databaseManager().savePlayer(dbPlayer).join();
-        if (ctx.handleDatabaseError(saveResult, player, "Save TOTP secret")) {
-            return;
-        }
-        if (!Boolean.TRUE.equals(saveResult.getValue())) {
-            ctx.sendDatabaseErrorMessage(player);
+        if (!saveTotpChange(player, dbPlayer, "Save TOTP secret", operation)) {
             return;
         }
 
-        ctx.pendingTotpStore().invalidate(player.getUniqueId());
-        emit(AuditEventType.TWO_FACTOR_ENABLED, dbPlayer.getNickname(), PlayerAddressUtils.getPlayerIp(player), null);
-        player.sendMessage(ctx.sm().twoFactorVerifySetupSuccess());
-
-        if (ctx.logger().isInfoEnabled()) {
-            ctx.logger().info(AUTH_MARKER, "Player {} enabled 2FA from IP {}",
-                    dbPlayer.getNickname(), PlayerAddressUtils.getPlayerIp(player));
-        }
+        ctx.runIfConnectionCurrent(operation, () -> {
+            ctx.pendingTotpStore().invalidate(player.getUniqueId());
+            emit(AuditEventType.TWO_FACTOR_ENABLED, dbPlayer.getNickname(),
+                    PlayerAddressUtils.getPlayerIp(player), null);
+            player.sendMessage(ctx.sm().twoFactorVerifySetupSuccess());
+            if (ctx.logger().isInfoEnabled()) {
+                ctx.logger().info(AUTH_MARKER, "Player {} enabled 2FA from IP {}",
+                        dbPlayer.getNickname(), PlayerAddressUtils.getPlayerIp(player));
+            }
+        });
     }
 
-    private void completeLogin(Player player, PendingTotpState pending, String code) {
+    private void completeLogin(
+            Player player, PendingTotpState pending, String code,
+            ConnectionLifecycleRegistry.Operation operation) {
         RegisteredPlayer dbPlayer = pending.dbPlayer();
         String storedSecret = dbPlayer.getTotpToken();
         long matchedWindow = ctx.totpService().matchedWindow(storedSecret, code);
-        if (matchedWindow == net.rafalohaki.veloauth.auth.totp.TotpService.NO_WINDOW_MATCH) {
-            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "login-wrong-code");
-            player.sendMessage(ctx.sm().twoFactorVerifyWrongCode());
-            return;
-        }
-        // RFC 6238 §5.2 — bail out if this window was already consumed by an earlier verify
-        // (race with another session / leaked code being replayed).
-        if (!ctx.totpReplayGuard().consume(player.getUniqueId(), matchedWindow)) {
-            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "login-replay");
-            player.sendMessage(ctx.sm().twoFactorVerifyWrongCode());
+        if (!claimTotpWindow(player, dbPlayer.getNickname(), matchedWindow,
+                "login", ctx.sm().twoFactorVerifyWrongCode(), operation)) {
             return;
         }
 
-        ctx.pendingTotpStore().invalidate(player.getUniqueId());
+        if (!ctx.runIfConnectionCurrent(operation,
+                () -> ctx.pendingTotpStore().invalidate(player.getUniqueId()))) {
+            return;
+        }
 
         AuthenticationContext authContext = new AuthenticationContext(
                 player, dbPlayer.getNickname(),
-                PlayerAddressUtils.getPlayerAddress(player), dbPlayer);
+                PlayerAddressUtils.getPlayerAddress(player), dbPlayer, operation);
         if (PostAuthFlow.execute(ctx, authContext, dbPlayer, "logged in (2FA)")) {
-            emit(AuditEventType.TWO_FACTOR_VERIFY_OK, dbPlayer.getNickname(),
-                    PlayerAddressUtils.getPlayerIp(player), null);
-            player.sendMessage(ctx.sm().twoFactorVerifyLoginSuccess());
+            ctx.runIfConnectionCurrent(operation, () -> {
+                emit(AuditEventType.TWO_FACTOR_VERIFY_OK, dbPlayer.getNickname(),
+                        PlayerAddressUtils.getPlayerIp(player), null);
+                player.sendMessage(ctx.sm().twoFactorVerifyLoginSuccess());
+            });
         }
     }
 
     // ===== disable =====
 
-    private void processDisable(Player player, String[] args) {
-        if (twoFactorDisabledRejection(player)) {
+    private void processDisable(
+            Player player, String[] args, ConnectionLifecycleRegistry.Operation operation) {
+        if (twoFactorDisabledRejection(player, operation)) {
             return;
         }
-        if (args.length != 2) {
-            player.sendMessage(ctx.sm().twoFactorDisableUsage());
+        String code = validatedCodeOrNull(
+                player, args, operation, ctx.sm().twoFactorDisableUsage());
+        if (code == null) {
             return;
         }
-        String code = args[1];
-        if (!isWellFormedCode(code)) {
-            player.sendMessage(ctx.sm().twoFactorVerifyInvalidFormat());
+        if (rejectBlockedTotpAttempt(player, operation)) {
             return;
         }
-        if (rejectBlockedTotpAttempt(player)) {
-            return;
-        }
-        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa disable");
+        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa disable", operation);
         if (dbPlayer == null) {
             return;
         }
         if (!hasTotp(dbPlayer)) {
-            player.sendMessage(ctx.sm().twoFactorDisableNotEnabled());
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorDisableNotEnabled()));
             return;
         }
         long matchedWindow = ctx.totpService().matchedWindow(dbPlayer.getTotpToken(), code);
-        if (matchedWindow == net.rafalohaki.veloauth.auth.totp.TotpService.NO_WINDOW_MATCH) {
-            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "disable-wrong-code");
-            player.sendMessage(ctx.sm().twoFactorDisableWrongCode());
-            return;
-        }
-        if (!ctx.totpReplayGuard().consume(player.getUniqueId(), matchedWindow)) {
-            recordFailedTotpAttempt(player, dbPlayer.getNickname(), "disable-replay");
-            player.sendMessage(ctx.sm().twoFactorDisableWrongCode());
+        if (!claimTotpWindow(player, dbPlayer.getNickname(), matchedWindow,
+                "disable", ctx.sm().twoFactorDisableWrongCode(), operation)) {
             return;
         }
 
-        dbPlayer.setTotpToken(null);
-        var saveResult = ctx.databaseManager().savePlayer(dbPlayer).join();
-        if (ctx.handleDatabaseError(saveResult, player, "Wipe TOTP secret")) {
+        if (!ctx.isConnectionCurrent(operation)) {
             return;
+        }
+        dbPlayer.setTotpToken(null);
+        if (!saveTotpChange(player, dbPlayer, "Wipe TOTP secret", operation)) {
+            return;
+        }
+
+        ctx.runIfConnectionCurrent(operation, () -> {
+            emit(AuditEventType.TWO_FACTOR_DISABLED, dbPlayer.getNickname(),
+                    PlayerAddressUtils.getPlayerIp(player), "self-disable");
+            player.sendMessage(ctx.sm().twoFactorDisableSuccess());
+            if (ctx.logger().isInfoEnabled()) {
+                ctx.logger().info(AUTH_MARKER, "Player {} disabled 2FA from IP {}",
+                        dbPlayer.getNickname(), PlayerAddressUtils.getPlayerIp(player));
+            }
+        });
+    }
+
+    private boolean saveTotpChange(
+            Player player, RegisteredPlayer dbPlayer, String operationName,
+            ConnectionLifecycleRegistry.Operation operation) {
+        var saveResult = ctx.databaseManager().savePlayer(dbPlayer).join();
+        if (!ctx.isConnectionCurrent(operation)) {
+            return false;
+        }
+        if (ctx.handleDatabaseError(
+                saveResult, dbPlayer.getNickname(), player, operationName, operation)) {
+            return false;
         }
         if (!Boolean.TRUE.equals(saveResult.getValue())) {
-            ctx.sendDatabaseErrorMessage(player);
-            return;
+            sendIfCurrent(operation, () -> ctx.sendDatabaseErrorMessage(player));
+            return false;
         }
-
-        emit(AuditEventType.TWO_FACTOR_DISABLED, dbPlayer.getNickname(),
-                PlayerAddressUtils.getPlayerIp(player), "self-disable");
-        player.sendMessage(ctx.sm().twoFactorDisableSuccess());
-
-        if (ctx.logger().isInfoEnabled()) {
-            ctx.logger().info(AUTH_MARKER, "Player {} disabled 2FA from IP {}",
-                    dbPlayer.getNickname(), PlayerAddressUtils.getPlayerIp(player));
-        }
+        return true;
     }
 
     // ===== qr =====
 
-    private void processQr(Player player) {
-        if (twoFactorDisabledRejection(player)) {
+    private void processQr(Player player, ConnectionLifecycleRegistry.Operation operation) {
+        if (twoFactorDisabledRejection(player, operation)) {
             return;
         }
-        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa qr");
+        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa qr", operation);
         if (dbPlayer == null) {
             return;
         }
         if (!hasTotp(dbPlayer)) {
-            player.sendMessage(ctx.sm().twoFactorQrNotEnabled());
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorQrNotEnabled()));
             return;
         }
 
-        player.sendMessage(ctx.sm().twoFactorQrWarning());
+        sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorQrWarning()));
     }
 
     // ===== status =====
 
-    private void processStatus(Player player) {
-        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa status");
+    private void processStatus(Player player, ConnectionLifecycleRegistry.Operation operation) {
+        RegisteredPlayer dbPlayer = loadAuthorizedPlayerOrNull(player, "2fa status", operation);
         if (dbPlayer == null) {
             return;
         }
         if (hasTotp(dbPlayer)) {
-            player.sendMessage(ctx.sm().twoFactorStatusEnabled());
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorStatusEnabled()));
         } else {
-            player.sendMessage(ctx.sm().twoFactorStatusDisabled());
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorStatusDisabled()));
         }
     }
 
@@ -377,36 +385,90 @@ class TwoFactorCommand implements SimpleCommand {
      * Returns the DB row for the currently-authorized player, or {@code null} if the
      * player is not authorized or the DB lookup fails (already handled / messaged).
      */
-    private RegisteredPlayer loadAuthorizedPlayerOrNull(Player player, String opName) {
+    private RegisteredPlayer loadAuthorizedPlayerOrNull(
+            Player player, String opName, ConnectionLifecycleRegistry.Operation operation) {
         if (!ctx.authCache().isPlayerAuthorized(player.getUniqueId(), PlayerAddressUtils.getPlayerIp(player))) {
-            player.sendMessage(ctx.sm().authMustLogin());
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().authMustLogin()));
             return null;
         }
-        AuthenticationContext authCtx = ctx.validateAndAuthenticatePlayer(player, opName);
+        AuthenticationContext authCtx = ctx.validateAndAuthenticatePlayer(
+                player, opName, operation);
         if (authCtx == null) {
             return null;
         }
         if (authCtx.registeredPlayer() == null) {
-            player.sendMessage(ctx.sm().notRegistered());
+            sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().notRegistered()));
             return null;
         }
         return authCtx.registeredPlayer();
     }
 
-    private boolean twoFactorDisabledRejection(Player player) {
+    private boolean twoFactorDisabledRejection(
+            Player player, ConnectionLifecycleRegistry.Operation operation) {
         if (ctx.settings().getTwoFactorSettings().isEnabled()) {
             return false;
         }
-        player.sendMessage(ctx.sm().twoFactorDisabledInConfig());
+        sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().twoFactorDisabledInConfig()));
         return true;
     }
 
-    private boolean rejectBlockedTotpAttempt(Player player) {
+    private boolean rejectBlockedTotpAttempt(
+            Player player, ConnectionLifecycleRegistry.Operation operation) {
         java.net.InetAddress address = PlayerAddressUtils.getPlayerAddress(player);
         if (address == null || !ctx.authCache().isBlocked(address, player.getUsername())) {
             return false;
         }
-        player.sendMessage(ctx.sm().bruteForceBlocked());
+        sendIfCurrent(operation, () -> player.sendMessage(ctx.sm().bruteForceBlocked()));
+        return true;
+    }
+
+    private void sendIfCurrent(ConnectionLifecycleRegistry.Operation operation, Runnable send) {
+        ctx.runIfConnectionCurrent(operation, send);
+    }
+
+    private String validatedCodeOrNull(
+            Player player, String[] args, ConnectionLifecycleRegistry.Operation operation,
+            Component usage) {
+        if (args.length != 2) {
+            sendIfCurrent(operation, () -> player.sendMessage(usage));
+            return null;
+        }
+        String code = args[1];
+        if (!isWellFormedCode(code)) {
+            sendIfCurrent(operation,
+                    () -> player.sendMessage(ctx.sm().twoFactorVerifyInvalidFormat()));
+            return null;
+        }
+        return code;
+    }
+
+    private boolean claimTotpWindow(
+            Player player, String nickname, long matchedWindow, String detailsPrefix,
+            Component wrongCodeMessage, ConnectionLifecycleRegistry.Operation operation) {
+        if (matchedWindow == TotpService.NO_WINDOW_MATCH) {
+            ctx.runIfConnectionCurrent(operation, () -> {
+                recordFailedTotpAttempt(player, nickname, detailsPrefix + "-wrong-code");
+                player.sendMessage(wrongCodeMessage);
+            });
+            return false;
+        }
+
+        // RFC 6238 §5.2: claim replay state under the same connection-generation fence. A
+        // retired A must neither consume B's window nor report a replay against B.
+        AtomicBoolean consumed = new AtomicBoolean();
+        boolean current = ctx.runIfConnectionCurrent(operation,
+                () -> consumed.set(ctx.totpReplayGuard().consume(
+                        player.getUniqueId(), matchedWindow)));
+        if (!current) {
+            return false;
+        }
+        if (!consumed.get()) {
+            ctx.runIfConnectionCurrent(operation, () -> {
+                recordFailedTotpAttempt(player, nickname, detailsPrefix + "-replay");
+                player.sendMessage(wrongCodeMessage);
+            });
+            return false;
+        }
         return true;
     }
 

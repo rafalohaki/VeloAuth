@@ -248,6 +248,7 @@ class ConnectionManagerLifecycleIntegrationTest {
             return pendingConnection;
         });
         when(failedResult.isSuccessful()).thenReturn(false);
+        connectionManager.beginTransferSession(player);
         connectionManager.setForcedHostTarget(player, "backend");
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -321,6 +322,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
         when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
         when(taskBuilder.schedule()).thenReturn(newAutoTransfer);
+        connectionManager.beginTransferSession(oldPlayer);
         connectionManager.setForcedHostTarget(oldPlayer, "backend");
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -383,6 +385,7 @@ class ConnectionManagerLifecycleIntegrationTest {
                     "Fallback eligibility hook should be released by the test");
             return Optional.of(authConnection);
         });
+        connectionManager.beginTransferSession(oldPlayer);
         connectionManager.setForcedHostTarget(oldPlayer, "backend");
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {

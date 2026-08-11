@@ -41,6 +41,25 @@ public final class DatabaseErrorHandler {
         return handleErrorWithKey(result, player, operation, logger, messages, DEFAULT_ERROR_KEY);
     }
 
+    /** Handles a player DB error while delegating delivery to an owner-aware message fence. */
+    public static boolean handleError(
+            DbResult<?> result, Player player, String operation, Logger logger, Messages messages,
+            java.util.function.Consumer<Component> messageSender) {
+        if (!result.isDatabaseError()) {
+            return false;
+        }
+        return handleErrorCore(result, player.getUsername(), operation, logger, messages,
+                DEFAULT_ERROR_KEY, messageSender);
+    }
+
+    /** Handles an owner-fenced DB error using an identifier captured before asynchronous work. */
+    public static boolean handleError(
+            DbResult<?> result, String identifier, String operation, Logger logger,
+            Messages messages, java.util.function.Consumer<Component> messageSender) {
+        return handleErrorCore(result, identifier, operation, logger, messages,
+                DEFAULT_ERROR_KEY, messageSender);
+    }
+
     /**
      * Handles database errors for CommandSource (admin commands) with standardized logging and messaging.
      *

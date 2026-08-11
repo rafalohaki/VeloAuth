@@ -3,17 +3,25 @@ package net.rafalohaki.veloauth.command;
 import at.favre.lib.crypto.bcrypt.BCrypt;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
+import com.velocitypowered.api.event.connection.DisconnectEvent;
+import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.rafalohaki.veloauth.VeloAuth;
+import net.rafalohaki.veloauth.audit.AuditEventType;
+import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.database.DatabaseConfig;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
+import net.rafalohaki.veloauth.listener.AuthListener;
+import net.rafalohaki.veloauth.listener.PostLoginHandler;
+import net.rafalohaki.veloauth.listener.PreLoginHandler;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
@@ -22,6 +30,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -39,10 +49,16 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.atLeastOnce;
@@ -112,6 +128,7 @@ class CommandFlowFixesTest {
         when(player.getRemoteAddress()).thenReturn(new InetSocketAddress(inetAddress, 25565));
         when(proxyServer.getPlayer(TEST_PLAYER_NAME)).thenReturn(java.util.Optional.empty());
         when(proxyServer.getAllPlayers()).thenReturn(List.of());
+        plugin.getConnectionLifecycleRegistry().activate(player, ignored -> { });
     }
 
     @AfterEach
@@ -168,7 +185,9 @@ class CommandFlowFixesTest {
     @Test
     void testChangePasswordCommand_WhenLockHeld_ShowsInProgressMessage() {
         ChangePasswordCommand command = new ChangePasswordCommand(inlineContext);
-        assertTrue(inlineContext.tryAcquireCommandLock(playerUuid));
+        var operation = inlineContext.captureConnectionOperation(player);
+        assertNotNull(operation);
+        assertTrue(inlineContext.tryAcquireCommandLock(playerUuid, operation));
 
         command.execute(invocation(player, "oldPassword", "newPassword123"));
 
@@ -176,7 +195,7 @@ class CommandFlowFixesTest {
         verify(player).sendMessage(messagesCaptor.capture());
         assertTrue(capturedTexts(messagesCaptor).contains(messages.get("auth.command.in_progress")));
 
-        inlineContext.releaseCommandLock(playerUuid);
+        inlineContext.releaseCommandLock(playerUuid, operation);
     }
 
     @Test
@@ -232,8 +251,137 @@ class CommandFlowFixesTest {
         assertTrue(capturedTexts(messagesCaptor).contains(messages.get("auth.changepassword.success")));
         assertFalse(authCache.hasActiveSession(playerUuid, TEST_PLAYER_NAME, TEST_IP));
         assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP));
-        assertTrue(inlineContext.tryAcquireCommandLock(playerUuid));
-        inlineContext.releaseCommandLock(playerUuid);
+        var operation = inlineContext.captureConnectionOperation(player);
+        assertNotNull(operation);
+        assertTrue(inlineContext.tryAcquireCommandLock(playerUuid, operation));
+        inlineContext.releaseCommandLock(playerUuid, operation);
+    }
+
+    @Test
+    void changePassword_CommittedAfterReplacement_RevokesAccountWithoutReadingRetiredPlayer()
+            throws Exception {
+        AtomicBoolean retiredPlayer = new AtomicBoolean();
+        when(player.getUniqueId()).thenAnswer(ignored -> {
+            if (retiredPlayer.get()) {
+                throw new IllegalStateException("retired Player#getUniqueId access");
+            }
+            return playerUuid;
+        });
+        when(player.getUsername()).thenAnswer(ignored -> {
+            if (retiredPlayer.get()) {
+                throw new IllegalStateException("retired Player#getUsername access");
+            }
+            return TEST_PLAYER_NAME;
+        });
+        when(player.getRemoteAddress()).thenAnswer(ignored -> {
+            if (retiredPlayer.get()) {
+                throw new IllegalStateException("retired Player#getRemoteAddress access");
+            }
+            return new InetSocketAddress(InetAddress.getByName(TEST_IP), 25565);
+        });
+
+        RegisteredPlayer registeredPlayer = createRegisteredPlayer(
+                TEST_PLAYER_NAME, playerUuid, hash("oldPassword"));
+        databaseManager.setFindResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(registeredPlayer)));
+        CompletableFuture<DatabaseManager.DbResult<Boolean>> committedSave =
+                new CompletableFuture<>();
+        CountDownLatch saveEntered = new CountDownLatch(1);
+        databaseManager.enqueueSavePlayerFuture(committedSave);
+        databaseManager.setSaveEnteredLatch(saveEntered);
+        CompletableFuture<DatabaseManager.DbResult<Boolean>> pendingPremiumLookup =
+                new CompletableFuture<>();
+        databaseManager.setPremiumResult(TEST_PLAYER_NAME, pendingPremiumLookup);
+        authCache.addAuthorizedPlayer(
+                playerUuid, CachedAuthUser.fromRegisteredPlayer(registeredPlayer, false));
+        authCache.startSession(playerUuid, TEST_PLAYER_NAME, TEST_IP);
+
+        Player replacement = mock(Player.class);
+        when(replacement.getUniqueId()).thenReturn(playerUuid);
+        when(replacement.getUsername()).thenReturn(TEST_PLAYER_NAME);
+        CountDownLatch duplicateDisconnected = new CountDownLatch(1);
+        org.mockito.Mockito.doAnswer(ignored -> {
+            duplicateDisconnected.countDown();
+            return null;
+        }).when(replacement).disconnect(org.mockito.ArgumentMatchers.any(Component.class));
+        when(proxyServer.getAllPlayers()).thenReturn(List.of(player, replacement));
+        AuditLogService auditLogService = mock(AuditLogService.class);
+        setPluginField("auditLogService", auditLogService);
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            CapturingAsyncCommandContext context = new CapturingAsyncCommandContext(
+                    plugin, databaseManager, authCache, settings, messages, executor);
+            new ChangePasswordCommand(context).execute(
+                    invocation(player, "oldPassword", "newPassword123"));
+
+            assertTrue(saveEntered.await(5, TimeUnit.SECONDS),
+                    "The password update must be parked at its controlled commit future");
+            assertNotNull(plugin.getConnectionLifecycleRegistry().activate(
+                    replacement, ignored -> { }));
+            authCache.addAuthorizedPlayer(
+                    playerUuid, CachedAuthUser.fromRegisteredPlayer(registeredPlayer, false));
+            authCache.startSession(playerUuid, TEST_PLAYER_NAME, TEST_IP);
+            retiredPlayer.set(true);
+
+            committedSave.complete(DatabaseManager.DbResult.success(true));
+            assertTrue(duplicateDisconnected.await(2, TimeUnit.SECONDS),
+                    "Mandatory duplicate-session revocation must precede optional premium lookup");
+            assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP));
+            assertFalse(authCache.hasActiveSession(playerUuid, TEST_PLAYER_NAME, TEST_IP));
+            verify(auditLogService).save(
+                    AuditEventType.PASSWORD_CHANGE, TEST_PLAYER_NAME, TEST_IP);
+
+            pendingPremiumLookup.complete(DatabaseManager.DbResult.success(false));
+            context.submitted().get(5, TimeUnit.SECONDS);
+        }
+
+        assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP),
+                "A committed password change must revoke replacement authorization");
+        assertFalse(authCache.hasActiveSession(playerUuid, TEST_PLAYER_NAME, TEST_IP),
+                "A committed password change must revoke replacement sessions");
+        verify(replacement).disconnect(org.mockito.ArgumentMatchers.any(Component.class));
+        verify(player, never()).sendMessage(org.mockito.ArgumentMatchers.any(Component.class));
+    }
+
+    @Test
+    void commandLock_ReconnectReplacesRetiredOwnerAndLateReleaseCannotClearReplacement() {
+        var staleOperation = inlineContext.captureConnectionOperation(player);
+        assertNotNull(staleOperation);
+        assertTrue(inlineContext.tryAcquireCommandLock(playerUuid, staleOperation));
+        Player replacement = mock(Player.class);
+        when(replacement.getUniqueId()).thenReturn(playerUuid);
+        var replacementOperation = plugin.getConnectionLifecycleRegistry().activate(
+                replacement, ignored -> { });
+        assertNotNull(replacementOperation);
+
+        assertTrue(inlineContext.tryAcquireCommandLock(playerUuid, replacementOperation),
+                "B must replace the command lock owned by retired generation A");
+        inlineContext.releaseCommandLock(playerUuid, staleOperation);
+
+        assertFalse(inlineContext.tryAcquireCommandLock(playerUuid, replacementOperation),
+                "A's late finally must not release B's command lock");
+        inlineContext.releaseCommandLock(playerUuid, replacementOperation);
+        assertTrue(inlineContext.tryAcquireCommandLock(playerUuid, replacementOperation));
+        inlineContext.releaseCommandLock(playerUuid, replacementOperation);
+    }
+
+    @Test
+    void registrationLock_LateExpiredLeaseReleaseCannotClearReplacementLease() throws Exception {
+        InetAddress address = InetAddress.getByName(TEST_IP);
+        var expiredLease = inlineContext.tryAcquireRegistrationLock(address);
+        assertNotNull(expiredLease);
+        inlineContext.releaseRegistrationLock(expiredLease);
+        var replacementLease = inlineContext.tryAcquireRegistrationLock(address);
+        assertNotNull(replacementLease);
+
+        inlineContext.releaseRegistrationLock(expiredLease);
+
+        assertNull(inlineContext.tryAcquireRegistrationLock(address),
+                "A late release must not erase B's replacement IP lease");
+        inlineContext.releaseRegistrationLock(replacementLease);
+        var nextLease = inlineContext.tryAcquireRegistrationLock(address);
+        assertNotNull(nextLease);
+        inlineContext.releaseRegistrationLock(nextLease);
     }
 
     @Test
@@ -273,6 +421,66 @@ class CommandFlowFixesTest {
         assertFalse(sentMessages.contains(messages.get("auth.register.success")));
         assertTrue(sentMessages.contains(messages.get("error.database.query")));
         assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void logoutDisconnect_LateLoginOrRegisterCompletion_DoesNotRestoreConnectionState(
+            boolean registration) throws Exception {
+        AtomicBoolean active = new AtomicBoolean(true);
+        when(player.isActive()).thenAnswer(ignored -> active.get());
+        org.mockito.Mockito.doAnswer(ignored -> {
+            active.set(false);
+            return null;
+        }).when(player).disconnect(org.mockito.ArgumentMatchers.any(Component.class));
+        when(player.isOnlineMode()).thenReturn(false);
+        when(connectionManager.transferToBackend(player)).thenReturn(true);
+        injectAuthTimeoutScheduler();
+
+        PreLoginHandler preLoginHandler = mock(PreLoginHandler.class);
+        PostLoginHandler postLoginHandler = mock(PostLoginHandler.class);
+        AuthListener listener = new AuthListener(
+                plugin, authCache, settings, preLoginHandler, postLoginHandler,
+                connectionManager, databaseManager, messages);
+        listener.onPostLogin(new PostLoginEvent(player));
+
+        CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> lookup = new CompletableFuture<>();
+        CountDownLatch lookupEntered = new CountDownLatch(1);
+        databaseManager.setFindResult(TEST_PLAYER_NAME, lookup);
+        databaseManager.setFindEnteredLatch(lookupEntered);
+        databaseManager.setPremiumResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(false)));
+        databaseManager.enqueueSavePlayerResult(DatabaseManager.DbResult.success(true));
+        databaseManager.enqueueRegistrationResult(DatabaseManager.DbResult.success(true));
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            CapturingAsyncCommandContext context = new CapturingAsyncCommandContext(
+                    plugin, databaseManager, authCache, settings, messages, executor);
+            if (registration) {
+                new RegisterCommand(context).execute(invocation(player, "secret123", "secret123"));
+            } else {
+                new LoginCommand(context).execute(invocation(player, "secret123"));
+            }
+
+            assertTrue(lookupEntered.await(2, TimeUnit.SECONDS),
+                    "The command must be parked inside its controlled DAO lookup before logout");
+            new LogoutCommand(context).execute(invocation(player));
+            listener.onDisconnect(new DisconnectEvent(
+                    player, DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN));
+
+            RegisteredPlayer stored = registration
+                    ? null
+                    : createRegisteredPlayer(TEST_PLAYER_NAME, playerUuid, hash("secret123"));
+            lookup.complete(DatabaseManager.DbResult.success(stored));
+            context.submitted().get(5, TimeUnit.SECONDS);
+        }
+
+        assertFalse(authCache.isPlayerAuthorized(playerUuid, TEST_IP),
+                "A retired concrete connection must not be re-authorized by late command work");
+        assertFalse(authCache.hasActiveSession(playerUuid, TEST_PLAYER_NAME, TEST_IP),
+                "A retired concrete connection must not recreate its session");
+        verify(connectionManager, never()).transferToBackend(player);
+        verify(player, never()).sendMessage(org.mockito.ArgumentMatchers.any(Component.class));
     }
 
     @Test
@@ -363,7 +571,8 @@ class CommandFlowFixesTest {
                 player,
                 TEST_PLAYER_NAME,
                 player.getRemoteAddress().getAddress(),
-                registeredPlayer
+                registeredPlayer,
+                plugin.getConnectionLifecycleRegistry().capture(player)
         );
 
         authCache.addPremiumPlayer(TEST_PLAYER_NAME, premiumUuid);
@@ -397,7 +606,8 @@ class CommandFlowFixesTest {
                 player,
                 TEST_PLAYER_NAME,
                 player.getRemoteAddress().getAddress(),
-                registeredPlayer
+                registeredPlayer,
+                plugin.getConnectionLifecycleRegistry().capture(player)
         );
 
         authCache.addPremiumPlayer(TEST_PLAYER_NAME, resolverPremiumUuid);
@@ -556,6 +766,12 @@ class CommandFlowFixesTest {
         connectionManagerField.set(plugin, manager);
     }
 
+    private void setPluginField(String fieldName, Object value) throws Exception {
+        Field field = VeloAuth.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(plugin, value);
+    }
+
     private void setExecutorShutdown(boolean shutdown) throws Exception {
         Field shutdownField = VirtualThreadExecutorProvider.class.getDeclaredField("SHUTDOWN_INITIATED");
         shutdownField.setAccessible(true);
@@ -576,8 +792,66 @@ class CommandFlowFixesTest {
         }
 
         @Override
+        void runAsyncCommand(
+                Player player, ConnectionLifecycleRegistry.Operation operation,
+                Runnable task, String errorKey) {
+            task.run();
+        }
+
+        @Override
         void runAsyncCommandWithTimeout(CommandSource source, Runnable task, String errorKey, String timeoutKey) {
             task.run();
+        }
+
+        @Override
+        void runAsyncCommandWithTimeout(
+                Player player, ConnectionLifecycleRegistry.Operation operation, Runnable task,
+                String errorKey, String timeoutKey) {
+            task.run();
+        }
+    }
+
+    private static final class CapturingAsyncCommandContext extends CommandContext {
+        private final ExecutorService executor;
+        private volatile Future<?> submitted;
+
+        private CapturingAsyncCommandContext(
+                VeloAuth plugin, DatabaseManager databaseManager, AuthCache authCache,
+                Settings settings, Messages messages, ExecutorService executor) {
+            super(plugin, databaseManager, authCache, settings, messages);
+            this.executor = executor;
+        }
+
+        @Override
+        void runAsyncCommand(CommandSource source, Runnable task, String errorKey) {
+            submitted = executor.submit(task);
+        }
+
+        @Override
+        void runAsyncCommand(
+                Player player, ConnectionLifecycleRegistry.Operation operation,
+                Runnable task, String errorKey) {
+            submitted = executor.submit(task);
+        }
+
+        @Override
+        void runAsyncCommandWithTimeout(
+                CommandSource source, Runnable task, String errorKey, String timeoutKey) {
+            submitted = executor.submit(task);
+        }
+
+        @Override
+        void runAsyncCommandWithTimeout(
+                Player player, ConnectionLifecycleRegistry.Operation operation, Runnable task,
+                String errorKey, String timeoutKey) {
+            submitted = executor.submit(task);
+        }
+
+        private Future<?> submitted() {
+            if (submitted == null) {
+                throw new IllegalStateException("Command task was not submitted");
+            }
+            return submitted;
         }
     }
 
@@ -604,6 +878,8 @@ class CommandFlowFixesTest {
         private CompletableFuture<List<RegisteredPlayer>> conflicts =
                 CompletableFuture.completedFuture(List.of());
         private boolean connected = true;
+        private volatile CountDownLatch findEnteredLatch;
+        private volatile CountDownLatch saveEnteredLatch;
 
         private StubDatabaseManager(DatabaseConfig config, Messages messages) {
             super(config, messages);
@@ -617,12 +893,24 @@ class CommandFlowFixesTest {
             findResults.put(nickname.toLowerCase(Locale.ROOT), result);
         }
 
+        void setFindEnteredLatch(CountDownLatch latch) {
+            findEnteredLatch = latch;
+        }
+
         void setPremiumResult(String username, CompletableFuture<DbResult<Boolean>> result) {
             premiumResults.put(username, result);
         }
 
         void enqueueSavePlayerResult(DbResult<Boolean> result) {
             savePlayerResults.add(CompletableFuture.completedFuture(result));
+        }
+
+        void enqueueSavePlayerFuture(CompletableFuture<DbResult<Boolean>> result) {
+            savePlayerResults.add(result);
+        }
+
+        void setSaveEnteredLatch(CountDownLatch latch) {
+            saveEnteredLatch = latch;
         }
 
         void enqueueRegistrationResult(DbResult<Boolean> result) {
@@ -655,6 +943,10 @@ class CommandFlowFixesTest {
 
         @Override
         public CompletableFuture<DbResult<RegisteredPlayer>> findPlayerByNickname(String nickname) {
+            CountDownLatch entered = findEnteredLatch;
+            if (entered != null) {
+                entered.countDown();
+            }
             if (nickname == null || nickname.isBlank()) {
                 return CompletableFuture.completedFuture(DbResult.success(null));
             }
@@ -665,6 +957,10 @@ class CommandFlowFixesTest {
 
         @Override
         public CompletableFuture<DbResult<Boolean>> savePlayer(RegisteredPlayer player) {
+            CountDownLatch entered = saveEnteredLatch;
+            if (entered != null) {
+                entered.countDown();
+            }
             CompletableFuture<DbResult<Boolean>> queuedResult = savePlayerResults.poll();
             return queuedResult != null ? queuedResult : defaultSavePlayerResult;
         }

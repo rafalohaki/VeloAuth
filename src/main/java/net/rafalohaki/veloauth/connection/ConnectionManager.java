@@ -150,17 +150,9 @@ public class ConnectionManager {
                 return null;
             }
             PlayerTransferState current = transferStates.get(playerId);
-            if (current != null) {
-                return current.owner() == player ? current : null;
-            }
-
-            PlayerTransferState candidate = new PlayerTransferState(
-                    playerId, player, transferGeneration.incrementAndGet());
-            PlayerTransferState raced = transferStates.putIfAbsent(playerId, candidate);
-            if (raced == null) {
-                return candidate;
-            }
-            return raced.owner() == player ? raced : null;
+            // PostLogin is the sole generation-creation boundary. Never lazily recreate state for
+            // a concrete Player retired by /logout or DisconnectEvent.
+            return current != null && current.owner() == player ? current : null;
         } finally {
             taskLifecycleLock.unlock();
         }

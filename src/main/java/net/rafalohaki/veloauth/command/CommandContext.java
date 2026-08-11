@@ -9,6 +9,7 @@ import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.i18n.SimpleMessages;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.util.DatabaseErrorHandler;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import net.rafalohaki.veloauth.util.SecurityUtils;
@@ -24,6 +25,7 @@ import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Shared context for all command implementations.
@@ -43,7 +45,8 @@ class CommandContext {
     private final SimpleMessages sm;
     private final IPRateLimiter ipRateLimiter;
     private final net.rafalohaki.veloauth.auth.ConflictModeService conflictModeService;
-    private final ConcurrentHashMap<UUID, Boolean> activeCommands = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, ConnectionLifecycleRegistry.Operation> activeCommands =
+            new ConcurrentHashMap<>();
 
     /**
      * Per-IP mutex for the {@code /register} flow. Closes the TOCTOU window between the
@@ -52,7 +55,7 @@ class CommandContext {
      * gate. Caffeine-bounded (≤10k IPs) with a short TTL — far longer than any register call
      * but bounded enough to recover from leaked locks if a register handler throws past its
      * release point. */
-    private final Cache<InetAddress, Boolean> registrationLocks = Caffeine.newBuilder()
+    private final Cache<InetAddress, Object> registrationLocks = Caffeine.newBuilder()
             .maximumSize(10_000)
             .expireAfterWrite(Duration.ofMinutes(1))
             .build();
@@ -96,6 +99,20 @@ class CommandContext {
     net.rafalohaki.veloauth.auth.totp.TotpReplayGuard totpReplayGuard() { return plugin.getTotpReplayGuard(); }
     net.rafalohaki.veloauth.audit.AuditLogService auditLogService() { return plugin.getAuditLogService(); }
     net.rafalohaki.veloauth.report.ReportService reportService() { return plugin.getReportService(); }
+    ConnectionLifecycleRegistry.Operation captureConnectionOperation(Player player) {
+        return plugin.getConnectionLifecycleRegistry().capture(player);
+    }
+    boolean isConnectionCurrent(ConnectionLifecycleRegistry.Operation operation) {
+        return plugin.getConnectionLifecycleRegistry().isCurrent(operation);
+    }
+    boolean runIfConnectionCurrent(ConnectionLifecycleRegistry.Operation operation, Runnable effect) {
+        return plugin.getConnectionLifecycleRegistry().runIfCurrent(operation, effect);
+    }
+    void retireConnectionOperation(Player player) {
+        plugin.getConnectionLifecycleRegistry().markRetired(
+                player, () -> plugin.clearConnectionBoundState(
+                        player, authCache, plugin.getConnectionManager()));
+    }
 
     /**
      * Template method for common authentication pre-checks:
@@ -113,10 +130,24 @@ class CommandContext {
             return null;
         }
 
+        ConnectionLifecycleRegistry.Operation operation = captureConnectionOperation(player);
+        if (operation == null) {
+            return null;
+        }
+        return validateAndAuthenticatePlayer(player, commandName, operation);
+    }
+
+    AuthenticationContext validateAndAuthenticatePlayer(
+            Player player, String commandName,
+            ConnectionLifecycleRegistry.Operation operation) {
+        if (!isConnectionCurrent(operation)) {
+            return null;
+        }
+
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
 
         if (playerAddress != null && authCache.isBlocked(playerAddress, player.getUsername())) {
-            player.sendMessage(sm.bruteForceBlocked());
+            runIfConnectionCurrent(operation, () -> player.sendMessage(sm.bruteForceBlocked()));
             if (logger.isWarnEnabled()) {
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} attempted {}", playerAddress.getHostAddress(), commandName);
             }
@@ -129,15 +160,19 @@ class CommandContext {
             dbResult = databaseManager.findPlayerByNickname(username).join();
         } catch (CompletionException e) {
             logger.error(DB_MARKER, "Database error during {} for player {}", commandName, username, e);
-            player.sendMessage(sm.errorDatabase());
+            runIfConnectionCurrent(operation, () -> player.sendMessage(sm.errorDatabase()));
             return null;
         }
 
-        if (handleDatabaseError(dbResult, player, commandName + " lookup for")) {
+        if (handleDatabaseError(
+                dbResult, username, player, commandName + " lookup for", operation)) {
             return null;
         }
 
-        return new AuthenticationContext(player, username, playerAddress, dbResult.getValue());
+        if (!isConnectionCurrent(operation)) {
+            return null;
+        }
+        return new AuthenticationContext(player, username, playerAddress, dbResult.getValue(), operation);
     }
 
     /**
@@ -161,11 +196,44 @@ class CommandContext {
         return result;
     }
 
+    DatabaseManager.DbResult<Boolean> checkPremiumStatus(
+            String username, Player player, String operation,
+            ConnectionLifecycleRegistry.Operation connectionOperation) {
+        DatabaseManager.DbResult<Boolean> result;
+        try {
+            result = databaseManager.isPremium(username).join();
+        } catch (RuntimeException e) {
+            logger.error(DB_MARKER, "[DATABASE ERROR] {} failed for {}", operation, username, e);
+            runIfConnectionCurrent(connectionOperation,
+                    () -> player.sendMessage(sm.errorDatabase()));
+            return DatabaseManager.DbResult.databaseError(
+                    e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+        if (result.isDatabaseError()) {
+            if (logger.isErrorEnabled()) {
+                logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}",
+                        operation, username, result.getErrorMessage());
+            }
+            runIfConnectionCurrent(connectionOperation,
+                    () -> player.sendMessage(sm.errorDatabase()));
+        }
+        return result;
+    }
+
     /**
      * Handles database errors consistently across all commands.
      */
     boolean handleDatabaseError(DatabaseManager.DbResult<?> result, Player player, String operation) {
         return DatabaseErrorHandler.handleError(result, player, operation, logger, messages);
+    }
+
+    boolean handleDatabaseError(
+            DatabaseManager.DbResult<?> result, String identifier, Player player, String operation,
+            ConnectionLifecycleRegistry.Operation connectionOperation) {
+        return DatabaseErrorHandler.handleError(
+                result, identifier, operation, logger, messages,
+                message -> runIfConnectionCurrent(
+                        connectionOperation, () -> player.sendMessage(message)));
     }
 
     /**
@@ -204,12 +272,28 @@ class CommandContext {
         CommandHelper.runAsyncCommand(task, messages, source, errorKey);
     }
 
+    void runAsyncCommand(
+            Player player, ConnectionLifecycleRegistry.Operation operation,
+            Runnable task, String errorKey) {
+        CommandHelper.runAsyncCommand(task, messages, errorKey,
+                message -> runIfConnectionCurrent(
+                        operation, () -> player.sendMessage(message)));
+    }
+
     /**
      * Executes a command asynchronously with timeout using the shared command helper.
      */
     void runAsyncCommandWithTimeout(CommandSource source, Runnable task,
                                     String errorKey, String timeoutKey) {
         CommandHelper.runAsyncCommandWithTimeout(task, messages, source, errorKey, timeoutKey);
+    }
+
+    void runAsyncCommandWithTimeout(
+            Player player, ConnectionLifecycleRegistry.Operation operation, Runnable task,
+            String errorKey, String timeoutKey) {
+        CommandHelper.runAsyncCommandWithTimeout(task, messages, errorKey, timeoutKey,
+                message -> runIfConnectionCurrent(
+                        operation, () -> player.sendMessage(message)));
     }
 
     /**
@@ -234,14 +318,45 @@ class CommandContext {
         player.sendMessage(messages.component("auth.command.in_progress", NamedTextColor.YELLOW));
     }
 
+    boolean beginConnectionCommand(
+            Player player, ConnectionLifecycleRegistry.Operation operation) {
+        if (!isConnectionCurrent(operation)) {
+            return false;
+        }
+        if (tryAcquireCommandLock(operation.playerId(), operation)) {
+            return true;
+        }
+        runIfConnectionCurrent(operation, () -> sendCommandInProgress(player));
+        return false;
+    }
+
+    boolean rejectRateLimited(
+            Player player, InetAddress address,
+            ConnectionLifecycleRegistry.Operation operation) {
+        if (address == null || !ipRateLimiter.isRateLimited(address)) {
+            return false;
+        }
+        runIfConnectionCurrent(operation, () -> player.sendMessage(sm.bruteForceBlocked()));
+        return true;
+    }
+
     /**
      * Tries to acquire a per-player command lock to prevent concurrent command execution.
      *
      * @param playerId UUID of the player
      * @return true if lock acquired, false if already processing
      */
-    boolean tryAcquireCommandLock(UUID playerId) {
-        return activeCommands.putIfAbsent(playerId, Boolean.TRUE) == null;
+    boolean tryAcquireCommandLock(
+            UUID playerId, ConnectionLifecycleRegistry.Operation operation) {
+        AtomicBoolean acquired = new AtomicBoolean();
+        activeCommands.compute(playerId, (ignored, current) -> {
+            if (current == null || !isConnectionCurrent(current)) {
+                acquired.set(true);
+                return operation;
+            }
+            return current;
+        });
+        return acquired.get();
     }
 
     /**
@@ -249,8 +364,9 @@ class CommandContext {
      *
      * @param playerId UUID of the player
      */
-    void releaseCommandLock(UUID playerId) {
-        activeCommands.remove(playerId);
+    void releaseCommandLock(
+            UUID playerId, ConnectionLifecycleRegistry.Operation operation) {
+        activeCommands.remove(playerId, operation);
     }
 
     /**
@@ -258,17 +374,22 @@ class CommandContext {
      * {@code ip-limit-registrations}. {@code null} address never acquires (treated as
      * not-allowed; caller surface defends with its own null-checks).
      */
-    boolean tryAcquireRegistrationLock(InetAddress address) {
+    RegistrationLockLease tryAcquireRegistrationLock(InetAddress address) {
         if (address == null) {
-            return false;
+            return null;
         }
-        return registrationLocks.asMap().putIfAbsent(address, Boolean.TRUE) == null;
+        Object owner = new Object();
+        return registrationLocks.asMap().putIfAbsent(address, owner) == null
+                ? new RegistrationLockLease(address, owner)
+                : null;
     }
 
-    /** Releases the per-IP register lock. No-op for {@code null}. */
-    void releaseRegistrationLock(InetAddress address) {
-        if (address != null) {
-            registrationLocks.invalidate(address);
+    /** Releases the exact per-IP register lease. No-op for {@code null} or a replaced lease. */
+    void releaseRegistrationLock(RegistrationLockLease lease) {
+        if (lease != null) {
+            registrationLocks.asMap().remove(lease.address(), lease.owner());
         }
     }
+
+    record RegistrationLockLease(InetAddress address, Object owner) { }
 }

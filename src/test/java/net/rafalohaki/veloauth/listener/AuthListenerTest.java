@@ -14,6 +14,7 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.api.util.GameProfile;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.format.TextDecoration;
@@ -53,6 +54,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static net.rafalohaki.veloauth.testsupport.EventTaskTestSupport.await;
@@ -312,6 +318,7 @@ class AuthListenerTest {
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
         when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
 
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -333,6 +340,7 @@ class AuthListenerTest {
         when(player.isOnlineMode()).thenReturn(true);
         when(backendServer.getServerInfo()).thenReturn(
                 new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -359,6 +367,7 @@ class AuthListenerTest {
         when(authServer.getServerInfo()).thenReturn(
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
         when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -384,6 +393,7 @@ class AuthListenerTest {
                 new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
         when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
                 .thenReturn(CompletableFuture.completedFuture(Optional.of(backendServer)));
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -408,6 +418,7 @@ class AuthListenerTest {
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
         when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
                 .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -430,6 +441,7 @@ class AuthListenerTest {
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
         when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
                 .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("selection failed")));
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -454,6 +466,7 @@ class AuthListenerTest {
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
         when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
                 .thenReturn(pendingBackend);
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -471,9 +484,11 @@ class AuthListenerTest {
         RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
 
         when(player.getUsername()).thenReturn("AuthRoutingPlayer");
+        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
         when(authServer.getServerInfo()).thenReturn(
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
 
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -489,9 +504,11 @@ class AuthListenerTest {
         Player player = org.mockito.Mockito.mock(Player.class);
         RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
         when(player.getUsername()).thenReturn("RejectedEmbeddedPlayer");
+        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
         when(authServer.getServerInfo()).thenReturn(
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
         when(connectionManager.prepareAuthServerConnection(player)).thenReturn(false);
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -515,6 +532,7 @@ class AuthListenerTest {
         RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
         when(backendServer.getServerInfo()).thenReturn(
                 new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -543,6 +561,7 @@ class AuthListenerTest {
                 new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
         when(connectionManager.findAvailableBackendServerForInitialConnectionAsync())
                 .thenReturn(CompletableFuture.completedFuture(Optional.of(backendServer)));
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, authServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -570,6 +589,7 @@ class AuthListenerTest {
         when(authServer.getServerInfo()).thenReturn(
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
         when(proxyServer.getServer("auth")).thenReturn(Optional.of(authServer));
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -608,6 +628,7 @@ class AuthListenerTest {
         when(previousServer.getServerInfo()).thenReturn(
                 new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
 
+        activateConnection(player);
         ServerPreConnectEvent event = new ServerPreConnectEvent(player, backendServer, previousServer);
 
         EventTask task = authListener.onServerPreConnect(event);
@@ -651,6 +672,29 @@ class AuthListenerTest {
                 "A disconnected connection must not leave a reusable 2FA continuation");
         assertFalse(replayGuard.consume(playerUuid, 100L),
                 "Logout must not reset the one-time TOTP replay window");
+    }
+
+    @Test
+    void onDisconnect_TransferCleanupFailure_StillCancelsTimeoutAndRetiresOwner()
+            throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("CleanupFailurePlayer");
+        AuthTimeoutScheduler timeoutScheduler = org.mockito.Mockito.mock(AuthTimeoutScheduler.class);
+        setPluginField("authTimeoutScheduler", timeoutScheduler);
+        activateConnection(player);
+        org.mockito.Mockito.doThrow(new IllegalStateException("controlled transfer cleanup failure"))
+                .when(connectionManager).clearTransferState(player);
+
+        authListener.onDisconnect(new DisconnectEvent(
+                player, DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN));
+
+        verify(authCache).removeAuthorizedPlayer(playerUuid);
+        verify(authCache).endSession(playerUuid);
+        verify(timeoutScheduler).cancel(playerUuid);
+        assertNull(plugin.getConnectionLifecycleRegistry().capture(player),
+                "Cleanup failure must not preserve a current lifecycle owner");
     }
 
     @Test
@@ -708,6 +752,239 @@ class AuthListenerTest {
     }
 
     @Test
+    void onPostLogin_TransferPublicationFailureRetiresAndDisconnectsReplacement() {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("FailedPublicationPlayer");
+        when(player.getRemoteAddress()).thenReturn(
+                new InetSocketAddress("192.0.2.76", 25565));
+        org.mockito.Mockito.doThrow(new IllegalStateException("controlled task cancellation failure"))
+                .when(connectionManager).beginTransferSession(player);
+
+        authListener.onPostLogin(new PostLoginEvent(player));
+
+        assertNull(plugin.getConnectionLifecycleRegistry().capture(player),
+                "A failed transfer publication must not leave a current lifecycle owner");
+        verify(authCache).removeAuthorizedPlayer(playerUuid);
+        verify(authCache).endSession(playerUuid);
+        verify(connectionManager).clearTransferState(player);
+        verify(player).disconnect(any(Component.class));
+        verify(postLoginHandler, never()).handleOfflinePlayer(any(Player.class), anyString());
+        verify(postLoginHandler, never()).handlePremiumPlayer(any(Player.class), anyString());
+    }
+
+    @Test
+    void onPostLogin_PremiumConnectionRetiredAfterActivation_DoesNotAuthorizeAfterLogout()
+            throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("RetiredPremiumPlayer");
+        when(player.isOnlineMode()).thenReturn(true);
+        CountDownLatch addressLookupEntered = new CountDownLatch(1);
+        CountDownLatch releaseAddressLookup = new CountDownLatch(1);
+        doAnswer(ignored -> {
+            if (addressLookupEntered.getCount() != 0L) {
+                addressLookupEntered.countDown();
+                assertTrue(releaseAddressLookup.await(2, TimeUnit.SECONDS));
+            }
+            return new InetSocketAddress("192.0.2.75", 25565);
+        }).when(player).getRemoteAddress();
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> postLogin = executor.submit(
+                    () -> authListener.onPostLogin(new PostLoginEvent(player)));
+            assertTrue(addressLookupEntered.await(2, TimeUnit.SECONDS),
+                    "PostLogin must publish the lifecycle generation before logout");
+
+            authListener.onDisconnect(new DisconnectEvent(
+                    player, DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN));
+            releaseAddressLookup.countDown();
+            postLogin.get(2, TimeUnit.SECONDS);
+        }
+
+        verify(postLoginHandler, never()).handlePremiumPlayer(player, "192.0.2.75");
+        verify(authCache, never()).authorize(eq(playerUuid), any(), anyString(), anyString());
+    }
+
+    @Test
+    void conflictMessageLookup_CompletesAfterLogout_DoesNotMessageRetiredConnection()
+            throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("RetiredConflictPlayer");
+        CountDownLatch conflictLookupEntered = new CountDownLatch(1);
+        CountDownLatch releaseConflictLookup = new CountDownLatch(1);
+        doAnswer(ignored -> {
+            conflictLookupEntered.countDown();
+            assertTrue(releaseConflictLookup.await(2, TimeUnit.SECONDS));
+            return true;
+        }).when(postLoginHandler).shouldShowConflictMessage(player);
+        var operation = plugin.getConnectionLifecycleRegistry().activate(player, ignored -> { });
+        assertNotNull(operation);
+
+        CompletableFuture<Void> lookup = authListener.checkConflictMessageAsync(player, operation);
+        assertTrue(conflictLookupEntered.await(2, TimeUnit.SECONDS));
+        authListener.onDisconnect(new DisconnectEvent(
+                player, DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN));
+        releaseConflictLookup.countDown();
+        lookup.get(2, TimeUnit.SECONDS);
+
+        verify(postLoginHandler, never()).showConflictResolutionMessage(player);
+    }
+
+    @Test
+    void onServerPreConnect_StaleUuidMismatchCompletion_DoesNotClearReplacementAuthorization() {
+        UUID sharedUuid = UUID.randomUUID();
+        Player staleConnection = org.mockito.Mockito.mock(Player.class);
+        Player replacementConnection = org.mockito.Mockito.mock(Player.class);
+        for (Player connection : List.of(staleConnection, replacementConnection)) {
+            when(connection.getUniqueId()).thenReturn(sharedUuid);
+            when(connection.getUsername()).thenReturn("UuidCheckReplacement");
+            when(connection.getRemoteAddress()).thenReturn(
+                    new InetSocketAddress("192.0.2.78", 25565));
+            when(connection.isOnlineMode()).thenReturn(false);
+            when(connection.isActive()).thenReturn(true);
+        }
+        CompletableFuture<DatabaseManager.DbResult<RegisteredPlayer>> pendingLookup =
+                new CompletableFuture<>();
+        when(databaseManager.findPlayerByNickname("UuidCheckReplacement"))
+                .thenReturn(pendingLookup);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        activateConnection(staleConnection);
+        ServerPreConnectEvent staleEvent =
+                new ServerPreConnectEvent(staleConnection, backendServer, authServer);
+        EventTask staleVerification = authListener.onServerPreConnect(staleEvent);
+        assertNotNull(staleVerification);
+
+        authListener.onPostLogin(new PostLoginEvent(replacementConnection));
+        org.mockito.Mockito.clearInvocations(authCache);
+        RegisteredPlayer mismatchedOwner = new RegisteredPlayer();
+        mismatchedOwner.setNickname("UuidCheckReplacement");
+        mismatchedOwner.setUuid(UUID.randomUUID().toString());
+        pendingLookup.complete(DatabaseManager.DbResult.success(mismatchedOwner));
+        await(staleVerification);
+
+        assertFalse(staleEvent.getResult().isAllowed(),
+                "A stale verification completion must remain fail-closed");
+        verify(authCache, never()).removeAuthorizedPlayer(sharedUuid);
+        verify(authCache, never()).endSession(sharedUuid);
+    }
+
+    @Test
+    void onServerPreConnect_PremiumGenerationReplacedDuringCacheRead_DeniesStaleEvent() {
+        UUID sharedUuid = UUID.randomUUID();
+        Player staleConnection = org.mockito.Mockito.mock(Player.class);
+        Player replacementConnection = org.mockito.Mockito.mock(Player.class);
+        when(staleConnection.getUniqueId()).thenReturn(sharedUuid);
+        when(staleConnection.getUsername()).thenReturn("PremiumReplacement");
+        when(staleConnection.getRemoteAddress()).thenReturn(
+                new InetSocketAddress("192.0.2.79", 25565));
+        when(staleConnection.isOnlineMode()).thenReturn(true);
+        when(replacementConnection.getUniqueId()).thenReturn(sharedUuid);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        activateConnection(staleConnection);
+        when(authCache.isPlayerAuthorized(sharedUuid, "192.0.2.79")).thenAnswer(ignored -> {
+            assertNotNull(plugin.getConnectionLifecycleRegistry().activate(
+                    replacementConnection, previous -> { }));
+            return false;
+        });
+        ServerPreConnectEvent staleEvent =
+                new ServerPreConnectEvent(staleConnection, backendServer, authServer);
+
+        EventTask task = authListener.onServerPreConnect(staleEvent);
+        if (task != null) {
+            await(task);
+        }
+
+        assertFalse(staleEvent.getResult().isAllowed(),
+                "A premium event replaced during its cache read must stay fail-closed");
+        verify(postLoginHandler, never()).handlePremiumPlayer(staleConnection, "192.0.2.79");
+    }
+
+    @Test
+    void onServerPreConnect_OfflineUuidCompletionForInactiveOwner_DeniesEvent() {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("InactiveUuidOwner");
+        when(player.getRemoteAddress()).thenReturn(
+                new InetSocketAddress("192.0.2.80", 25565));
+        when(player.isOnlineMode()).thenReturn(false);
+        when(player.isActive()).thenReturn(false);
+        RegisteredPlayer storedPlayer = new RegisteredPlayer();
+        storedPlayer.setNickname("InactiveUuidOwner");
+        storedPlayer.setUuid(playerUuid.toString());
+        when(databaseManager.findPlayerByNickname("InactiveUuidOwner"))
+                .thenReturn(CompletableFuture.completedFuture(
+                        DatabaseManager.DbResult.success(storedPlayer)));
+        when(authCache.isPlayerAuthorized(playerUuid, "192.0.2.80")).thenReturn(true);
+        when(authCache.hasActiveSession(
+                playerUuid, "InactiveUuidOwner", "192.0.2.80")).thenReturn(true);
+        RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        when(backendServer.getServerInfo()).thenReturn(
+                new ServerInfo("backend", InetSocketAddress.createUnresolved("127.0.0.1", 25566)));
+        when(authServer.getServerInfo()).thenReturn(
+                new ServerInfo("auth", InetSocketAddress.createUnresolved("127.0.0.1", 25565)));
+        activateConnection(player);
+        ServerPreConnectEvent event =
+                new ServerPreConnectEvent(player, backendServer, authServer);
+
+        EventTask task = authListener.onServerPreConnect(event);
+        assertNotNull(task);
+        await(task);
+
+        assertFalse(event.getResult().isAllowed(),
+                "An inactive concrete connection must never inherit the default allow result");
+    }
+
+    @Test
+    void onServerConnected_ReplacedConnectionCannotReplaceCurrentOwnersAuthTimeout()
+            throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player staleConnection = org.mockito.Mockito.mock(Player.class);
+        Player currentConnection = org.mockito.Mockito.mock(Player.class);
+        for (Player connection : List.of(staleConnection, currentConnection)) {
+            when(connection.getUniqueId()).thenReturn(playerUuid);
+            when(connection.getUsername()).thenReturn("TimeoutOwnerPlayer");
+            when(connection.getRemoteAddress()).thenReturn(
+                    new InetSocketAddress("192.0.2.77", 25565));
+            when(connection.isOnlineMode()).thenReturn(false);
+        }
+        when(authCache.isPlayerAuthorized(playerUuid, "192.0.2.77")).thenReturn(false);
+        when(databaseManager.findPlayerByNickname("TimeoutOwnerPlayer"))
+                .thenReturn(new CompletableFuture<>());
+        AuthTimeoutScheduler timeoutScheduler = org.mockito.Mockito.mock(AuthTimeoutScheduler.class);
+        setPluginField("authTimeoutScheduler", timeoutScheduler);
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerInfo authServerInfo = org.mockito.Mockito.mock(ServerInfo.class);
+        when(authServer.getServerInfo()).thenReturn(authServerInfo);
+        when(authServerInfo.getName()).thenReturn("auth");
+
+        authListener.onPostLogin(new PostLoginEvent(staleConnection));
+        authListener.onPostLogin(new PostLoginEvent(currentConnection));
+        authListener.onServerConnected(new ServerConnectedEvent(currentConnection, authServer, null));
+        authListener.onServerConnected(new ServerConnectedEvent(staleConnection, authServer, null));
+
+        verify(timeoutScheduler).schedule(currentConnection);
+        verify(timeoutScheduler, never()).schedule(staleConnection);
+        verify(staleConnection, never()).sendMessage(any(Component.class));
+    }
+
+    @Test
     void onDisconnect_LogoutFromReplacedConnection_DoesNotClearReplacementState() throws Exception {
         UUID sharedOfflineUuid = UUID.randomUUID();
         Player oldConnection = org.mockito.Mockito.mock(Player.class);
@@ -741,6 +1018,67 @@ class AuthListenerTest {
         verify(timeoutScheduler, never()).cancel(sharedOfflineUuid);
         assertTrue(replacementPending.get(sharedOfflineUuid).isPresent(),
                 "A stale logout disconnect must not invalidate B's pending 2FA state");
+    }
+
+    @Test
+    void onDisconnect_OwnerCleanupInterleavesWithReplacementPublication_DoesNotClearReplacement()
+            throws Exception {
+        UUID sharedOfflineUuid = UUID.randomUUID();
+        Player oldConnection = org.mockito.Mockito.mock(Player.class);
+        Player replacementConnection = org.mockito.Mockito.mock(Player.class);
+        when(oldConnection.getUniqueId()).thenReturn(sharedOfflineUuid);
+        when(oldConnection.getUsername()).thenReturn("InterleavedReplacementPlayer");
+        when(oldConnection.getRemoteAddress()).thenReturn(
+                new InetSocketAddress("192.0.2.73", 25565));
+        when(replacementConnection.getUniqueId()).thenReturn(sharedOfflineUuid);
+        when(replacementConnection.getUsername()).thenReturn("InterleavedReplacementPlayer");
+        when(replacementConnection.getRemoteAddress()).thenReturn(
+                new InetSocketAddress("192.0.2.74", 25565));
+
+        PendingTotpStore replacementPending = new PendingTotpStore(Duration.ofMinutes(5), null);
+        AuthTimeoutScheduler timeoutScheduler = org.mockito.Mockito.mock(AuthTimeoutScheduler.class);
+        setPluginField("pendingTotpStore", replacementPending);
+        setPluginField("authTimeoutScheduler", timeoutScheduler);
+
+        authListener.onPostLogin(new PostLoginEvent(oldConnection));
+        org.mockito.Mockito.clearInvocations(authCache, connectionManager, timeoutScheduler);
+
+        CountDownLatch oldCleanupEntered = new CountDownLatch(1);
+        CountDownLatch releaseOldCleanup = new CountDownLatch(1);
+        CountDownLatch replacementAttempted = new CountDownLatch(1);
+        doAnswer(ignored -> {
+            oldCleanupEntered.countDown();
+            assertTrue(releaseOldCleanup.await(2, TimeUnit.SECONDS));
+            return null;
+        }).when(authCache).removeAuthorizedPlayer(sharedOfflineUuid);
+        doAnswer(ignored -> {
+            replacementPending.put(PendingTotpState.forSetup(
+                    sharedOfflineUuid, "JBSWY3DPEHPK3PXP", "192.0.2.74"));
+            timeoutScheduler.schedule(replacementConnection);
+            return null;
+        }).when(connectionManager).beginTransferSession(replacementConnection);
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> oldDisconnect = executor.submit(() -> authListener.onDisconnect(
+                    new DisconnectEvent(oldConnection, DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN)));
+            assertTrue(oldCleanupEntered.await(1, TimeUnit.SECONDS),
+                    "The old owner must enter cleanup before B is published");
+            Future<?> replacementLogin = executor.submit(() -> {
+                replacementAttempted.countDown();
+                authListener.onPostLogin(new PostLoginEvent(replacementConnection));
+            });
+            assertTrue(replacementAttempted.await(2, TimeUnit.SECONDS));
+            releaseOldCleanup.countDown();
+
+            oldDisconnect.get(3, TimeUnit.SECONDS);
+            replacementLogin.get(3, TimeUnit.SECONDS);
+        }
+
+        assertTrue(replacementPending.get(sharedOfflineUuid).isPresent(),
+                "A cleanup that already claimed A must not erase B published concurrently");
+        var timeoutOrder = inOrder(timeoutScheduler);
+        timeoutOrder.verify(timeoutScheduler).cancel(sharedOfflineUuid);
+        timeoutOrder.verify(timeoutScheduler).schedule(replacementConnection);
     }
 
     @Test
@@ -782,6 +1120,7 @@ class AuthListenerTest {
         AuthTimeoutScheduler timeoutScheduler = org.mockito.Mockito.mock(AuthTimeoutScheduler.class);
         setPluginField("authTimeoutScheduler", timeoutScheduler);
 
+        activateConnection(player);
         authListener.onServerConnected(new ServerConnectedEvent(player, authServer, null));
 
         ArgumentCaptor<net.kyori.adventure.text.Component> componentCaptor =
@@ -941,6 +1280,11 @@ class AuthListenerTest {
                 new InetSocketAddress(address, 25565));
         when(connection.isActive()).thenReturn(true);
         return connection;
+    }
+
+    private void activateConnection(Player player) {
+        assertNotNull(plugin.getConnectionLifecycleRegistry().activate(player,
+                ignored -> connectionManager.beginTransferSession(player)));
     }
 
     private void setPluginInitialized(boolean value) throws Exception {

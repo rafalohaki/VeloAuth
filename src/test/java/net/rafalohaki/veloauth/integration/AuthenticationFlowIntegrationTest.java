@@ -611,6 +611,8 @@ class AuthenticationFlowIntegrationTest {
         when(player.isOnlineMode()).thenReturn(false);
         when(player.isActive()).thenReturn(true);
         when(player.getRemoteAddress()).thenReturn(new InetSocketAddress(playerIp, 25565));
+        assertNotNull(plugin.getConnectionLifecycleRegistry().activate(
+                player, ignored -> connectionManager.beginTransferSession(player)));
 
         RegisteredServer backendServer = mock(RegisteredServer.class);
         when(backendServer.getServerInfo()).thenReturn(

@@ -15,6 +15,7 @@ import org.slf4j.MarkerFactory;
 
 import java.time.Instant;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -89,13 +90,19 @@ class UuidVerificationHandler {
      * @return CompletableFuture that resolves to true if verification passes
      */
     public java.util.concurrent.CompletableFuture<Boolean> verifyPlayerUuid(Player player) {
+        return verifyPlayerUuid(player, Runnable::run);
+    }
+
+    java.util.concurrent.CompletableFuture<Boolean> verifyPlayerUuid(
+            Player player, Consumer<Runnable> connectionEffectGuard) {
         try {
             if (player.isOnlineMode()) {
                 return java.util.concurrent.CompletableFuture.completedFuture(handlePremiumPlayer(player));
             }
-            return verifyCrackedPlayerUuidAsync(player);
+            return verifyCrackedPlayerUuidAsync(player, connectionEffectGuard);
         } catch (RuntimeException e) {
-            return java.util.concurrent.CompletableFuture.completedFuture(handleVerificationError(player, e));
+            return java.util.concurrent.CompletableFuture.completedFuture(
+                    handleVerificationError(player, e, connectionEffectGuard));
         }
     }
 
@@ -106,25 +113,31 @@ class UuidVerificationHandler {
         return true;
     }
 
-    private java.util.concurrent.CompletableFuture<Boolean> verifyCrackedPlayerUuidAsync(Player player) {
+    private java.util.concurrent.CompletableFuture<Boolean> verifyCrackedPlayerUuidAsync(
+            Player player, Consumer<Runnable> connectionEffectGuard) {
         String username = player.getUsername();
         return databaseManager.findPlayerByNickname(username)
                 .thenApply(dbResult -> {
                     if (dbResult.isDatabaseError()) {
-                        return handleDatabaseVerificationError(player, dbResult);
+                        return handleDatabaseVerificationError(
+                                player, dbResult, connectionEffectGuard);
                     }
-                    return performUuidVerification(player, dbResult.getValue());
+                    return performUuidVerification(
+                            player, dbResult.getValue(), connectionEffectGuard);
                 })
                 .exceptionally(t -> {
                     Exception e = t instanceof Exception ex ? ex : new RuntimeException(t);
-                    return handleAsyncVerificationError(player, e);
+                    return handleAsyncVerificationError(player, e, connectionEffectGuard);
                 });
     }
 
-    private boolean handleDatabaseVerificationError(Player player, DbResult<RegisteredPlayer> dbResult) {
+    private boolean handleDatabaseVerificationError(
+            Player player, DbResult<RegisteredPlayer> dbResult,
+            Consumer<Runnable> connectionEffectGuard) {
         logger.error(SECURITY_MARKER, "[DATABASE ERROR] UUID verification failed for {}: {}",
                 player.getUsername(), dbResult.getErrorMessage());
-        AuthenticationErrorHandler.handleVerificationFailure(player, player.getUniqueId(), authCache, logger);
+        connectionEffectGuard.accept(() -> AuthenticationErrorHandler.handleVerificationFailure(
+                player, player.getUniqueId(), authCache, logger));
         return false;
     }
 
@@ -132,6 +145,12 @@ class UuidVerificationHandler {
      * Performs UUID verification against database fields.
      */
     public boolean performUuidVerification(Player player, RegisteredPlayer dbPlayer) {
+        return performUuidVerification(player, dbPlayer, Runnable::run);
+    }
+
+    private boolean performUuidVerification(
+            Player player, RegisteredPlayer dbPlayer,
+            Consumer<Runnable> connectionEffectGuard) {
         if (dbPlayer == null) {
             logMissingDbPlayer(player);
             return false;
@@ -155,7 +174,7 @@ class UuidVerificationHandler {
                     player.getUsername(), conflictModeService.getConflictTtlHours());
         }
 
-        return verifyUuidMatch(player, dbPlayer);
+        return verifyUuidMatch(player, dbPlayer, connectionEffectGuard);
     }
 
     private void logMissingDbPlayer(Player player) {
@@ -193,7 +212,9 @@ class UuidVerificationHandler {
                 player.getUsername(), playerUuid, storedUuid, storedPremiumUuid);
     }
 
-    private boolean verifyUuidMatch(Player player, RegisteredPlayer dbPlayer) {
+    private boolean verifyUuidMatch(
+            Player player, RegisteredPlayer dbPlayer,
+            Consumer<Runnable> connectionEffectGuard) {
         UUID playerUuid = player.getUniqueId();
         UUID storedUuid = UuidUtils.parseUuidSafely(dbPlayer.getUuid());
         UUID storedPremiumUuid = UuidUtils.parseUuidSafely(dbPlayer.getPremiumUuid());
@@ -209,23 +230,32 @@ class UuidVerificationHandler {
             return true;
         }
 
-        handleUuidMismatch(player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer);
+        handleUuidMismatch(player, playerUuid, storedUuid, storedPremiumUuid,
+                dbPlayer, connectionEffectGuard);
         return false;
     }
 
-    private void handleUuidMismatch(Player player, UUID playerUuid, UUID storedUuid,
-                                   UUID storedPremiumUuid, RegisteredPlayer dbPlayer) {
-        AuthenticationErrorHandler.handleUuidMismatch(
-                new AuthenticationErrorHandler.UuidMismatchContext(
-                        player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer),
-                authCache, logger, auditLogServiceSupplier.get());
+    private void handleUuidMismatch(
+            Player player, UUID playerUuid, UUID storedUuid,
+            UUID storedPremiumUuid, RegisteredPlayer dbPlayer,
+            Consumer<Runnable> connectionEffectGuard) {
+        connectionEffectGuard.accept(() -> AuthenticationErrorHandler.handleUuidMismatch(
+                    new AuthenticationErrorHandler.UuidMismatchContext(
+                            player, playerUuid, storedUuid, storedPremiumUuid, dbPlayer),
+                    authCache, logger, auditLogServiceSupplier.get()));
     }
 
-    private boolean handleAsyncVerificationError(Player player, Exception e) {
-        return AuthenticationErrorHandler.handleVerificationError(player, e, authCache, logger);
+    private boolean handleAsyncVerificationError(
+            Player player, Exception exception, Consumer<Runnable> connectionEffectGuard) {
+        connectionEffectGuard.accept(() -> AuthenticationErrorHandler.handleVerificationError(
+                player, exception, authCache, logger));
+        return false;
     }
 
-    private boolean handleVerificationError(Player player, Exception e) {
-        return AuthenticationErrorHandler.handleVerificationError(player, e, authCache, logger);
+    private boolean handleVerificationError(
+            Player player, Exception exception, Consumer<Runnable> connectionEffectGuard) {
+        connectionEffectGuard.accept(() -> AuthenticationErrorHandler.handleVerificationError(
+                player, exception, authCache, logger));
+        return false;
     }
 }

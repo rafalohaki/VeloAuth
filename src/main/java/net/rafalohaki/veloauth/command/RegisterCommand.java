@@ -6,6 +6,7 @@ import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 
@@ -54,33 +55,37 @@ class RegisterCommand implements SimpleCommand {
             return;
         }
 
-        ctx.runAsyncCommandWithTimeout(invocation.source(), () -> processRegistration(player, password),
+        ConnectionLifecycleRegistry.Operation operation = ctx.captureConnectionOperation(player);
+        if (operation == null) {
+            return;
+        }
+        ctx.runAsyncCommandWithTimeout(player, operation,
+                () -> processRegistration(player, password, operation),
                 ERROR_DATABASE_QUERY, "auth.registration.timeout");
     }
 
-    private void processRegistration(Player player, String password) {
-        if (!ctx.tryAcquireCommandLock(player.getUniqueId())) {
-            ctx.sendCommandInProgress(player);
+    private void processRegistration(
+            Player player, String password,
+            ConnectionLifecycleRegistry.Operation operation) {
+        if (!ctx.beginConnectionCommand(player, operation)) {
             return;
         }
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
-        if (!canProceedWithoutAddress(player, playerAddress)) {
+        if (!canProceedWithoutAddress(player, playerAddress, operation)) {
             return;
         }
-        IpLockState ipLock = tryAcquireRegistrationIpLock(player, playerAddress);
+        IpLockState ipLock = tryAcquireRegistrationIpLock(player, playerAddress, operation);
         if (!ipLock.proceed()) {
             return;
         }
         try {
-            executeRegistrationFlow(player, password, playerAddress);
+            executeRegistrationFlow(player, password, playerAddress, operation);
         } catch (CompletionException e) {
             ctx.logger().error(DB_MARKER, "Database error during registration for player {}", player.getUsername(), e);
-            ctx.sendDatabaseErrorMessage(player);
+            ctx.runIfConnectionCurrent(operation, () -> ctx.sendDatabaseErrorMessage(player));
         } finally {
-            ctx.releaseCommandLock(player.getUniqueId());
-            if (ipLock.acquired()) {
-                ctx.releaseRegistrationLock(playerAddress);
-            }
+            ctx.releaseCommandLock(operation.playerId(), operation);
+            ctx.releaseRegistrationLock(ipLock.lease());
         }
     }
 
@@ -90,53 +95,69 @@ class RegisterCommand implements SimpleCommand {
     // null-address registers both bypass the cap. Null addresses are rare (buggy upstream
     // proxy / non-standard transport); the operator can disable ip-limit-registrations
     // if they accept that risk.
-    private boolean canProceedWithoutAddress(Player player, InetAddress playerAddress) {
+    private boolean canProceedWithoutAddress(
+            Player player, InetAddress playerAddress,
+            ConnectionLifecycleRegistry.Operation operation) {
         if (playerAddress != null || ctx.settings().getIpLimitRegistrations() <= 0) {
             return true;
         }
         ctx.logger().warn(DB_MARKER,
                 "Refusing registration of {} — cannot resolve remote IP (ip-limit-registrations enabled)",
                 player.getUsername());
-        player.sendMessage(ctx.sm().bruteForceBlocked());
-        ctx.releaseCommandLock(player.getUniqueId());
+        ctx.runIfConnectionCurrent(operation,
+                () -> player.sendMessage(ctx.sm().bruteForceBlocked()));
+        ctx.releaseCommandLock(operation.playerId(), operation);
         return false;
     }
 
     // Closes the TOCTOU window on ip-limit-registrations: serializes concurrent /register
     // from the same IP. Without this gate, two parallel registers could both observe
     // count < limit and both succeed, exceeding the configured ceiling.
-    private IpLockState tryAcquireRegistrationIpLock(Player player, InetAddress playerAddress) {
+    private IpLockState tryAcquireRegistrationIpLock(
+            Player player, InetAddress playerAddress,
+            ConnectionLifecycleRegistry.Operation operation) {
         if (playerAddress == null) {
-            return new IpLockState(true, false);
+            return new IpLockState(true, null);
         }
-        if (ctx.tryAcquireRegistrationLock(playerAddress)) {
-            return new IpLockState(true, true);
+        CommandContext.RegistrationLockLease lease =
+                ctx.tryAcquireRegistrationLock(playerAddress);
+        if (lease != null) {
+            return new IpLockState(true, lease);
         }
-        ctx.sendCommandInProgress(player);
-        ctx.releaseCommandLock(player.getUniqueId());
-        return new IpLockState(false, false);
+        ctx.runIfConnectionCurrent(operation, () -> ctx.sendCommandInProgress(player));
+        ctx.releaseCommandLock(operation.playerId(), operation);
+        return new IpLockState(false, null);
     }
 
-    private record IpLockState(boolean proceed, boolean acquired) { }
+    private record IpLockState(
+            boolean proceed, CommandContext.RegistrationLockLease lease) { }
 
-    private void executeRegistrationFlow(Player player, String password, InetAddress playerAddress) {
-        if (playerAddress != null && ctx.ipRateLimiter().isRateLimited(playerAddress)) {
-            player.sendMessage(ctx.sm().bruteForceBlocked());
+    private void executeRegistrationFlow(
+            Player player, String password, InetAddress playerAddress,
+            ConnectionLifecycleRegistry.Operation operation) {
+        if (ctx.rejectRateLimited(player, playerAddress, operation)) {
             return;
         }
 
-        AuthenticationContext authContext = ctx.validateAndAuthenticatePlayer(player, "registration");
+        AuthenticationContext authContext = ctx.validateAndAuthenticatePlayer(
+                player, "registration", operation);
         if (authContext == null) {
             return;
         }
 
         if (authContext.registeredPlayer() != null) {
-            authContext.player().sendMessage(ctx.sm().alreadyRegistered());
+            ctx.runIfConnectionCurrent(authContext.connectionOperation(),
+                    () -> authContext.player().sendMessage(ctx.sm().alreadyRegistered()));
             return;
         }
 
         if (exceedsIpRegistrationLimit(authContext)) {
-            player.sendMessage(ctx.messages().component("register.ip_limit_reached", NamedTextColor.RED));
+            ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> player.sendMessage(
+                    ctx.messages().component("register.ip_limit_reached", NamedTextColor.RED)));
+            return;
+        }
+
+        if (!ctx.isConnectionCurrent(authContext.connectionOperation())) {
             return;
         }
 
@@ -146,8 +167,10 @@ class RegisterCommand implements SimpleCommand {
         }
 
         if (PostAuthFlow.execute(ctx, authContext, newPlayer, "registered")) {
-            authContext.player().sendMessage(ctx.sm().registerSuccess());
-            emitRegisterAudit(authContext);
+            ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> {
+                authContext.player().sendMessage(ctx.sm().registerSuccess());
+                emitRegisterAudit(authContext);
+            });
         }
     }
 
@@ -167,12 +190,20 @@ class RegisterCommand implements SimpleCommand {
     }
 
     private boolean persistNewPlayer(AuthenticationContext authContext, RegisteredPlayer newPlayer) {
+        if (!ctx.isConnectionCurrent(authContext.connectionOperation())) {
+            return false;
+        }
         var saveResult = ctx.databaseManager().registerPlayerIfAbsent(newPlayer).join();
-        if (ctx.handleDatabaseError(saveResult, authContext.player(), "Failed to register new player")) {
+        if (!ctx.isConnectionCurrent(authContext.connectionOperation())) {
+            return false;
+        }
+        if (ctx.handleDatabaseError(saveResult, authContext.username(), authContext.player(),
+                "Failed to register new player", authContext.connectionOperation())) {
             return false;
         }
         if (!Boolean.TRUE.equals(saveResult.getValue())) {
-            authContext.player().sendMessage(ctx.sm().alreadyRegistered());
+            ctx.runIfConnectionCurrent(authContext.connectionOperation(),
+                    () -> authContext.player().sendMessage(ctx.sm().alreadyRegistered()));
             return false;
         }
         return true;

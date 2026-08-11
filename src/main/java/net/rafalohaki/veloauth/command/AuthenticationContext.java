@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.command;
 
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 
 import java.net.InetAddress;
 
@@ -14,6 +15,7 @@ record AuthenticationContext(
         Player player,
         String username,
         InetAddress playerAddress,
-        RegisteredPlayer registeredPlayer
+        RegisteredPlayer registeredPlayer,
+        ConnectionLifecycleRegistry.Operation connectionOperation
 ) {
 }

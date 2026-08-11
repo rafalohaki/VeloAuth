@@ -24,6 +24,8 @@ import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.i18n.Messages;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry.Operation;
 import net.rafalohaki.veloauth.util.FloodgateDetector;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
@@ -41,8 +43,9 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -84,9 +87,6 @@ public class AuthListener {
             .expireAfterWrite(Duration.ofSeconds(30))
             .build();
 
-    /** Connection identity owning UUID-keyed authorization state. */
-    private final ConcurrentHashMap<UUID, Player> activeConnections = new ConcurrentHashMap<>();
-
     /** Fail-secure hand-off from GameProfileRequestEvent to LoginEvent. */
     private final Cache<String, Boolean> rejectedProfileBindings = Caffeine.newBuilder()
             .maximumSize(10_000)
@@ -104,6 +104,7 @@ public class AuthListener {
     private final PreLoginHandler preLoginHandler;
     private final PostLoginHandler postLoginHandler;
     private final ConnectionManager connectionManager;
+    private final ConnectionLifecycleRegistry connectionLifecycleRegistry;
     private final UuidVerificationHandler uuidVerificationHandler;
 
     /**
@@ -135,6 +136,7 @@ public class AuthListener {
         this.messages = messages;
         this.connectionManager = java.util.Objects.requireNonNull(connectionManager, 
             "ConnectionManager cannot be null - initialization failed");
+        this.connectionLifecycleRegistry = plugin.getConnectionLifecycleRegistry();
         this.preLoginHandler = java.util.Objects.requireNonNull(preLoginHandler, 
             "PreLoginHandler cannot be null - initialization failed");
         this.postLoginHandler = java.util.Objects.requireNonNull(postLoginHandler, 
@@ -190,6 +192,38 @@ public class AuthListener {
             logger.debug(AUTH_MARKER, "Refreshed premium authorization for {} (expired cache re-created)",
                     player.getUsername());
         }
+    }
+
+    private boolean refreshPremiumAuthorizationIfCurrent(
+            Player player, String playerIp, Operation operation) {
+        return connectionLifecycleRegistry.runIfCurrent(operation,
+                () -> refreshPremiumAuthorization(player, playerIp));
+    }
+
+    private boolean prepareAuthServerConnectionIfCurrent(
+            ServerPreConnectEvent event, Player player, RegisteredServer targetServer,
+            Operation operation) {
+        AtomicBoolean prepared = new AtomicBoolean();
+        boolean executed = connectionLifecycleRegistry.runIfCurrent(operation, () -> {
+            if (connectionManager.prepareAuthServerConnection(player)) {
+                prepared.set(true);
+                event.setResult(ServerPreConnectEvent.ServerResult.allowed(targetServer));
+            }
+        });
+        if (!executed || !prepared.get()) {
+            event.setResult(ServerPreConnectEvent.ServerResult.denied());
+        }
+        return executed && prepared.get();
+    }
+
+    private boolean allowServerIfCurrent(
+            ServerPreConnectEvent event, RegisteredServer targetServer, Operation operation) {
+        boolean allowed = connectionLifecycleRegistry.runIfCurrent(operation,
+                () -> event.setResult(ServerPreConnectEvent.ServerResult.allowed(targetServer)));
+        if (!allowed) {
+            event.setResult(ServerPreConnectEvent.ServerResult.denied());
+        }
+        return allowed;
     }
 
 
@@ -379,7 +413,8 @@ public class AuthListener {
         return preLoginHandler.resolvePremiumStatusAsync(username, sourceAddress)
                 .thenCompose(result -> handlePremiumResolutionResult(event, username, result))
                 .exceptionally(throwable -> {
-                    logger.error("[ASYNC] Error during premium detection for {} - denying login for safety",
+                    logger.error(SECURITY_MARKER,
+                            "[ASYNC] Error during premium detection for {} - denying login for safety",
                             username, throwable);
                     event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
                             messages.component("connection.error.database", NamedTextColor.RED)));
@@ -602,14 +637,15 @@ public class AuthListener {
 
         rejectedProfileBindings.invalidate(profileBindingKey(player.getUsername(), player));
 
-        if (!releaseConnectionOwnership(event, player)) {
+        boolean allowUnownedCleanup = allowsUnownedDisconnectCleanup(event, player);
+        if (!connectionLifecycleRegistry.retire(
+                player, allowUnownedCleanup,
+                () -> plugin.clearConnectionBoundState(player, authCache, connectionManager))) {
             logger.debug(SECURITY_MARKER,
                     "Ignoring {} disconnect cleanup for non-owning connection {} ({})",
                     event.getLoginStatus(), player.getUsername(), playerUuid);
             return;
         }
-
-        clearConnectionBoundState(player);
 
         if (logger.isDebugEnabled()) {
             logger.debug(SECURITY_MARKER,
@@ -619,40 +655,16 @@ public class AuthListener {
     }
 
     @SuppressWarnings("PMD.CompareObjectsWithEquals") // Player identity distinguishes same-UUID connections.
-    private boolean releaseConnectionOwnership(DisconnectEvent event, Player player) {
-        UUID uuid = player.getUniqueId();
-        if (activeConnections.remove(uuid, player)) {
-            return true;
-        }
-
-        Player knownOwner = activeConnections.get(uuid);
-        if (knownOwner != null && knownOwner != player) {
-            return false;
-        }
-
+    private boolean allowsUnownedDisconnectCleanup(DisconnectEvent event, Player player) {
         DisconnectEvent.LoginStatus status = event.getLoginStatus();
         if (status != DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN
                 && status != DisconnectEvent.LoginStatus.PRE_SERVER_JOIN) {
             return false;
         }
 
-        return plugin.getServer().getPlayer(uuid)
+        return plugin.getServer().getPlayer(player.getUniqueId())
                 .map(active -> active == player)
                 .orElse(true);
-    }
-
-    private void clearConnectionBoundState(Player player) {
-        UUID playerUuid = player.getUniqueId();
-        authCache.removeAuthorizedPlayer(playerUuid);
-        authCache.endSession(playerUuid);
-        if (plugin.getPendingTotpStore() != null) {
-            plugin.getPendingTotpStore().invalidate(playerUuid);
-        }
-
-        connectionManager.clearTransferState(player);
-        if (plugin.getAuthTimeoutScheduler() != null) {
-            plugin.getAuthTimeoutScheduler().cancel(playerUuid);
-        }
     }
 
     /**
@@ -660,18 +672,24 @@ public class AuthListener {
      * Kieruje gracza na odpowiedni serwer (auth server lub backend).
      */
     @Subscribe(priority = 0) // NORMAL priority
-    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Replacement detection requires connection identity.
     public void onPostLogin(PostLoginEvent event) {
         Player player = event.getPlayer();
-        Player previousConnection = activeConnections.put(player.getUniqueId(), player);
-        connectionManager.beginTransferSession(player);
-        if (previousConnection != null && previousConnection != player) {
-            // Publish the replacement generation before invalidating A. Its delayed DisconnectEvent
-            // can no longer retire B's state, while UUID-keyed authorization is still reset before routing.
-            clearConnectionBoundState(previousConnection);
+        UUID playerId = player.getUniqueId();
+        String playerName = player.getUsername();
+        Operation operation;
+        try {
+            operation = connectionLifecycleRegistry.activate(player,
+                    previousConnection -> publishConnectionGeneration(
+                            player, playerId, playerName, previousConnection));
+        } catch (RuntimeException publicationFailure) {
+            handlePostLoginPublicationFailure(player, playerName, publicationFailure);
+            return;
+        }
+        if (operation == null) {
             logger.debug(SECURITY_MARKER,
-                    "Replaced stale connection owner for {} - previous auth state invalidated",
-                    player.getUsername());
+                    "Ignoring late PostLoginEvent for {} after lifecycle shutdown",
+                    playerName);
+            return;
         }
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
 
@@ -682,38 +700,92 @@ public class AuthListener {
         if (postLoginHandler == null) {
             logger.error("CRITICAL: PostLoginHandler is null during event processing for player {}", 
                 player.getUsername());
-            player.disconnect(localizedOrFallback(
-                    "system.init_error", "System initialization error.", NamedTextColor.RED));
+            connectionLifecycleRegistry.runIfCurrent(operation, () -> player.disconnect(localizedOrFallback(
+                    "system.init_error", "System initialization error.", NamedTextColor.RED)));
             return;
         }
 
         try {
             // 🔥 USE_OFFLINE: Check for conflict resolution messages - delegate to PostLoginHandler
             // ASYNC: Run on virtual thread to avoid blocking Netty IO threads
-            VirtualThreadExecutorProvider.submitTask(() -> {
-                try {
-                    if (postLoginHandler.shouldShowConflictMessage(player)) {
-                        postLoginHandler.showConflictResolutionMessage(player);
-                    }
-                } catch (java.util.concurrent.CompletionException e) {
-                    logger.error("Error checking conflict message for {}", player.getUsername(), e);
-                }
-            });
+            checkConflictMessageAsync(player, operation);
 
             // Delegate to PostLoginHandler based on player mode
             if (player.isOnlineMode()) {
-                postLoginHandler.handlePremiumPlayer(player, playerIp);
+                connectionLifecycleRegistry.runIfCurrent(operation,
+                        () -> postLoginHandler.handlePremiumPlayer(player, playerIp));
                 return;
             }
 
             // Handle offline player - delegate to PostLoginHandler
-            postLoginHandler.handleOfflinePlayer(player, playerIp);
+            connectionLifecycleRegistry.runIfCurrent(operation,
+                    () -> postLoginHandler.handleOfflinePlayer(player, playerIp));
 
         } catch (RuntimeException e) {
             logger.error("Error handling PostLoginEvent for player: {}", event.getPlayer().getUsername(), e);
 
-            event.getPlayer().disconnect(messages.component(
-                    "connection.error.generic", NamedTextColor.RED));
+            connectionLifecycleRegistry.runIfCurrent(operation,
+                    () -> event.getPlayer().disconnect(messages.component(
+                            "connection.error.generic", NamedTextColor.RED)));
+        }
+    }
+
+    private void publishConnectionGeneration(
+            Player player, UUID playerId, String playerName, Player previousConnection) {
+        try {
+            connectionManager.beginTransferSession(player);
+            if (previousConnection != null) {
+                // Generation B is visible before A is invalidated, under the same UUID lifecycle lock.
+                plugin.clearConnectionBoundState(
+                        previousConnection, playerId, authCache, connectionManager);
+                logger.debug(SECURITY_MARKER,
+                        "Replaced stale connection owner for {} - previous auth state invalidated",
+                        playerName);
+            }
+        } catch (RuntimeException publicationFailure) {
+            // This callback still owns the lifecycle stripe. Clear partial B state here so a C
+            // generation cannot publish between failure and UUID-scoped cleanup.
+            try {
+                plugin.clearConnectionBoundState(player, playerId, authCache, connectionManager);
+            } catch (RuntimeException cleanupFailure) {
+                publicationFailure.addSuppressed(cleanupFailure);
+            }
+            throw publicationFailure;
+        }
+    }
+
+    private void handlePostLoginPublicationFailure(
+            Player player, String playerName, RuntimeException publicationFailure) {
+        logger.error(SECURITY_MARKER,
+                "Failed to publish connection lifecycle for {} - disconnecting fail-secure",
+                playerName, publicationFailure);
+        try {
+            player.disconnect(messages.component("connection.error.generic", NamedTextColor.RED));
+        } catch (RuntimeException disconnectFailure) {
+            logger.error(SECURITY_MARKER,
+                    "Failed to disconnect {} after PostLogin publication failure",
+                    playerName, disconnectFailure);
+        }
+    }
+
+    CompletableFuture<Void> checkConflictMessageAsync(Player player, Operation operation) {
+        try {
+            return CompletableFuture.runAsync(() -> {
+                if (!connectionLifecycleRegistry.isCurrent(operation)) {
+                    return;
+                }
+                try {
+                    if (postLoginHandler.shouldShowConflictMessage(player)) {
+                        connectionLifecycleRegistry.runIfCurrent(operation,
+                                () -> postLoginHandler.showConflictResolutionMessage(player));
+                    }
+                } catch (java.util.concurrent.CompletionException exception) {
+                    logger.error("Error checking conflict message for {}", player.getUsername(), exception);
+                }
+            }, VirtualThreadExecutorProvider.getVirtualExecutor());
+        } catch (RejectedExecutionException exception) {
+            logger.debug("Skipping conflict lookup for {} during executor shutdown", player.getUsername());
+            return CompletableFuture.completedFuture(null);
         }
     }
 
@@ -740,6 +812,12 @@ public class AuthListener {
     public EventTask onServerPreConnect(ServerPreConnectEvent event) {
         try {
             Player player = event.getPlayer();
+            Operation operation = connectionLifecycleRegistry.capture(player);
+            if (operation == null) {
+                event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                return null;
+            }
+            event.setResult(ServerPreConnectEvent.ServerResult.denied());
             RegisteredServer targetServer = event.getOriginalServer();
             String targetServerName = targetServer.getServerInfo().getName();
             RegisteredServer previousServer = event.getPreviousServer();
@@ -748,16 +826,17 @@ public class AuthListener {
                     player.getUsername(), targetServerName);
 
             if (previousServer == null) {
-                return handleFirstConnection(event, player, targetServer, targetServerName);
+                return handleFirstConnection(event, player, targetServer, targetServerName, operation);
             }
 
             // ✅ JEŚLI TO AUTH SERVER - SPRAWDŹ DODATKOWO AUTORYZACJĘ
-            if (handleAuthServerConnection(event, player, targetServer)) {
+            if (handleAuthServerConnection(event, player, targetServer, operation)) {
                 return null;
             }
 
             // ✅ JEŚLI TO BACKEND - SPRAWDŹ AUTORYZACJĘ + SESJĘ + CACHE (async)
-            return EventTask.resumeWhenComplete(verifyBackendConnectionAsync(event, player, targetServerName));
+            return EventTask.resumeWhenComplete(
+                    verifyBackendConnectionAsync(event, player, targetServerName, operation));
 
         } catch (RuntimeException e) {
             logger.error("Error in ServerPreConnect", e);
@@ -767,17 +846,19 @@ public class AuthListener {
     }
 
     private EventTask handleFirstConnection(ServerPreConnectEvent event, Player player,
-                                            RegisteredServer targetServer, String targetServerName) {
+                                            RegisteredServer targetServer, String targetServerName,
+                                            Operation operation) {
         boolean targetIsAuthServer = connectionManager.isAuthServer(targetServer);
 
         if (shouldBypassAuthServerForPremium(player)) {
             if (targetIsAuthServer) {
                 return EventTask.resumeWhenComplete(selectInitialBackendAsync(
                         event, player, () -> shouldBypassAuthServerForPremium(player),
-                        PREMIUM_MARKER, "Premium"));
+                        PREMIUM_MARKER, "Premium", operation));
             }
             logger.info(PREMIUM_MARKER, "Premium player {} -> {} (skipping auth server)",
                     player.getUsername(), targetServerName);
+            allowServerIfCurrent(event, targetServer, operation);
             return null;
         }
 
@@ -789,17 +870,18 @@ public class AuthListener {
             if (targetIsAuthServer) {
                 return EventTask.resumeWhenComplete(selectInitialBackendAsync(
                         event, player, () -> shouldBypassAuthServer(player),
-                        AUTH_MARKER, "Floodgate"));
+                        AUTH_MARKER, "Floodgate", operation));
             }
             logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
                     player.getUsername(), targetServerName);
+            allowServerIfCurrent(event, targetServer, operation);
             return null;
         }
 
         // Jeśli cel to już auth server - pozwól
         if (targetIsAuthServer) {
-            if (!connectionManager.prepareAuthServerConnection(player)) {
-                event.setResult(ServerPreConnectEvent.ServerResult.denied());
+            if (!prepareAuthServerConnectionIfCurrent(
+                    event, player, targetServer, operation)) {
                 return null;
             }
             logger.debug("First connection {} -> auth server - allowing", player.getUsername());
@@ -809,18 +891,18 @@ public class AuthListener {
         // ✅ FORCED HOSTS: Zapamiętaj oryginalny target serwer przed przekierowaniem
         // Velocity resolved forced-hosts PRZED tym eventem, więc targetServerName
         // zawiera poprawny serwer z [forced-hosts] lub [servers.try]
-        connectionManager.setForcedHostTarget(player, targetServerName);
+        connectionLifecycleRegistry.runIfCurrent(operation,
+                () -> connectionManager.setForcedHostTarget(player, targetServerName));
 
         // Przekieruj na auth server zamiast backend
         Optional<RegisteredServer> authServer = connectionManager.resolveAuthServer();
         if (authServer.isPresent()) {
-            if (!connectionManager.prepareAuthServerConnection(player)) {
-                event.setResult(ServerPreConnectEvent.ServerResult.denied());
+            if (!prepareAuthServerConnectionIfCurrent(
+                    event, player, authServer.get(), operation)) {
                 return null;
             }
             logger.debug("First connection {} -> {} - redirecting to auth server (forced host target saved)",
                     player.getUsername(), targetServerName);
-            event.setResult(ServerPreConnectEvent.ServerResult.allowed(authServer.get()));
         } else {
             logger.error("Auth server '{}' not found! Player {} cannot connect.",
                     connectionManager.getAuthServerName(), player.getUsername());
@@ -835,24 +917,30 @@ public class AuthListener {
 
     private CompletableFuture<Void> selectInitialBackendAsync(
             ServerPreConnectEvent event, Player player, BooleanSupplier bypassStillAllowed,
-            Marker marker, String bypassType) {
+            Marker marker, String bypassType, Operation operation) {
         return connectionManager.findAvailableBackendServerForInitialConnectionAsync()
                 .handle((backend, throwable) -> {
-                    if (throwable != null) {
-                        logger.error(marker, "Failed to select initial backend for {} player {}",
-                                bypassType, player.getUsername(), throwable);
-                        event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                    } else if (!player.isActive() || !isInitialBypassStillAllowed(bypassStillAllowed)) {
-                        event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                    } else if (backend != null && backend.isPresent()) {
-                        RegisteredServer target = backend.get();
-                        logger.info(marker, "{} player {} -> {} (skipping auth server)",
-                                bypassType, player.getUsername(), target.getServerInfo().getName());
-                        event.setResult(ServerPreConnectEvent.ServerResult.allowed(target));
-                    } else {
-                        logger.error(marker,
-                                "No backend available for {} player {} while bypassing auth server",
-                                bypassType, player.getUsername());
+                    boolean applied = connectionLifecycleRegistry.runIfCurrent(operation, () -> {
+                        if (throwable != null) {
+                            logger.error(marker, "Failed to select initial backend for {} player {}",
+                                    bypassType, player.getUsername(), throwable);
+                            event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                        } else if (!player.isActive()
+                                || !isInitialBypassStillAllowed(bypassStillAllowed)) {
+                            event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                        } else if (backend != null && backend.isPresent()) {
+                            RegisteredServer target = backend.get();
+                            logger.info(marker, "{} player {} -> {} (skipping auth server)",
+                                    bypassType, player.getUsername(), target.getServerInfo().getName());
+                            event.setResult(ServerPreConnectEvent.ServerResult.allowed(target));
+                        } else {
+                            logger.error(marker,
+                                    "No backend available for {} player {} while bypassing auth server",
+                                    bypassType, player.getUsername());
+                            event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                        }
+                    });
+                    if (!applied) {
                         event.setResult(ServerPreConnectEvent.ServerResult.denied());
                     }
                     return null;
@@ -870,49 +958,67 @@ public class AuthListener {
     }
 
     private boolean handleAuthServerConnection(
-            ServerPreConnectEvent event, Player player, RegisteredServer targetServer) {
-        if (connectionManager.isAuthServer(targetServer)) {
-            // DODATKOWA WERYFIKACJA - sprawdź czy gracz nie jest już autoryzowany
-            // Jeśli jest autoryzowany, nie powinien iść na auth server
-            String playerIp = PlayerAddressUtils.getPlayerIp(player);
-            boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
-            if (isAuthorized) {
-                // AUTORYZOWANY GRACZ NA AUTH SERVER - przekieruj na backend
-                logger.debug("Authorized player {} tried to go to auth server - redirecting to backend",
-                        player.getUsername());
-                event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                connectionManager.autoTransferFromAuthServerToBackend(player);
-            } else if (player.isOnlineMode()) {
-                // H1: Premium player with expired cache — re-authorize and redirect to backend
-                refreshPremiumAuthorization(player, playerIp);
-                logger.debug("Premium player {} re-authorized (expired cache) - redirecting to backend",
-                        player.getUsername());
-                event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                connectionManager.autoTransferFromAuthServerToBackend(player);
-            } else {
-                if (!connectionManager.prepareAuthServerConnection(player)) {
-                    event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                } else {
-                    logger.debug("Auth server - allowing unauthenticated player");
-                }
-            }
+            ServerPreConnectEvent event, Player player, RegisteredServer targetServer,
+            Operation operation) {
+        if (!connectionManager.isAuthServer(targetServer)) {
+            return false;
+        }
+        if (!connectionLifecycleRegistry.isCurrent(operation)) {
+            event.setResult(ServerPreConnectEvent.ServerResult.denied());
             return true;
         }
-        return false;
+        // DODATKOWA WERYFIKACJA - sprawdź czy gracz nie jest już autoryzowany
+        // Jeśli jest autoryzowany, nie powinien iść na auth server
+        String playerIp = PlayerAddressUtils.getPlayerIp(player);
+        boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
+        if (isAuthorized) {
+            // AUTORYZOWANY GRACZ NA AUTH SERVER - przekieruj na backend
+            logger.debug("Authorized player {} tried to go to auth server - redirecting to backend",
+                    player.getUsername());
+            triggerAutoTransfer(player, operation);
+            return true;
+        }
+        if (player.isOnlineMode()) {
+            // H1: Premium player with expired cache — re-authorize and redirect to backend
+            if (!refreshPremiumAuthorizationIfCurrent(player, playerIp, operation)) {
+                event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                return true;
+            }
+            logger.debug("Premium player {} re-authorized (expired cache) - redirecting to backend",
+                    player.getUsername());
+            triggerAutoTransfer(player, operation);
+            return true;
+        }
+        if (prepareAuthServerConnectionIfCurrent(event, player, targetServer, operation)) {
+            logger.debug("Auth server - allowing unauthenticated player");
+        }
+        return true;
     }
 
-    private CompletableFuture<Void> verifyBackendConnectionAsync(ServerPreConnectEvent event, Player player, String targetServerName) {
+    private CompletableFuture<Void> verifyBackendConnectionAsync(
+            ServerPreConnectEvent event, Player player, String targetServerName,
+            Operation operation) {
+        if (!connectionLifecycleRegistry.isCurrent(operation)) {
+            event.setResult(ServerPreConnectEvent.ServerResult.denied());
+            return CompletableFuture.completedFuture(null);
+        }
         if (shouldBypassAuthServer(player)) {
             logger.info("[FLOODGATE] Bedrock player {} -> {} (skipping auth server)",
                     player.getUsername(), targetServerName);
+            allowServerIfCurrent(event, event.getOriginalServer(), operation);
             return CompletableFuture.completedFuture(null);
         }
 
         // H1: Premium players are cryptographically verified by Mojang — never block on expired cache
         if (player.isOnlineMode()) {
             String playerIp = PlayerAddressUtils.getPlayerIp(player);
-            if (!authCache.isPlayerAuthorized(player.getUniqueId(), playerIp)) {
-                refreshPremiumAuthorization(player, playerIp);
+            boolean authorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
+            boolean refreshed = authorized
+                    || refreshPremiumAuthorizationIfCurrent(player, playerIp, operation);
+            if (refreshed) {
+                allowServerIfCurrent(event, event.getOriginalServer(), operation);
+            } else {
+                event.setResult(ServerPreConnectEvent.ServerResult.denied());
             }
             return CompletableFuture.completedFuture(null);
         }
@@ -922,27 +1028,38 @@ public class AuthListener {
         String username = player.getUsername();
 
         // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa - async, no IO thread blocking
-        return uuidVerificationHandler.verifyPlayerUuid(player)
+        return uuidVerificationHandler.verifyPlayerUuid(player,
+                        effect -> connectionLifecycleRegistry.runIfCurrent(operation, effect))
                 .thenAccept(uuidMatches -> {
-                    if (!player.isActive()) {
+                    boolean decided = connectionLifecycleRegistry.runIfCurrent(operation, () -> {
+                        if (!player.isActive()) {
+                            event.setResult(ServerPreConnectEvent.ServerResult.denied());
+                            return;
+                        }
+                        boolean isAuthorized = authCache.isPlayerAuthorized(playerUuid, playerIp);
+                        boolean hasActiveSession =
+                                authCache.hasActiveSession(playerUuid, username, playerIp);
+                        if (!isAuthorized || !hasActiveSession || !uuidMatches) {
+                            handleUnauthorizedConnection(event, player, targetServerName,
+                                    isAuthorized, hasActiveSession, uuidMatches, playerIp, operation);
+                        } else {
+                            // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
+                            logger.debug("Authorized player {} heading to {} (session: OK, UUID: OK)",
+                                    player.getUsername(), targetServerName);
+                            event.setResult(ServerPreConnectEvent.ServerResult.allowed(
+                                    event.getOriginalServer()));
+                        }
+                    });
+                    if (!decided) {
                         event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                        return;
-                    }
-
-                    boolean isAuthorized = authCache.isPlayerAuthorized(playerUuid, playerIp);
-                    boolean hasActiveSession = authCache.hasActiveSession(playerUuid, username, playerIp);
-                    if (!isAuthorized || !hasActiveSession || !uuidMatches) {
-                        handleUnauthorizedConnection(event, player, targetServerName, isAuthorized, hasActiveSession, uuidMatches, playerIp);
-                    } else {
-                        // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
-                        logger.debug("Authorized player {} heading to {} (session: OK, UUID: OK)",
-                                player.getUsername(), targetServerName);
                     }
                 });
     }
 
-    private void handleUnauthorizedConnection(ServerPreConnectEvent event, Player player, String targetServerName,
-                                            boolean isAuthorized, boolean hasActiveSession, boolean uuidMatches, String playerIp) {
+    private void handleUnauthorizedConnection(
+            ServerPreConnectEvent event, Player player, String targetServerName,
+            boolean isAuthorized, boolean hasActiveSession, boolean uuidMatches, String playerIp,
+            Operation operation) {
         // ❌ NIE AUTORYZOWANY LUB BRAK SESJI LUB UUID MISMATCH
         String reason = resolveBlockReason(isAuthorized, hasActiveSession);
 
@@ -952,18 +1069,19 @@ public class AuthListener {
         }
 
         event.setResult(ServerPreConnectEvent.ServerResult.denied());
+        connectionLifecycleRegistry.runIfCurrent(operation, () -> {
+            player.sendMessage(Component.text()
+                    .content("❌ ")
+                    .color(NamedTextColor.RED)
+                    .append(messages.component("auth.must_login", NamedTextColor.RED))
+                    .build());
 
-        player.sendMessage(Component.text()
-                .content("❌ ")
-                .color(NamedTextColor.RED)
-                .append(messages.component("auth.must_login", NamedTextColor.RED))
-                .build());
-
-        // Jeśli UUID mismatch - usuń z cache dla bezpieczeństwa
-        if (!uuidMatches) {
-            authCache.removeAuthorizedPlayer(player.getUniqueId());
-            authCache.endSession(player.getUniqueId());
-        }
+            // Jeśli UUID mismatch - usuń z cache dla bezpieczeństwa
+            if (!uuidMatches) {
+                authCache.removeAuthorizedPlayer(player.getUniqueId());
+                authCache.endSession(player.getUniqueId());
+            }
+        });
     }
 
     /**
@@ -975,66 +1093,86 @@ public class AuthListener {
     public void onServerConnected(ServerConnectedEvent event) {
         try {
             Player player = event.getPlayer();
+            Operation operation = connectionLifecycleRegistry.capture(player);
+            if (operation == null) {
+                logger.debug(SECURITY_MARKER,
+                        "Ignoring ServerConnectedEvent for retired connection {}",
+                        player.getUsername());
+                return;
+            }
             String serverName = event.getServer().getServerInfo().getName();
 
             logger.debug("ServerConnectedEvent for player {} -> server {}",
                     player.getUsername(), serverName);
 
             if (!connectionManager.isAuthServer(event.getServer())) {
-                handleBackendConnection(player, serverName);
+                handleBackendConnection(player, serverName, operation);
             } else {
-                handleAuthServerConnection(player);
+                handleAuthServerConnection(player, operation);
             }
         } catch (RuntimeException e) {
             logger.error("Error in ServerConnected", e);
         }
     }
 
-    private void handleBackendConnection(Player player, String serverName) {
-        if (logger.isDebugEnabled()) {
-            logger.debug(AUTH_MARKER, messages.get("player.connected.backend"),
-                    player.getUsername(), serverName);
-        }
-        player.sendMessage(messages.component("general.welcome.full", NamedTextColor.GREEN));
+    private void handleBackendConnection(Player player, String serverName, Operation operation) {
+        connectionLifecycleRegistry.runIfCurrent(operation, () -> {
+            if (logger.isDebugEnabled()) {
+                logger.debug(AUTH_MARKER, messages.get("player.connected.backend"),
+                        player.getUsername(), serverName);
+            }
+            player.sendMessage(messages.component("general.welcome.full", NamedTextColor.GREEN));
+        });
     }
 
-    private void handleAuthServerConnection(Player player) {
+    private void handleAuthServerConnection(Player player, Operation operation) {
         if (logger.isDebugEnabled()) {
             logger.debug(AUTH_MARKER, "ServerConnected to auth server: {}", player.getUsername());
         }
 
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
         if (authCache.isPlayerAuthorized(player.getUniqueId(), playerIp)) {
-            triggerAutoTransfer(player);
+            triggerAutoTransfer(player, operation);
             return;
         }
 
         // H1: Premium player landed on auth server with expired cache — re-authorize and transfer
         if (player.isOnlineMode()) {
-            refreshPremiumAuthorization(player, playerIp);
-            triggerAutoTransfer(player);
+            if (refreshPremiumAuthorizationIfCurrent(player, playerIp, operation)) {
+                triggerAutoTransfer(player, operation);
+            }
             return;
         }
 
-        sendAuthInstructions(player);
-        plugin.getAuthTimeoutScheduler().schedule(player);
+        sendAuthInstructions(player, operation);
+        connectionLifecycleRegistry.runIfCurrent(operation,
+                () -> plugin.getAuthTimeoutScheduler().schedule(player));
     }
 
-    private void triggerAutoTransfer(Player player) {
-        if (logger.isDebugEnabled()) {
+    private void triggerAutoTransfer(Player player, Operation operation) {
+        connectionLifecycleRegistry.runIfCurrent(operation, () -> {
+            if (logger.isDebugEnabled()) {
                 logger.debug("Player {} is verified in cache - starting auto-transfer to backend",
-                    player.getUsername());
-        }
-        connectionManager.autoTransferFromAuthServerToBackend(player);
+                        player.getUsername());
+            }
+            connectionManager.autoTransferFromAuthServerToBackend(player);
+        });
     }
 
-    private void sendAuthInstructions(Player player) {
-        player.sendMessage(messages.component("auth.header", NamedTextColor.GOLD));
+    private void sendAuthInstructions(Player player, Operation operation) {
+        AtomicReference<String> username = new AtomicReference<>();
+        if (!connectionLifecycleRegistry.runIfCurrent(operation, () -> {
+            username.set(player.getUsername());
+            player.sendMessage(messages.component("auth.header", NamedTextColor.GOLD));
+        })) {
+            return;
+        }
 
-        databaseManager.findPlayerByNickname(player.getUsername())
-                .thenAccept(dbResult -> sendAuthPrompt(player, dbResult))
+        databaseManager.findPlayerByNickname(username.get())
+                .thenAccept(dbResult -> connectionLifecycleRegistry.runIfCurrent(operation,
+                        () -> sendAuthPrompt(player, dbResult)))
                 .exceptionally(e -> {
-                    logger.error("Error sending auth prompt for {}", player.getUsername(), e);
+                    logger.error("Error sending auth prompt for {}", username.get(), e);
                     return null;
                 });
     }

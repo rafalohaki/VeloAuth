@@ -34,9 +34,17 @@ final class PostAuthFlow {
      */
     static boolean execute(CommandContext ctx, AuthenticationContext authContext,
                            RegisteredPlayer player, String operationName) {
+        var connectionOperation = authContext.connectionOperation();
+        if (!ctx.isConnectionCurrent(connectionOperation)) {
+            return false;
+        }
         DatabaseManager.DbResult<Boolean> premiumResult =
-                ctx.checkPremiumStatus(authContext.player(), "Premium status check during " + operationName);
+                ctx.checkPremiumStatus(authContext.username(), authContext.player(),
+                        "Premium status check during " + operationName, connectionOperation);
         if (premiumResult.isDatabaseError()) {
+            return false;
+        }
+        if (!ctx.isConnectionCurrent(connectionOperation)) {
             return false;
         }
 
@@ -50,29 +58,43 @@ final class PostAuthFlow {
                 player, isPremium, storedPremiumUuid(player, isPremium));
 
         Player p = authContext.player();
-        ctx.authCache().authorize(p.getUniqueId(), cachedUser, authContext.username(),
-                PlayerAddressUtils.getPlayerIp(p));
-        ctx.resetSecurityCounters(authContext.playerAddress(), authContext.username());
-        // Cancel the auth-server timeout: player has successfully authenticated.
-        ctx.plugin().getAuthTimeoutScheduler().cancel(p.getUniqueId());
+        boolean authorized = ctx.runIfConnectionCurrent(connectionOperation, () -> {
+            ctx.authCache().authorize(p.getUniqueId(), cachedUser, authContext.username(),
+                    PlayerAddressUtils.getPlayerIp(p));
+            ctx.resetSecurityCounters(authContext.playerAddress(), authContext.username());
+            // Cancel the auth-server timeout: player has successfully authenticated.
+            ctx.plugin().getAuthTimeoutScheduler().cancel(p.getUniqueId());
+        });
+        if (!authorized) {
+            return false;
+        }
 
         if (ctx.logger().isDebugEnabled()) {
             ctx.logger().debug(AUTH_MARKER, "Player {} {} successfully from IP {}",
                     authContext.username(), operationName, PlayerAddressUtils.getPlayerIp(p));
         }
 
+        if (!ctx.isConnectionCurrent(connectionOperation)) {
+            return false;
+        }
         boolean transferred = ctx.plugin().getConnectionManager().transferToBackend(p);
         if (!transferred) {
             // Hard transfer failure: roll back authorization so the next /login attempt
             // does not skip auth on a stale cache entry. Background retry path returns true,
             // so reaching this branch means a real error (connection cancelled, retry limit, etc.).
-            ctx.authCache().removeAuthorizedPlayer(p.getUniqueId());
-            ctx.authCache().endSession(p.getUniqueId());
+            ctx.runIfConnectionCurrent(connectionOperation, () -> {
+                ctx.authCache().removeAuthorizedPlayer(p.getUniqueId());
+                ctx.authCache().endSession(p.getUniqueId());
+            });
             if (ctx.logger().isWarnEnabled()) {
                 ctx.logger().warn(AUTH_MARKER,
                         "{} succeeded for {} but backend transfer failed - rolled back cache/session",
                         operationName, authContext.username());
             }
+            return false;
+        }
+
+        if (!ctx.isConnectionCurrent(connectionOperation)) {
             return false;
         }
 

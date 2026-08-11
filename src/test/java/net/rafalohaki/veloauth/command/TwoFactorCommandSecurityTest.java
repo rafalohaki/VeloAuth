@@ -9,6 +9,7 @@ import net.rafalohaki.veloauth.auth.totp.TotpService;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.i18n.SimpleMessages;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -55,10 +56,11 @@ class TwoFactorCommandSecurityTest {
         when(context.sm()).thenReturn(simpleMessages);
         when(context.settings()).thenReturn(settings);
         when(context.authCache()).thenReturn(authCache);
+        ConnectionLifecycleRegistry.Operation operation = allowConnection(context, player);
         java.net.InetAddress playerAddress = player.getRemoteAddress().getAddress();
-        when(context.validateAndAuthenticatePlayer(player, "2fa qr"))
+        when(context.validateAndAuthenticatePlayer(player, "2fa qr", operation))
                 .thenReturn(new AuthenticationContext(
-                        player, "ProtectedPlayer", playerAddress, registeredPlayer));
+                        player, "ProtectedPlayer", playerAddress, registeredPlayer, operation));
 
         SimpleCommand.Invocation invocation = mock(SimpleCommand.Invocation.class);
         when(invocation.source()).thenReturn(player);
@@ -106,9 +108,10 @@ class TwoFactorCommandSecurityTest {
         when(context.settings()).thenReturn(settings);
         when(context.authCache()).thenReturn(authCache);
         when(context.totpService()).thenReturn(totpService);
-        when(context.validateAndAuthenticatePlayer(player, "2fa disable"))
+        ConnectionLifecycleRegistry.Operation operation = allowConnection(context, player);
+        when(context.validateAndAuthenticatePlayer(player, "2fa disable", operation))
                 .thenReturn(new AuthenticationContext(
-                        player, nickname, remoteAddress.getAddress(), registeredPlayer));
+                        player, nickname, remoteAddress.getAddress(), registeredPlayer, operation));
         SimpleCommand.Invocation invocation = mock(SimpleCommand.Invocation.class);
         when(invocation.source()).thenReturn(player);
         when(invocation.arguments()).thenReturn(new String[]{"disable", "000000"});
@@ -116,5 +119,20 @@ class TwoFactorCommandSecurityTest {
         new TwoFactorCommand(context).execute(invocation);
 
         verify(authCache).registerFailedLogin(remoteAddress.getAddress(), nickname);
+    }
+
+    private ConnectionLifecycleRegistry.Operation allowConnection(
+            CommandContext context, Player player) {
+        ConnectionLifecycleRegistry.Operation operation = mock(ConnectionLifecycleRegistry.Operation.class);
+        when(context.captureConnectionOperation(player)).thenReturn(operation);
+        when(context.isConnectionCurrent(operation)).thenReturn(true);
+        when(context.runIfConnectionCurrent(
+                org.mockito.ArgumentMatchers.eq(operation),
+                org.mockito.ArgumentMatchers.any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<Runnable>getArgument(1).run();
+                    return true;
+                });
+        return operation;
     }
 }

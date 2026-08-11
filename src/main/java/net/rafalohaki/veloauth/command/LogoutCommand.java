@@ -7,8 +7,8 @@ import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 
 /**
- * Terminates the invoking player's concrete proxy connection. Disconnect cleanup remains owned by
- * {@code AuthListener}, which can compare the concrete connection before clearing UUID-keyed state.
+ * Retires the invoking player's concrete connection before requesting its terminal disconnect.
+ * The later {@code DisconnectEvent} repeats the same owner-aware cleanup idempotently.
  */
 class LogoutCommand implements SimpleCommand {
 
@@ -36,7 +36,19 @@ class LogoutCommand implements SimpleCommand {
         // Velocity documents Player access after disconnect as undefined. Capture audit identity first.
         String username = player.getUsername();
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
-        player.disconnect(context.sm().authLoggedOut());
+        try {
+            context.retireConnectionOperation(player);
+        } catch (RuntimeException cleanupFailure) {
+            context.logger().error(
+                    "Failed to retire logout connection for {}", username, cleanupFailure);
+        }
+        try {
+            player.disconnect(context.sm().authLoggedOut());
+        } catch (RuntimeException disconnectFailure) {
+            context.logger().error(
+                    "Failed to request terminal logout disconnect for {}", username,
+                    disconnectFailure);
+        }
 
         AuditLogService auditLogService = context.auditLogService();
         if (auditLogService != null) {

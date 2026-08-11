@@ -6,6 +6,7 @@ import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.auth.totp.PendingTotpState;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import net.rafalohaki.veloauth.util.SecurityUtils;
@@ -48,22 +49,28 @@ class LoginCommand implements SimpleCommand {
             return;
         }
         String password = args[0];
-        ctx.runAsyncCommand(invocation.source(), () -> processLogin(player, password), ERROR_DATABASE_QUERY);
+        ConnectionLifecycleRegistry.Operation operation = ctx.captureConnectionOperation(player);
+        if (operation == null) {
+            return;
+        }
+        ctx.runAsyncCommand(player, operation,
+                () -> processLogin(player, password, operation), ERROR_DATABASE_QUERY);
     }
 
-    private void processLogin(Player player, String password) {
-        if (!ctx.tryAcquireCommandLock(player.getUniqueId())) {
-            ctx.sendCommandInProgress(player);
+    private void processLogin(
+            Player player, String password,
+            ConnectionLifecycleRegistry.Operation operation) {
+        if (!ctx.beginConnectionCommand(player, operation)) {
             return;
         }
         try {
             InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
-            if (playerAddress != null && ctx.ipRateLimiter().isRateLimited(playerAddress)) {
-                player.sendMessage(ctx.sm().bruteForceBlocked());
+            if (ctx.rejectRateLimited(player, playerAddress, operation)) {
                 return;
             }
 
-            AuthenticationContext authContext = ctx.validateAndAuthenticatePlayer(player, "login");
+            AuthenticationContext authContext = ctx.validateAndAuthenticatePlayer(
+                    player, "login", operation);
             if (authContext == null) {
                 return;
             }
@@ -76,21 +83,28 @@ class LoginCommand implements SimpleCommand {
             String playerIp = PlayerAddressUtils.getPlayerIp(player);
             if (ctx.authCache().isPlayerAuthorized(player.getUniqueId(), playerIp)
                     && ctx.authCache().hasActiveSession(player.getUniqueId(), authContext.username(), playerIp)) {
-                player.sendMessage(ctx.sm().alreadyLogged());
+                ctx.runIfConnectionCurrent(authContext.connectionOperation(),
+                        () -> player.sendMessage(ctx.sm().alreadyLogged()));
                 return;
             }
 
             if (authContext.registeredPlayer() == null) {
-                player.sendMessage(ctx.sm().notRegistered());
+                ctx.runIfConnectionCurrent(authContext.connectionOperation(),
+                        () -> player.sendMessage(ctx.sm().notRegistered()));
                 return;
             }
             String hash = authContext.registeredPlayer().getHash();
             if (hash == null || hash.isBlank()) {
-                player.sendMessage(ctx.sm().notRegistered());
+                ctx.runIfConnectionCurrent(authContext.connectionOperation(),
+                        () -> player.sendMessage(ctx.sm().notRegistered()));
                 return;
             }
 
             BCrypt.Result result = BCrypt.verifyer().verify(password.toCharArray(), hash);
+
+            if (!ctx.isConnectionCurrent(authContext.connectionOperation())) {
+                return;
+            }
 
             if (result.verified) {
                 handleSuccessfulLogin(authContext);
@@ -98,7 +112,7 @@ class LoginCommand implements SimpleCommand {
                 handleFailedLogin(authContext);
             }
         } finally {
-            ctx.releaseCommandLock(player.getUniqueId());
+            ctx.releaseCommandLock(operation.playerId(), operation);
         }
     }
 
@@ -107,7 +121,12 @@ class LoginCommand implements SimpleCommand {
             authContext.registeredPlayer().updateLoginData(PlayerAddressUtils.getPlayerIp(authContext.player()));
             var saveResult = ctx.databaseManager().savePlayer(authContext.registeredPlayer()).join();
 
-            if (ctx.handleDatabaseError(saveResult, authContext.player(), "Failed to save login data for")) {
+            if (!ctx.isConnectionCurrent(authContext.connectionOperation())) {
+                return;
+            }
+
+            if (ctx.handleDatabaseError(saveResult, authContext.username(), authContext.player(),
+                    "Failed to save login data for", authContext.connectionOperation())) {
                 return;
             }
 
@@ -120,15 +139,18 @@ class LoginCommand implements SimpleCommand {
             }
 
             if (PostAuthFlow.execute(ctx, authContext, authContext.registeredPlayer(), "logged in")) {
-                authContext.player().sendMessage(ctx.sm().loginSuccess());
-                emitAudit(AuditEventType.LOGIN_OK, authContext, null);
+                ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> {
+                    authContext.player().sendMessage(ctx.sm().loginSuccess());
+                    emitAudit(AuditEventType.LOGIN_OK, authContext, null);
+                });
             }
 
         } catch (java.util.concurrent.CompletionException e) {
             if (ctx.logger().isErrorEnabled()) {
                 ctx.logger().error("Error processing successful login: {}", authContext.username(), e);
             }
-            ctx.sendDatabaseErrorMessage(authContext.player());
+            ctx.runIfConnectionCurrent(authContext.connectionOperation(),
+                    () -> ctx.sendDatabaseErrorMessage(authContext.player()));
         }
     }
 
@@ -147,38 +169,44 @@ class LoginCommand implements SimpleCommand {
 
     private void parkForTotpVerify(AuthenticationContext authContext) {
         Player player = authContext.player();
-        String ip = PlayerAddressUtils.getPlayerIp(player);
-        ctx.pendingTotpStore().put(PendingTotpState.forLogin(player.getUniqueId(), authContext.registeredPlayer(), ip));
-        player.sendMessage(ctx.sm().twoFactorLoginPendingPrompt());
+        ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> {
+            String ip = PlayerAddressUtils.getPlayerIp(player);
+            ctx.pendingTotpStore().put(PendingTotpState.forLogin(
+                    player.getUniqueId(), authContext.registeredPlayer(), ip));
+            player.sendMessage(ctx.sm().twoFactorLoginPendingPrompt());
 
-        if (ctx.logger().isDebugEnabled()) {
-            ctx.logger().debug("Player {} parked for 2FA verification (IP {})", authContext.username(), ip);
-        }
+            if (ctx.logger().isDebugEnabled()) {
+                ctx.logger().debug("Player {} parked for 2FA verification (IP {})",
+                        authContext.username(), ip);
+            }
+        });
     }
 
     private void handleFailedLogin(AuthenticationContext authContext) {
-        boolean blocked = SecurityUtils.registerFailedLogin(authContext.playerAddress(), authContext.username(), ctx.authCache());
-
-        InetAddress playerAddress = authContext.playerAddress();
-        if (playerAddress != null) {
-            ctx.ipRateLimiter().incrementAttempts(playerAddress);
-        }
-
-        if (blocked) {
-            authContext.player().sendMessage(ctx.sm().bruteForceBlocked());
-            if (ctx.logger().isWarnEnabled()) {
-                ctx.logger().warn("Player {} blocked for brute force from IP {}",
-                        authContext.username(), PlayerAddressUtils.getPlayerIp(authContext.player()));
+        ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> {
+            boolean blocked = SecurityUtils.registerFailedLogin(
+                    authContext.playerAddress(), authContext.username(), ctx.authCache());
+            InetAddress playerAddress = authContext.playerAddress();
+            if (playerAddress != null) {
+                ctx.ipRateLimiter().incrementAttempts(playerAddress);
             }
-            emitAudit(AuditEventType.LOGIN_FAIL, authContext, "brute-force-blocked");
-        } else {
-            authContext.player().sendMessage(ctx.sm().loginFailed());
-            if (ctx.logger().isDebugEnabled()) {
-                ctx.logger().debug("Failed login attempt for player {} from IP {}",
-                        authContext.username(), PlayerAddressUtils.getPlayerIp(authContext.player()));
+
+            if (blocked) {
+                authContext.player().sendMessage(ctx.sm().bruteForceBlocked());
+                if (ctx.logger().isWarnEnabled()) {
+                    ctx.logger().warn("Player {} blocked for brute force from IP {}",
+                            authContext.username(), PlayerAddressUtils.getPlayerIp(authContext.player()));
+                }
+                emitAudit(AuditEventType.LOGIN_FAIL, authContext, "brute-force-blocked");
+            } else {
+                authContext.player().sendMessage(ctx.sm().loginFailed());
+                if (ctx.logger().isDebugEnabled()) {
+                    ctx.logger().debug("Failed login attempt for player {} from IP {}",
+                            authContext.username(), PlayerAddressUtils.getPlayerIp(authContext.player()));
+                }
+                emitAudit(AuditEventType.LOGIN_FAIL, authContext, "wrong-password");
             }
-            emitAudit(AuditEventType.LOGIN_FAIL, authContext, "wrong-password");
-        }
+        });
     }
 
     private void emitAudit(AuditEventType type, AuthenticationContext authContext, String details) {

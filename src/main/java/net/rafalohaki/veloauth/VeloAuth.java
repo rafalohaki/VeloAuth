@@ -7,6 +7,7 @@ import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.command.CommandHandler;
@@ -21,6 +22,7 @@ import net.rafalohaki.veloauth.exception.VeloAuthException;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.listener.AuthListener;
 import net.rafalohaki.veloauth.listener.ListenerFactory;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.alert.PremiumResolverAlertService;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.auth.totp.PendingTotpStore;
@@ -65,6 +67,8 @@ public class VeloAuth {
     private final Logger logger;
     private final Path dataDirectory;
     private final Metrics.Factory metricsFactory;
+    private final ConnectionLifecycleRegistry connectionLifecycleRegistry =
+            new ConnectionLifecycleRegistry();
 
     private volatile Metrics metrics;
 
@@ -681,6 +685,8 @@ public class VeloAuth {
             lifecycleLock.unlock();
         }
 
+        // Publish the terminal connection barrier before any fallible shutdown step or drain.
+        connectionLifecycleRegistry.close();
         logger.info("🔴 Initialization flag set to FALSE - blocking all new player connections");
 
         try {
@@ -714,7 +720,6 @@ public class VeloAuth {
                 connectionManager.shutdown();
                 logger.debug("ConnectionManager shut down");
             }
-
             if (authServerProvider != null) {
                 closeAuthServerProviderSafely();
             }
@@ -737,13 +742,13 @@ public class VeloAuth {
                 logger.debug("AuthCache shut down");
             }
 
-            // 5. Close DB connection last
+            // 6. Close DB connection last
             if (databaseManager != null) {
                 databaseManager.shutdown();
                 logger.debug("DatabaseManager shut down");
             }
 
-            // 6. Shut down Virtual Thread executor
+            // 7. Shut down Virtual Thread executor
             VirtualThreadExecutorProvider.shutdown();
             logger.debug("VirtualThreadExecutorProvider shut down");
 
@@ -753,6 +758,7 @@ public class VeloAuth {
             // A failing component must not abort the sequence before Hikari, the cleanup
             // schedulers and the VT executor get closed — close them here as a last resort.
             logger.error("Error during graceful shutdown - forcing remaining components closed", e);
+            connectionLifecycleRegistry.close();
             closeAuthServerProviderSafely();
             if (databaseManager != null) {
                 try {
@@ -762,6 +768,48 @@ public class VeloAuth {
                 }
             }
             VirtualThreadExecutorProvider.shutdown();
+        }
+    }
+
+    /** Clears only state owned by a concrete connection; it performs no database or backend I/O. */
+    public void clearConnectionBoundState(
+            Player player, AuthCache connectionAuthCache,
+            ConnectionManager connectionManagerOwner) {
+        Objects.requireNonNull(player, "player");
+        clearConnectionBoundState(
+                player, player.getUniqueId(), connectionAuthCache, connectionManagerOwner);
+    }
+
+    /** Variant for async/lifecycle paths that captured the UUID while the Player was valid. */
+    public void clearConnectionBoundState(
+            Player player, java.util.UUID playerId, AuthCache connectionAuthCache,
+            ConnectionManager connectionManagerOwner) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(playerId, "playerId");
+        Objects.requireNonNull(connectionAuthCache, "connectionAuthCache");
+        Objects.requireNonNull(connectionManagerOwner, "connectionManagerOwner");
+        runConnectionCleanup("authorization cache", playerId,
+                () -> connectionAuthCache.removeAuthorizedPlayer(playerId));
+        runConnectionCleanup("session cache", playerId,
+                () -> connectionAuthCache.endSession(playerId));
+        if (pendingTotpStore != null) {
+            runConnectionCleanup("pending two-factor state", playerId,
+                    () -> pendingTotpStore.invalidate(playerId));
+        }
+        runConnectionCleanup("connection-manager state", playerId,
+                () -> connectionManagerOwner.clearTransferState(player));
+        if (authTimeoutScheduler != null) {
+            runConnectionCleanup("authentication timeout", playerId,
+                    () -> authTimeoutScheduler.cancel(playerId));
+        }
+    }
+
+    private void runConnectionCleanup(String component, java.util.UUID playerId, Runnable cleanup) {
+        try {
+            cleanup.run();
+        } catch (RuntimeException exception) {
+            logger.error("Failed to clear {} for retired connection {}",
+                    component, playerId, exception);
         }
     }
 
@@ -953,6 +1001,11 @@ public class VeloAuth {
      */
     public ConnectionManager getConnectionManager() {
         return connectionManager;
+    }
+
+    /** @return concrete-player lifecycle generations used by listeners and command operations. */
+    public ConnectionLifecycleRegistry getConnectionLifecycleRegistry() {
+        return connectionLifecycleRegistry;
     }
 
     /** Returns the restart-scoped owner of the external or embedded auth-server topology. */

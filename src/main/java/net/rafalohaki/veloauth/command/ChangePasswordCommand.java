@@ -5,7 +5,7 @@ import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
-import net.rafalohaki.veloauth.util.PlayerAddressUtils;
+import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.util.SecurityUtils;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
@@ -51,18 +51,24 @@ class ChangePasswordCommand implements SimpleCommand {
             return;
         }
 
-        ctx.runAsyncCommand(invocation.source(), () -> processPasswordChange(player, oldPassword, newPassword),
+        ConnectionLifecycleRegistry.Operation operation = ctx.captureConnectionOperation(player);
+        if (operation == null) {
+            return;
+        }
+        ctx.runAsyncCommand(player, operation,
+                () -> processPasswordChange(player, oldPassword, newPassword, operation),
                 ERROR_DATABASE_QUERY);
     }
 
-    private void processPasswordChange(Player player, String oldPassword, String newPassword) {
-        if (!ctx.tryAcquireCommandLock(player.getUniqueId())) {
-            ctx.sendCommandInProgress(player);
+    private void processPasswordChange(
+            Player player, String oldPassword, String newPassword,
+            ConnectionLifecycleRegistry.Operation operation) {
+        if (!ctx.beginConnectionCommand(player, operation)) {
             return;
         }
 
         try {
-            AuthenticationContext authCtx = preparePasswordChange(player);
+            AuthenticationContext authCtx = preparePasswordChange(player, operation);
             if (authCtx == null) {
                 return;
             }
@@ -77,17 +83,20 @@ class ChangePasswordCommand implements SimpleCommand {
 
             finalizePasswordChange(authCtx);
         } finally {
-            ctx.releaseCommandLock(player.getUniqueId());
+            ctx.releaseCommandLock(operation.playerId(), operation);
         }
     }
 
-    private AuthenticationContext preparePasswordChange(Player player) {
-        AuthenticationContext authCtx = ctx.validateAndAuthenticatePlayer(player, "password change");
+    private AuthenticationContext preparePasswordChange(
+            Player player, ConnectionLifecycleRegistry.Operation operation) {
+        AuthenticationContext authCtx = ctx.validateAndAuthenticatePlayer(
+                player, "password change", operation);
         if (authCtx == null) {
             return null;
         }
         if (authCtx.registeredPlayer() == null) {
-            authCtx.player().sendMessage(ctx.sm().notRegistered());
+            ctx.runIfConnectionCurrent(operation,
+                    () -> authCtx.player().sendMessage(ctx.sm().notRegistered()));
             return null;
         }
         return authCtx;
@@ -98,13 +107,20 @@ class ChangePasswordCommand implements SimpleCommand {
         if (hash == null || hash.isBlank()) {
             // Premium accounts have no password hash — same guard as LoginCommand,
             // otherwise BCrypt.verify throws IllegalArgumentException on null hash.
-            authCtx.player().sendMessage(ctx.sm().notRegistered());
+            ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
+                    () -> authCtx.player().sendMessage(ctx.sm().notRegistered()));
             return false;
         }
         BCrypt.Result result = BCrypt.verifyer().verify(oldPassword.toCharArray(), hash);
+        if (!ctx.isConnectionCurrent(authCtx.connectionOperation())) {
+            return false;
+        }
         if (!result.verified) {
-            authCtx.player().sendMessage(ctx.sm().incorrectOldPassword());
-            SecurityUtils.registerFailedLogin(authCtx.playerAddress(), authCtx.username(), ctx.authCache());
+            ctx.runIfConnectionCurrent(authCtx.connectionOperation(), () -> {
+                authCtx.player().sendMessage(ctx.sm().incorrectOldPassword());
+                SecurityUtils.registerFailedLogin(
+                        authCtx.playerAddress(), authCtx.username(), ctx.authCache());
+            });
             return false;
         }
         return true;
@@ -113,54 +129,99 @@ class ChangePasswordCommand implements SimpleCommand {
     private boolean updatePassword(AuthenticationContext authCtx, String newPassword) {
         String newHashedPassword = BCrypt.with(BCrypt.Version.VERSION_2Y)
                 .hashToString(ctx.settings().getBcryptCost(), newPassword.toCharArray());
+        if (!ctx.isConnectionCurrent(authCtx.connectionOperation())) {
+            return false;
+        }
         authCtx.registeredPlayer().setHash(newHashedPassword);
         try {
             var saveResult = ctx.databaseManager().savePlayer(authCtx.registeredPlayer()).join();
-            if (ctx.handleDatabaseError(saveResult, authCtx.player(), "Password change save failed for")) {
+            if (ctx.handleDatabaseError(saveResult, authCtx.username(), authCtx.player(),
+                    "Password change save failed for", authCtx.connectionOperation())) {
                 return false;
             }
             boolean saved = Boolean.TRUE.equals(saveResult.getValue());
             if (!saved) {
-                ctx.sendDatabaseErrorMessage(authCtx.player());
+                ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
+                        () -> ctx.sendDatabaseErrorMessage(authCtx.player()));
                 return false;
             }
             return true;
         } catch (CompletionException e) {
             ctx.logger().error(DB_MARKER, "Failed to save password change for player {}", authCtx.username(), e);
-            ctx.sendDatabaseErrorMessage(authCtx.player());
+            ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
+                    () -> ctx.sendDatabaseErrorMessage(authCtx.player()));
             return false;
         }
     }
 
     private void finalizePasswordChange(AuthenticationContext authCtx) {
-        var premiumResult = ctx.checkPremiumStatus(authCtx.player(), "Premium check during password change");
+        java.util.UUID playerId = authCtx.connectionOperation().playerId();
+        String playerIp = authCtx.playerAddress() == null
+                ? "unknown"
+                : authCtx.playerAddress().getHostAddress();
+
+        // The password commit is account-scoped and durable. Revoke UUID state before any
+        // optional lookup or connection-bound effect, even when the originating connection was
+        // retired while the database commit was in flight.
+        ctx.authCache().endSession(playerId);
+        ctx.authCache().removeAuthorizedPlayer(playerId);
+        savePasswordChangeAudit(authCtx.username(), playerIp);
+
+        // A committed password change revokes duplicate sessions even if its origin disconnected.
+        Player origin = authCtx.player();
+        disconnectDuplicateSessions(origin, authCtx.username(), playerIp);
+
+        ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
+                () -> authCtx.player().sendMessage(ctx.sm().changePasswordSuccess()));
+        if (ctx.logger().isInfoEnabled()) {
+            ctx.logger().info(AUTH_MARKER, "Player {} changed password from IP {}",
+                    authCtx.username(), playerIp);
+        }
+
+        // Premium cache refresh is best-effort. It deliberately follows every mandatory
+        // post-commit security effect so a slow or failed lookup cannot delay account revocation.
+        var premiumResult = ctx.checkPremiumStatus(
+                authCtx.username(), origin, "Premium check during password change",
+                authCtx.connectionOperation());
         if (!premiumResult.isDatabaseError() && Boolean.TRUE.equals(premiumResult.getValue())) {
             ctx.authCache().removePremiumPlayer(authCtx.username());
         }
-        ctx.authCache().endSession(authCtx.player().getUniqueId());
-        ctx.authCache().removeAuthorizedPlayer(authCtx.player().getUniqueId());
+    }
 
-        // Disconnect duplicate sessions for the same username
-        ctx.plugin().getServer().getAllPlayers().stream()
-                .filter(p -> !p.equals(authCtx.player()))
-                .filter(p -> p.getUsername().equalsIgnoreCase(authCtx.username()))
-                .forEach(p -> {
-                    p.disconnect(ctx.sm().kickMessage());
-                    if (ctx.logger().isWarnEnabled()) {
-                        ctx.logger().warn("Disconnected duplicate player {} — password changed from IP {}",
-                                authCtx.username(), PlayerAddressUtils.getPlayerIp(authCtx.player()));
-                    }
-                });
-
-        authCtx.player().sendMessage(ctx.sm().changePasswordSuccess());
-        if (ctx.logger().isInfoEnabled()) {
-            ctx.logger().info(AUTH_MARKER, "Player {} changed password from IP {}",
-                    authCtx.username(), PlayerAddressUtils.getPlayerIp(authCtx.player()));
-        }
+    private void savePasswordChangeAudit(String username, String playerIp) {
         AuditLogService audit = ctx.plugin().getAuditLogService();
-        if (audit != null) {
-            audit.save(AuditEventType.PASSWORD_CHANGE, authCtx.username(),
-                    PlayerAddressUtils.getPlayerIp(authCtx.player()));
+        if (audit == null) {
+            return;
+        }
+        try {
+            audit.save(AuditEventType.PASSWORD_CHANGE, username, playerIp);
+        } catch (RuntimeException auditFailure) {
+            ctx.logger().error(AUTH_MARKER,
+                    "Failed to submit password-change audit for {}", username, auditFailure);
+        }
+    }
+
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private void disconnectDuplicateSessions(Player origin, String username, String playerIp) {
+        for (Player connected : ctx.plugin().getServer().getAllPlayers()) {
+            if (connected == origin) {
+                continue;
+            }
+            try {
+                if (!connected.getUsername().equalsIgnoreCase(username)) {
+                    continue;
+                }
+                connected.disconnect(ctx.sm().kickMessage());
+                if (ctx.logger().isWarnEnabled()) {
+                    ctx.logger().warn(
+                            "Disconnected duplicate player {} — password changed from IP {}",
+                            username, playerIp);
+                }
+            } catch (RuntimeException disconnectFailure) {
+                ctx.logger().error(AUTH_MARKER,
+                        "Failed to disconnect duplicate session for {} after password change",
+                        username, disconnectFailure);
+            }
         }
     }
 }
