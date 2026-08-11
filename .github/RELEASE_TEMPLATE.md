@@ -91,8 +91,12 @@ wget https://github.com/rafalohaki/VeloAuth/releases/download/v{{VERSION}}/veloa
 6. Existing configs without `auth-server.mode` and fresh configs use `external`; explicit embedded
    selections remain embedded. Existing files are not rewritten. Review the absent-key automatic
    transfer delay change from 300 ms to 1500 ms.
-7. Existing external language values and intentional empty values remain unchanged; only missing
-   bundled keys are appended. Review those additions before rollout.
+7. Existing language values remain operator-owned except that exact unchanged historical stock
+   defaults for `2fa.qr.warning`, `admin.report.generating` and `admin.report.warning` are upgraded
+   in the 17 built-in locale files, and only from one exact canonical physical line. Confirm custom,
+   empty, reformatted and duplicate entries remain byte-for-byte, custom languages are not
+   stock-migrated, and missing bundled keys are appended. Review the atomically published files
+   before rollout.
 8. Replace the JAR and perform a full proxy restart. Do not use `/vauth reload` as an upgrade
    substitute.
 9. Review the schema-v2 migration candidate/marked counts, then verify cracked login/register

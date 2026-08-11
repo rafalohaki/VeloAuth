@@ -9,6 +9,8 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Objects;
 import java.util.PropertyResourceBundle;
 import java.util.ResourceBundle;
 import java.util.regex.Pattern;
@@ -26,8 +28,50 @@ public final class LanguageFileManager {
     @SuppressWarnings("java:S1075")
     private static final String LANG_RESOURCE_PATH = "/lang/";
     private static final Pattern VALID_LANGUAGE_CODE = Pattern.compile("^[a-zA-Z0-9_-]+$");
+
+    private static final String QR_WARNING_KEY = "2fa.qr.warning";
+    private static final String REPORT_GENERATING_KEY = "admin.report.generating";
+    private static final String REPORT_WARNING_KEY = "admin.report.warning";
+
+    private static final List<LanguageFileUpdater.StockMigration> COMMON_STOCK_MIGRATIONS = List.of(
+            new LanguageFileUpdater.StockMigration(
+                    QR_WARNING_KEY,
+                    "§cWarning: §7secret is shown below. Anyone who can read your chat history can copy it.",
+                    "§eFor security, an enrolled 2FA secret cannot be shown again. "
+                            + "Run §f/2fa disable <code>§e, then §f/2fa setup §eto enroll a new device."),
+            new LanguageFileUpdater.StockMigration(
+                    REPORT_GENERATING_KEY,
+                    "§eGenerating diagnostic report... (config + logs will be uploaded to mclo.gs)",
+                    "§eGenerating diagnostic report... (redacted config and explicitly enabled logs "
+                            + "will be uploaded to mclo.gs)"),
+            new LanguageFileUpdater.StockMigration(
+                    REPORT_WARNING_KEY,
+                    "§eThe report contains redacted config and recent logs. The link is public \\u2014 "
+                            + "share it only with trusted parties.",
+                    "§eThe report contains redacted config and may contain logs when enabled. "
+                            + "The link is public \\u2014 share it only with trusted parties."));
+
+    private static final List<LanguageFileUpdater.StockMigration> POLISH_STOCK_MIGRATIONS = List.of(
+            new LanguageFileUpdater.StockMigration(
+                    QR_WARNING_KEY,
+                    "§cUwaga: §7sekret jest wyświetlony poniżej. Każdy kto przeczyta historię chatu może go skopiować.",
+                    "§eZe względów bezpieczeństwa zapisanego sekretu 2FA nie można ponownie wyświetlić. "
+                            + "Użyj §f/2fa disable <kod>§e, a następnie §f/2fa setup§e, "
+                            + "aby dodać nowe urządzenie."),
+            new LanguageFileUpdater.StockMigration(
+                    REPORT_GENERATING_KEY,
+                    "§eGenerowanie raportu diagnostycznego... (config + logi zostaną wysłane do mclo.gs)",
+                    "§eGenerowanie raportu diagnostycznego... (zredagowany config i jawnie włączone logi "
+                            + "zostaną wysłane do mclo.gs)"),
+            new LanguageFileUpdater.StockMigration(
+                    REPORT_WARNING_KEY,
+                    "§eRaport zawiera zredagowany config i ostatnie logi. Link jest publiczny \\u2014 "
+                            + "udostępnij go tylko zaufanym osobom.",
+                    "§eRaport zawiera zredagowany config i może zawierać logi, jeśli je włączono. "
+                            + "Link jest publiczny \\u2014 udostępnij go tylko zaufanym osobom."));
     
     private final Path langDirectory;
+    private final LanguageFileUpdater.Publisher publisher;
     
     /**
      * Creates a new LanguageFileManager.
@@ -35,7 +79,12 @@ public final class LanguageFileManager {
      * @param dataDirectory The plugin's data directory (plugins/veloauth/)
      */
     public LanguageFileManager(Path dataDirectory) {
+        this(dataDirectory, LanguageFileUpdater::publishAtomically);
+    }
+
+    LanguageFileManager(Path dataDirectory, LanguageFileUpdater.Publisher publisher) {
         this.langDirectory = dataDirectory.resolve("lang");
+        this.publisher = Objects.requireNonNull(publisher, "publisher must not be null");
     }
     
     /**
@@ -129,28 +178,24 @@ public final class LanguageFileManager {
             }
 
             java.util.Properties jarProps = loadProperties(jarStream);
-            java.util.Properties externalProps;
-            try (InputStream extStream = Files.newInputStream(targetFile)) {
-                externalProps = loadProperties(extStream);
-            }
-
-            java.util.List<String> missingKeys = findMissingKeys(jarProps, externalProps);
-            if (missingKeys.isEmpty()) {
+            List<LanguageFileUpdater.StockMigration> stockMigrations = stockMigrationsFor(filename);
+            validateBundledStockDefaults(filename, jarProps, stockMigrations);
+            LanguageFileUpdater.UpdateResult update = LanguageFileUpdater.update(
+                    targetFile,
+                    jarProps,
+                    "# === Auto-added missing keys ===",
+                    stockMigrations,
+                    publisher);
+            if (!update.published()) {
                 logger.debug("Language file {} is up to date", filename);
                 return;
             }
-            // .properties-spec escaping so future values with backslashes, newlines, leading
-            // spaces or special chars (#, !, =, :) do not corrupt the file when re-loaded.
-            appendMissingKeysSection(targetFile, jarProps, missingKeys, "# === Auto-added missing keys ===");
 
-            // Summary at INFO (one short line per file), full key list at DEBUG.
-            // On first startup after an upgrade this fires once per language file × N new keys —
-            // a single INFO line per file is enough for operators; DEBUG keeps the full diff
-            // for anyone tracing translation-key issues.
-            logger.info("Added {} missing keys to {} (run with DEBUG to list them)",
-                    missingKeys.size(), filename);
+            logger.info("Updated {} stock values and added {} missing keys in {}",
+                    update.migratedKeys().size(), update.missingKeys().size(), filename);
             if (logger.isDebugEnabled()) {
-                logger.debug("Added missing keys to {}: {}", filename, missingKeys);
+                logger.debug("Language update details for {}: stock={}, missing={}",
+                        filename, update.migratedKeys(), update.missingKeys());
             }
         }
     }
@@ -163,32 +208,6 @@ public final class LanguageFileManager {
         return props;
     }
 
-    private static java.util.List<String> findMissingKeys(
-            java.util.Properties source, java.util.Properties target) {
-        java.util.List<String> missing = new java.util.ArrayList<>();
-        for (String key : source.stringPropertyNames()) {
-            if (!target.containsKey(key)) {
-                missing.add(key);
-            }
-        }
-        return missing;
-    }
-
-    private static void appendMissingKeysSection(
-            Path targetFile, java.util.Properties source,
-            java.util.List<String> missingKeys, String header) throws IOException {
-        try (java.io.BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8,
-                java.nio.file.StandardOpenOption.APPEND)) {
-            writer.newLine();
-            writer.write(header);
-            writer.newLine();
-            for (String key : missingKeys) {
-                writer.write(escapePropertyKey(key) + "=" + escapePropertyValue(source.getProperty(key)));
-                writer.newLine();
-            }
-        }
-    }
-    
     /**
      * Pure existence check: does {@code messages_<language>.properties} already live on disk?
      * <p>
@@ -323,29 +342,49 @@ public final class LanguageFileManager {
             try (InputStream enStream = Files.newInputStream(englishFile)) {
                 englishProps = loadProperties(enStream);
             }
-            java.util.Properties targetProps;
-            try (InputStream targetStream = Files.newInputStream(targetFile)) {
-                targetProps = loadProperties(targetStream);
-            }
-
-            java.util.List<String> missingKeys = findMissingKeys(englishProps, targetProps);
-            if (missingKeys.isEmpty()) {
+            LanguageFileUpdater.UpdateResult update = LanguageFileUpdater.update(
+                    targetFile,
+                    englishProps,
+                    "# === Missing keys (English fallback - please translate) ===",
+                    List.of(),
+                    publisher);
+            if (!update.published()) {
                 return;
             }
-            // Append missing keys with English values (as placeholder for translation),
-            // escaping per .properties spec so future English values containing newlines,
-            // backslashes, leading whitespace, or =:#! survive the round-trip.
-            appendMissingKeysSection(targetFile, englishProps, missingKeys,
-                    "# === Missing keys (English fallback - please translate) ===");
 
-            // Same INFO summary + DEBUG details split as in mergeLanguageFile.
             logger.info("Added {} missing keys to messages_{}.properties from English template (run with DEBUG to list them)",
-                    missingKeys.size(), language);
+                    update.missingKeys().size(), language);
             if (logger.isDebugEnabled()) {
-                logger.debug("Added missing keys to messages_{}.properties: {}", language, missingKeys);
+                logger.debug("Added missing keys to messages_{}.properties: {}",
+                        language, update.missingKeys());
             }
         } catch (IOException e) {
             logger.warn("Failed to fill missing keys for language {}: {}", language, e.getMessage());
+        }
+    }
+
+    private static List<LanguageFileUpdater.StockMigration> stockMigrationsFor(String filename)
+            throws IOException {
+        if (!filename.startsWith(MESSAGES_PREFIX) || !filename.endsWith(PROPERTIES_SUFFIX)) {
+            throw new IOException("Unexpected bundled language filename: " + filename);
+        }
+        String language = filename.substring(
+                MESSAGES_PREFIX.length(), filename.length() - PROPERTIES_SUFFIX.length());
+        if (!BuiltInLanguages.isBuiltIn(language)) {
+            throw new IOException("Stock migration is restricted to built-in language files: " + filename);
+        }
+        return "pl".equals(language) ? POLISH_STOCK_MIGRATIONS : COMMON_STOCK_MIGRATIONS;
+    }
+
+    private static void validateBundledStockDefaults(
+            String filename,
+            java.util.Properties bundledProperties,
+            List<LanguageFileUpdater.StockMigration> migrations) throws IOException {
+        for (LanguageFileUpdater.StockMigration migration : migrations) {
+            if (!migration.newValue().equals(bundledProperties.getProperty(migration.key()))) {
+                throw new IOException("Bundled stock default drift for " + migration.key()
+                        + " in " + filename);
+            }
         }
     }
 

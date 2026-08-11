@@ -184,9 +184,13 @@ rebuilds the candidate, or replaces release assets.
    use `external`; an existing explicit `embedded` selection remains embedded. Files are not
    rewritten. The absent-key automatic-transfer delay changes from the historical 300 ms to 1500 ms;
    set `connection.auto-transfer-delay-ms` explicitly only after testing the desired dwell time.
-5. Existing external language values are preserved. VeloAuth appends only bundled keys that are
-   missing, including preserving intentional empty notification values; review the appended section
-   in each file before production rollout.
+5. Existing external language values remain operator-owned, with one narrow 1.5 repair: in the 17
+   built-in locale files VeloAuth replaces the exact historical stock defaults for
+   `2fa.qr.warning`, `admin.report.generating` and `admin.report.warning` with their corrected 1.5
+   defaults. Only one exact canonical physical line is eligible; custom, empty, reformatted or
+   duplicate entries are preserved byte-for-byte. Custom-language files are never stock-migrated.
+   Missing bundled keys are still appended. Back up and review the resulting `lang/` files before
+   production rollout.
 6. Replace the JAR and perform a full restart. Canary premium, cracked register/login/reconnect,
    2FA, optional Floodgate, forced hosts, Velocity `try` fallback and backend outage recovery with
    the exact checksummed candidate.
@@ -469,10 +473,15 @@ Counters apply **on top of** `min-password-length`. Validation error messages (`
 
 Player-facing messages in `plugins/veloauth/lang/messages_<lang>.properties` support legacy colors, decorations, and six-digit RGB colors. The recommended HEX form is `<#RRGGBB>`; legacy `&#RRGGBB`, `§#RRGGBB`, and `§x§R§R§G§G§B§B` forms are also accepted.
 
-During an upgrade, existing external values remain authoritative. VeloAuth appends only keys that
-are missing from each built-in bundle; it does not replace translations or intentional empty
-values. Custom languages receive missing English fallback keys. Back up and review `lang/` before
-the full restart because language-file migration is separate from transactional config loading.
+During an upgrade, existing external values remain authoritative except for three known historical
+stock defaults. In the 17 built-in locales, exact unchanged values of `2fa.qr.warning`,
+`admin.report.generating` and `admin.report.warning` are upgraded to the bundled 1.5 wording.
+Only one exact canonical physical line is eligible; VeloAuth preserves custom, empty, reformatted
+and duplicate entries byte-for-byte. Custom languages never receive this replacement. Missing
+bundled keys are appended (custom languages receive English fallback keys). Publication uses a
+validated sibling file and atomic replacement; a failed publication leaves the original untouched.
+Back up and review `lang/` before the full restart because language-file migration is separate from
+transactional config loading.
 
 ```properties
 auth.header=<#FF6700>&lS<#FF7312>&le<#FF8024>&lc<#FF8C36>&lu<#FF9848>&lr<#FFA45A>&li<#FFB16C>&lt<#FFBD7E>&ly

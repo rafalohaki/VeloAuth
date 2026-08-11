@@ -51,9 +51,12 @@ All notable user-visible changes to VeloAuth are documented in this file.
   are unchanged.
 - bStats Velocity was updated to 3.2.1, its lifecycle is closed explicitly, and fresh generated
   configs now explain telemetry privacy, global opt-out, embedded forwarding and restart semantics.
-- Existing external `lang/messages_*.properties` values remain operator-owned. On startup VeloAuth
-  appends only keys missing from the bundled language file, so upgrades do not replace translations
-  or intentional empty notification values.
+- Existing external `lang/messages_*.properties` values remain operator-owned. In the 17 built-in
+  locale files, startup upgrades only the exact historical stock defaults for `2fa.qr.warning`,
+  `admin.report.generating` and `admin.report.warning`, and only when the key has one exact canonical
+  physical line. Custom, empty, reformatted, duplicate and all custom-language entries remain
+  untouched. Missing bundled keys are still appended, and both changes are validated and atomically
+  published so a failed update leaves the original file intact.
 
 ### Fixed
 
