@@ -52,7 +52,7 @@
 
     <!-- Design -->
     <rule ref="category/java/design.xml">
-        <!-- Exclude cognitive complexity - already handled by SonarQube -->
+        <!-- Re-enable these three complexity rules below with measured project ratchets. -->
         <exclude name="CognitiveComplexity"/>
         <exclude name="CyclomaticComplexity"/>
         <exclude name="NPathComplexity"/>
@@ -81,6 +81,26 @@
              methods so the outer public API can call them across packages without making the
              helper itself public. -->
         <exclude name="PublicMemberInNonPublicType"/>
+    </rule>
+
+    <!-- PMD reports values greater than or equal to each threshold. These ratchets are exactly
+         one above the measured 2026-08-12 maxima documented in docs/quality-gates.md. Do not
+         raise them without an explicit baseline review. -->
+    <rule ref="category/java/design.xml/CognitiveComplexity">
+        <properties>
+            <property name="reportLevel" value="25"/>
+        </properties>
+    </rule>
+    <rule ref="category/java/design.xml/CyclomaticComplexity">
+        <properties>
+            <property name="classReportLevel" value="210"/>
+            <property name="methodReportLevel" value="20"/>
+        </properties>
+    </rule>
+    <rule ref="category/java/design.xml/NPathComplexity">
+        <properties>
+            <property name="reportLevel" value="1928"/>
+        </properties>
     </rule>
 
     <!-- Error Prone -->
