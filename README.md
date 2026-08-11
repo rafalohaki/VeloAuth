@@ -23,7 +23,7 @@ VeloAuth is a comprehensive authentication system for Velocity proxy that handle
 - 🔄 **Automatic Nickname Change Detection** - Detects when a premium player renames their Mojang account and updates the database record automatically
 - 🛡️ **Secure Offline Auth** - BCrypt password hashing, brute-force protection, and atomic first-owner registration enforced by the database
 - 📱 **Optional Floodgate Support** - Bedrock and linked Floodgate accounts are detected before Mojang resolution; only UUIDs confirmed by Floodgate can bypass the auth server
-- 🧩 **Self-Contained Limbo** - New installations can use the built-in 1.8-base limbo with staged ViaVersion snapshot updates for newer Java clients; no separate server, forwarding secret, or ViaVersion plugin is required
+- 🧩 **Optional Self-Contained Limbo** - Explicitly enabled installations can use the built-in 1.8-base limbo with staged ViaVersion snapshot updates for newer Java clients; external limbo remains the default
 - 🗺️ **Forced Hosts Support** - Players connect via custom domains (e.g., `pvp.server.com`) and are properly routed to their intended server *after* authentication
 - 🚫 **Smart Command Hiding** - Authentication commands (`/login`, `/register`) are hidden while authorization and the matching login session are active; expired sessions expose the recovery commands again
 - 🚀 **High Performance** - Bounded three-layer premium cache, non-blocking ordered backend selection and ownership-safe per-player tasks keep proxy event loops free
@@ -110,6 +110,14 @@ matches never grant this bypass.
   [GitHub Releases](https://github.com/rafalohaki/VeloAuth/releases) and
   [Modrinth](https://modrinth.com/plugin/veloauth).
 
+The VeloAuth 1.5 candidate has one identity across every publication surface: Maven version
+`1.5.0`, immutable tag `v1.5.0`, and unchanged artifact name `veloauth-1.5.0.jar`. Before release,
+`scripts/verify-release-identity.sh v1.5.0` verifies the POM, generated plugin metadata,
+`BuildConstants.VERSION`, packaged Maven metadata and the adjacent SHA-256. Once the release-manifest
+producer is present, the same command also requires and validates the adjacent manifest. Whether an
+operator privately distributed an earlier 1.5.0 build cannot be inferred from Git history; that is
+an external release gate. If confirmed, bump the candidate to 1.5.1 everywhere before tagging.
+
 ## Requirements
 
 - **Java 21 or newer**
@@ -133,6 +141,30 @@ matches never grant this bypass.
 5. Restart Velocity. Plugin upgrades and auth-topology changes always require a full proxy restart.
 
 **Note:** Floodgate support is disabled by default. Enable it only if you actually use Geyser/Floodgate.
+
+### Upgrading from 1.4 or a LimboAuth lineage
+
+1. Stop the proxy and take restorable backups of the authentication database, backend player data,
+   `config.yml`, `lang/`, and `velocity.toml`. Keep the previous 1.4 JAR and external-limbo profile.
+2. Test a copy first. Inventory passwordless legacy rows and distinguish the lineage-safe candidates:
+   `HASH` is null/blank and `PREMIUMUUID` is null or equal to `AUTH.UUID`. A passwordless row with a
+   different premium UUID is deliberately not auto-marked; hashed offline accounts are controls.
+3. Start 1.5 against the copy and review the `VA-1501 legacy UUID preservation candidates=...,
+   marked=...` log. The idempotent backfill sets only `PRESERVE_UUID=true` for safe candidates and
+   records schema provenance version 2 after success. It does not rewrite account UUIDs, hashes,
+   IPs, TOTP values, registration dates or login dates.
+4. Existing configurations without `auth-server.mode` and freshly generated configurations both
+   use `external`; an existing explicit `embedded` selection remains embedded. Files are not
+   rewritten. The absent-key automatic-transfer delay changes from the historical 300 ms to 1500 ms;
+   set `connection.auto-transfer-delay-ms` explicitly only after testing the desired dwell time.
+5. Existing external language values are preserved. VeloAuth appends only bundled keys that are
+   missing, including preserving intentional empty notification values; review the appended section
+   in each file before production rollout.
+6. Replace the JAR and perform a full restart. Canary premium, cracked register/login/reconnect,
+   2FA, optional Floodgate, forced hosts, Velocity `try` fallback and backend outage recovery with
+   the exact checksummed candidate.
+7. If the canary fails, restore the previous database/config copy and 1.4 JAR, select `external`
+   mode, and perform another full restart. `/vauth reload` is neither an upgrade nor rollback path.
 
 ### Velocity Config
 
@@ -225,6 +257,10 @@ premium:
   bypass-auth-server: false
 ```
 
+Upgraded files are not rewritten to add `auto-transfer-delay-ms`; when it is absent, 1.5 still uses
+the new 1500 ms default. Connection tuning is restart-scoped, so changing it requires a full proxy
+restart rather than `/vauth reload`.
+
 Embedded limbo uses a minimal Minecraft 1.8 (protocol 47) server codec. A private ViaVersion runtime
 translates every newer release for which ViaVersion exposes a complete path back to 1.8. The pinned
 fallback in this release supports **1.8 through 26.2**; later support follows the latest usable
@@ -270,7 +306,9 @@ Maintainers can also preflight and package the current snapshot without editing 
 The script pins the resolved timestamp, URL and hashes into
 `META-INF/veloauth/embedded-runtime.properties`, runs Maven/JaCoCo/PMD/CPD and uses the resulting JAR
 in a real Velocity smoke test. `--resolve-only` tests repository resolution, while `--skip-smoke`
-is intended only for local diagnostics. The ordinary `mvnd clean verify` remains reproducible.
+is intended only for local diagnostics. An ordinary `mvnd clean verify` proves the test, coverage
+and static-analysis gates; it does not by itself prove byte-for-byte reproducibility or publication
+provenance. Those are separate release-candidate gates.
 
 For a repeatable local direct-listener baseline, run:
 
@@ -402,6 +440,11 @@ Counters apply **on top of** `min-password-length`. Validation error messages (`
 #### Message colors and HEX gradients
 
 Player-facing messages in `plugins/veloauth/lang/messages_<lang>.properties` support legacy colors, decorations, and six-digit RGB colors. The recommended HEX form is `<#RRGGBB>`; legacy `&#RRGGBB`, `§#RRGGBB`, and `§x§R§R§G§G§B§B` forms are also accepted.
+
+During an upgrade, existing external values remain authoritative. VeloAuth appends only keys that
+are missing from each built-in bundle; it does not replace translations or intentional empty
+values. Custom languages receive missing English fallback keys. Back up and review `lang/` before
+the full restart because language-file migration is separate from transactional config loading.
 
 ```properties
 auth.header=<#FF6700>&lS<#FF7312>&le<#FF8024>&lc<#FF8C36>&lu<#FF9848>&lr<#FFA45A>&li<#FFB16C>&lt<#FFBD7E>&ly
@@ -610,18 +653,22 @@ plugin data directory.
 ## LimboAuth Migration
 
 VeloAuth is schema-compatible with supported LimboAuth databases and performs required additive
-changes automatically:
+changes automatically. Always test the exact lineage on a database and backend-player-data copy:
 
 1. Stop LimboAuth on your backend servers
 2. Install VeloAuth on Velocity
 3. Configure VeloAuth to use the same database as LimboAuth
-4. Start Velocity and verify the migration logs before allowing players to connect
+4. Before startup, inventory passwordless rows. Only rows where `HASH` is null/blank and
+   `PREMIUMUUID` is null or equal to `AUTH.UUID` are lineage-safe automatic candidates
+5. Start Velocity and verify the migration candidate/marked counts before allowing players to connect
 
 Players who previously used LimboAuth's `/premium` keep the historical `AUTH.UUID` exposed to
 backend servers, while the Mojang-verified UUID is stored separately in `AUTH.PREMIUMUUID`.
-`AUTH.PRESERVE_UUID` and supporting indexes are created automatically and idempotently; no manual
-UUID rewrite is required. This is still a database migration: take a database and backend-player-data
-backup, test on a copy, and keep the previous JAR/config available for rollback.
+`AUTH.PRESERVE_UUID` and supporting indexes are created automatically and idempotently; schema
+provenance version 2 is recorded only after the required backfill succeeds. Passwordless rows with
+a distinct existing premium UUID and ordinary hashed accounts are not auto-marked. No manual UUID
+rewrite is required. This is still a database migration: keep the previous 1.4 JAR/config and an
+external-limbo rollback profile available for a full-restart rollback.
 
 ## Verification
 
@@ -632,6 +679,16 @@ Run the normal Java/H2/SQLite gates and the explicit duplication gate together w
 ./scripts/test-postgresql.sh
 ./scripts/test-mysql.sh
 ```
+
+After the exact candidate JAR and SHA-256 sidecar exist, verify its identity before any smoke,
+attestation or upload:
+
+```bash
+./scripts/verify-release-identity.sh v1.5.0
+```
+
+This identity check is necessary but not sufficient for production: reproducibility, provenance,
+the external-limbo canary and explicit operator approval remain separate gates.
 
 The PostgreSQL harness verifies case-insensitive premium nickname reconciliation, batched conflict
 deletion, idempotent LimboAuth migration, insert-only registration ownership and concurrent AUTH

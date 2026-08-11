@@ -2,32 +2,7 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
-## [Unreleased]
-
-### Added
-
-- `connection.auto-transfer-delay-ms` (default `1500`, range `0-30000`) controls the compatibility
-  buffer before automatic auth/limbo-to-backend transfers.
-- Protocol-47 embedded limbo now sends explicit spectator `PlayerAbilities` and `MC|Brand`
-  (`VeloAuth`) packets before the initial position.
-
-### Changed
-
-- Freshly generated configurations now use `auth-server.mode: external`; embedded mode remains an
-  explicit staging/canary opt-in until its production runtime gates are complete. Existing files
-  are still never rewritten.
-
-### Fixed
-
-- Concurrent manual login, automatic transfer and retry callbacks now share one identity-owned
-  backend connection slot, preventing duplicate Velocity `connect()` attempts for one player.
-- A backend connection result that arrives after player disconnect no longer starts an auth-server
-  fallback or another retry.
-- Failed embedded Velocity forwarding writes now log their cause before the channel is closed.
-- Expired one-time embedded redirect expectations are cleaned during normal redirect traffic,
-  instead of waiting until the registry reaches capacity.
-
-## [1.5.0] - 2026-08-10
+## [1.5.0] - 2026-08-11
 
 ### Added
 
@@ -42,11 +17,18 @@ All notable user-visible changes to VeloAuth are documented in this file.
   family, language bucket and premium/Floodgate/2FA feature adoption.
 - An opt-in embedded listener/framing benchmark with configurable held connections and login
   concurrency for repeatable before/after capacity checks.
+- `connection.auto-transfer-delay-ms` (default `1500`, range `0-30000`) controls the compatibility
+  buffer before automatic auth/limbo-to-backend transfers.
+- Protocol-47 embedded limbo sends explicit spectator `PlayerAbilities` and `MC|Brand`
+  (`VeloAuth`) packets before the initial position.
 
 ### Changed
 
-- Fresh installations generate `auth-server.mode: embedded`. Existing configurations without the
-  new key remain `external`, retain their historical server name and are not rewritten on load.
+- Fresh configurations and upgraded configurations without `auth-server.mode` both use `external`.
+  Existing explicit `embedded` selections remain embedded; configuration files are not rewritten.
+- Automatic auth/limbo-to-backend routing now waits `1500` ms by default instead of the historical
+  `300` ms. Upgraded files are not rewritten, but the new in-memory default applies when the key is
+  absent; operators can set `connection.auto-transfer-delay-ms` explicitly after canary testing.
 - Auth-server identity is now owned by one restart-scoped provider so forced hosts, Velocity `try`
   fallback and backend exclusion use the same external or embedded target.
 - Embedded protocol responsibilities are separated behind `ProtocolRuntime`; remote repository
@@ -66,6 +48,9 @@ All notable user-visible changes to VeloAuth are documented in this file.
   are unchanged.
 - bStats Velocity was updated to 3.2.1, its lifecycle is closed explicitly, and fresh generated
   configs now explain telemetry privacy, global opt-out, embedded forwarding and restart semantics.
+- Existing external `lang/messages_*.properties` values remain operator-owned. On startup VeloAuth
+  appends only keys missing from the bundled language file, so upgrades do not replace translations
+  or intentional empty notification values.
 
 ### Fixed
 
@@ -101,6 +86,17 @@ All notable user-visible changes to VeloAuth are documented in this file.
   timer; handshake/login remain timeout-protected and an unanswered keepalive still disconnects.
 - Removed the duplicate premium-cache cleanup thread; `AuthCache` already maintains the same cache
   on its bounded scheduler.
+- LimboAuth and early VeloAuth premium rows now receive the lineage-safe `PRESERVE_UUID` backfill
+  even when older schema provenance already exists. Only passwordless rows whose `PREMIUMUUID` is
+  null or equal to `AUTH.UUID` are marked; account UUIDs, hashes, IPs, TOTP data and timestamps are
+  not rewritten.
+- Concurrent manual login, automatic transfer and retry callbacks now share one identity-owned
+  backend connection slot, preventing duplicate Velocity `connect()` attempts for one player.
+- Backend results, auth fallback, timeout and wait callbacks from a replaced player connection can
+  no longer cancel, message or reschedule work owned by the current connection.
+- Failed embedded Velocity forwarding writes log their cause before the channel is closed.
+- Expired one-time embedded redirect expectations are cleaned during normal redirect traffic,
+  instead of waiting until the registry reaches capacity.
 
 ### Security
 
@@ -116,9 +112,14 @@ All notable user-visible changes to VeloAuth are documented in this file.
 
 - Requires Java 21 and a Velocity 3.5 API-compatible proxy.
 - A full proxy restart is required. Do not use `/vauth reload` as a plugin-upgrade substitute.
-- Existing `config.yml` files remain untouched. To display custom charts, the VeloAuth bStats page
-  owner must add the documented chart IDs once; server operators do not need a new config key.
-- Version 1.5.0 adds no database table, column or migration and does not rewrite player UUIDs,
-  password hashes, TOTP secrets, `AUTH` or `PREMIUM_UUIDS` records.
-- Back up the database, `config.yml`, language files and `velocity.toml`; canary premium, cracked,
-  Floodgate, 2FA, forced-host and backend-fallback journeys before production traffic.
+- Back up the database, backend player data, `config.yml`, external language files and
+  `velocity.toml`. Run the LimboAuth/pre-1.4 lineage preflight on a copy and review the logged
+  candidate/marked counts before accepting traffic.
+- Existing `config.yml` and language values remain intact. Missing built-in language keys are
+  appended; review those additions and the new `1500` ms transfer default before rollout.
+- Canary premium, cracked, Floodgate, 2FA, forced-host and backend-fallback journeys with the exact
+  checksummed candidate. Prefer rollback to the previous 1.4 JAR in `external` mode with a full
+  proxy restart if the canary fails.
+- Candidate identity is `1.5.0`, immutable tag `v1.5.0`, and artifact
+  `veloauth-1.5.0.jar`. Confirmation that no private 1.5.0 binary was distributed remains an
+  external release gate; if one was, the candidate must become 1.5.1 before tagging.
