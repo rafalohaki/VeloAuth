@@ -11,7 +11,7 @@ import org.slf4j.Logger;
  * Orchestrator for VeloAuth command registration and lifecycle.
  * Individual commands are implemented in separate classes:
  * {@link LoginCommand}, {@link RegisterCommand}, {@link ChangePasswordCommand},
- * {@link UnregisterCommand}, {@link VAuthCommand}.
+ * {@link LogoutCommand}, {@link UnregisterCommand}, {@link VAuthCommand}.
  * <p>
  * Shared logic and services are provided via {@link CommandContext}.
  * Authentication state is carried via {@link AuthenticationContext}.
@@ -24,6 +24,7 @@ public class CommandHandler {
     private static final String[] COMMAND_REGISTER_ALIASES = {"reg"};
     @SuppressWarnings("java:S2068") // Not a password - this is a command name constant
     private static final String COMMAND_CHANGE_PASSWORD = "changepassword"; // NOSONAR
+    private static final String COMMAND_LOGOUT = "logout";
     private static final String COMMAND_UNREGISTER = "unregister";
     private static final String COMMAND_VAUTH = "vauth";
     private static final String COMMAND_TWO_FACTOR = "2fa";
@@ -60,6 +61,7 @@ public class CommandHandler {
         commandManager.register(commandManager.metaBuilder(COMMAND_LOGIN).aliases(COMMAND_LOGIN_ALIASES).build(), new LoginCommand(ctx));
         commandManager.register(commandManager.metaBuilder(COMMAND_REGISTER).aliases(COMMAND_REGISTER_ALIASES).build(), new RegisterCommand(ctx));
         commandManager.register(commandManager.metaBuilder(COMMAND_CHANGE_PASSWORD).build(), new ChangePasswordCommand(ctx));
+        commandManager.register(commandManager.metaBuilder(COMMAND_LOGOUT).build(), new LogoutCommand(ctx));
 
         commandManager.register(commandManager.metaBuilder(COMMAND_UNREGISTER).build(), new UnregisterCommand(ctx));
         commandManager.register(commandManager.metaBuilder(COMMAND_VAUTH).build(), new VAuthCommand(ctx));
@@ -80,6 +82,7 @@ public class CommandHandler {
         unregisterCommandAliases(commandManager, COMMAND_LOGIN, COMMAND_LOGIN_ALIASES);
         unregisterCommandAliases(commandManager, COMMAND_REGISTER, COMMAND_REGISTER_ALIASES);
         unregisterCommandAliases(commandManager, COMMAND_CHANGE_PASSWORD);
+        unregisterCommandAliases(commandManager, COMMAND_LOGOUT);
         unregisterCommandAliases(commandManager, COMMAND_UNREGISTER);
         unregisterCommandAliases(commandManager, COMMAND_VAUTH);
         unregisterCommandAliases(commandManager, COMMAND_TWO_FACTOR, COMMAND_TWO_FACTOR_ALIASES);

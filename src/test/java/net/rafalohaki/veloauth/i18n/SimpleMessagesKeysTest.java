@@ -49,6 +49,7 @@ class SimpleMessagesKeysTest {
             "auth.login.already_logged_in",
             "auth.login.not_registered",
             "auth.login.usage",
+            "auth.logout.usage",
             "auth.register.usage",
             "auth.changepassword.usage",
             "auth.changepassword.success",

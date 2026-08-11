@@ -6,6 +6,9 @@ All notable user-visible changes to VeloAuth are documented in this file.
 
 ### Added
 
+- `/logout` as a terminal, self-service proxy disconnect. The owning disconnect cleanup invalidates
+  authorization, session, pending 2FA, auth timeout and transfer work, and records a `LOGOUT` audit
+  event without transferring the player back to auth/limbo.
 - Optional `premium.bypass-auth-server` routing for Mojang-verified Java players. The default is
   `false`; cracked players and unverified premium candidates still use the auth server.
 - Loopback-only embedded auth/limbo with a native Minecraft 1.8 protocol base and a private,

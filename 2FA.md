@@ -235,7 +235,9 @@ What 2FA does **not** protect:
 - Pending 2FA state lives in memory (Caffeine cache, bounded to 10 000 concurrent entries,
   TTL = the `pending-timeout-seconds` value captured at startup). `/vauth reload` does not rebuild
   this store or clear active challenges. A proxy restart wipes pending states; affected players
-  just `/login` again. Disconnecting also invalidates pending state immediately.
+  just `/login` again. Disconnecting, including `/logout`, also invalidates pending login and setup
+  state immediately. It does not delete the stored TOTP token or reset replay protection for a code
+  that was already consumed; a cracked player must start a fresh password/TOTP flow after reconnect.
 - QR rendering is **not** done in-chat. Earlier versions tried to render an ASCII QR using
   Unicode block characters but Minecraft's chat font is taller-than-wide and varies across
   resource packs / client mods — the result was unscannable on most setups. The clickable

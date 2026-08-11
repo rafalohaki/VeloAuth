@@ -21,6 +21,7 @@ import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.auth.totp.PendingTotpState;
 import net.rafalohaki.veloauth.auth.totp.PendingTotpStore;
+import net.rafalohaki.veloauth.auth.totp.TotpReplayGuard;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.connection.AuthTimeoutScheduler;
@@ -32,6 +33,8 @@ import org.geysermc.floodgate.api.FloodgateApi;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.ArgumentCaptor;
@@ -616,16 +619,25 @@ class AuthListenerTest {
         verify(authCache, atLeastOnce()).endSession(playerUuid);
     }
 
-    @Test
-    void onDisconnect_alwaysInvalidatesAuthorizationSessionAndPendingTwoFactor() throws Exception {
+    @ParameterizedTest
+    @EnumSource(PendingTotpState.Kind.class)
+    void onDisconnect_CurrentLogoutOwner_InvalidatesSessionAndPendingTwoFactor(
+            PendingTotpState.Kind pendingKind) throws Exception {
         UUID playerUuid = UUID.randomUUID();
         Player player = org.mockito.Mockito.mock(Player.class);
         when(player.getUniqueId()).thenReturn(playerUuid);
         when(player.getUsername()).thenReturn("DisconnectedPlayer");
         PendingTotpStore pendingTotpStore = new PendingTotpStore(Duration.ofMinutes(5), null);
-        pendingTotpStore.put(PendingTotpState.forSetup(playerUuid, "JBSWY3DPEHPK3PXP", "192.0.2.50"));
+        PendingTotpState pendingState = pendingKind == PendingTotpState.Kind.LOGIN
+                ? PendingTotpState.forLogin(
+                        playerUuid, org.mockito.Mockito.mock(RegisteredPlayer.class), "192.0.2.50")
+                : PendingTotpState.forSetup(playerUuid, "JBSWY3DPEHPK3PXP", "192.0.2.50");
+        pendingTotpStore.put(pendingState);
+        TotpReplayGuard replayGuard = new TotpReplayGuard();
+        assertTrue(replayGuard.consume(playerUuid, 100L));
         AuthTimeoutScheduler timeoutScheduler = org.mockito.Mockito.mock(AuthTimeoutScheduler.class);
         setPluginField("pendingTotpStore", pendingTotpStore);
+        setPluginField("totpReplayGuard", replayGuard);
         setPluginField("authTimeoutScheduler", timeoutScheduler);
 
         authListener.onDisconnect(new DisconnectEvent(
@@ -637,6 +649,8 @@ class AuthListenerTest {
         verify(timeoutScheduler).cancel(playerUuid);
         assertTrue(pendingTotpStore.get(playerUuid).isEmpty(),
                 "A disconnected connection must not leave a reusable 2FA continuation");
+        assertFalse(replayGuard.consume(playerUuid, 100L),
+                "Logout must not reset the one-time TOTP replay window");
     }
 
     @Test
@@ -691,6 +705,42 @@ class AuthListenerTest {
         routingOrder.verify(connectionManager).beginTransferSession(replacementConnection);
         routingOrder.verify(connectionManager).clearTransferState(oldConnection);
         routingOrder.verify(postLoginHandler).handleOfflinePlayer(replacementConnection, "192.0.2.70");
+    }
+
+    @Test
+    void onDisconnect_LogoutFromReplacedConnection_DoesNotClearReplacementState() throws Exception {
+        UUID sharedOfflineUuid = UUID.randomUUID();
+        Player oldConnection = org.mockito.Mockito.mock(Player.class);
+        Player replacementConnection = org.mockito.Mockito.mock(Player.class);
+        when(oldConnection.getUniqueId()).thenReturn(sharedOfflineUuid);
+        when(oldConnection.getUsername()).thenReturn("LogoutReplacementPlayer");
+        when(oldConnection.getRemoteAddress()).thenReturn(
+                new InetSocketAddress("192.0.2.71", 25565));
+        when(replacementConnection.getUniqueId()).thenReturn(sharedOfflineUuid);
+        when(replacementConnection.getUsername()).thenReturn("LogoutReplacementPlayer");
+        when(replacementConnection.getRemoteAddress()).thenReturn(
+                new InetSocketAddress("192.0.2.72", 25565));
+
+        authListener.onPostLogin(new PostLoginEvent(oldConnection));
+        authListener.onPostLogin(new PostLoginEvent(replacementConnection));
+
+        PendingTotpStore replacementPending = new PendingTotpStore(Duration.ofMinutes(5), null);
+        replacementPending.put(PendingTotpState.forSetup(
+                sharedOfflineUuid, "JBSWY3DPEHPK3PXP", "192.0.2.72"));
+        AuthTimeoutScheduler timeoutScheduler = org.mockito.Mockito.mock(AuthTimeoutScheduler.class);
+        setPluginField("pendingTotpStore", replacementPending);
+        setPluginField("authTimeoutScheduler", timeoutScheduler);
+        org.mockito.Mockito.clearInvocations(authCache, connectionManager, timeoutScheduler);
+
+        authListener.onDisconnect(new DisconnectEvent(
+                oldConnection, DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN));
+
+        verify(authCache, never()).removeAuthorizedPlayer(sharedOfflineUuid);
+        verify(authCache, never()).endSession(sharedOfflineUuid);
+        verify(connectionManager, never()).clearTransferState(any(Player.class));
+        verify(timeoutScheduler, never()).cancel(sharedOfflineUuid);
+        assertTrue(replacementPending.get(sharedOfflineUuid).isPresent(),
+                "A stale logout disconnect must not invalidate B's pending 2FA state");
     }
 
     @Test

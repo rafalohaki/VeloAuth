@@ -8,6 +8,7 @@ package net.rafalohaki.veloauth.audit;
 public enum AuditEventType {
     LOGIN_OK,
     LOGIN_FAIL,
+    LOGOUT,
     REGISTER,
     UNREGISTER,
     PASSWORD_CHANGE,

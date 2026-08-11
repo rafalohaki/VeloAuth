@@ -221,7 +221,7 @@ class ConnectionManagerLifecycleIntegrationTest {
     }
 
     @Test
-    void transferToBackend_PlayerDisconnectsDuringConnect_ShouldNotScheduleFallback() throws Exception {
+    void transferToBackend_LogoutClearsStateDuringConnect_ShouldNotScheduleFallback() throws Exception {
         UUID playerUuid = UUID.randomUUID();
         Player player = org.mockito.Mockito.mock(Player.class);
         RegisteredServer backendServer = org.mockito.Mockito.mock(RegisteredServer.class);
@@ -253,13 +253,16 @@ class ConnectionManagerLifecycleIntegrationTest {
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<Boolean> attempt = executor.submit(() -> connectionManager.transferToBackend(player));
             assertTrue(connectionStarted.await(1, TimeUnit.SECONDS));
+            connectionManager.clearTransferState(player);
             when(player.isActive()).thenReturn(false);
+            org.mockito.Mockito.clearInvocations(player);
             pendingConnection.complete(failedResult);
 
             assertFalse(attempt.get(2, TimeUnit.SECONDS),
                     "A disconnected player must not be routed through auth fallback");
         }
         verify(player, never()).createConnectionRequest(authServer);
+        verify(player, never()).sendMessage(any(Component.class));
     }
 
     @Test

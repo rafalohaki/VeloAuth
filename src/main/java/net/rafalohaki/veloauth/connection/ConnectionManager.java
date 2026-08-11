@@ -1409,40 +1409,6 @@ public class ConnectionManager {
     }
 
     /**
-     * Wymusza ponowną autoryzację gracza.
-     * Can be used for /logout command implementation.
-     *
-     * @param player Gracz do wylogowania
-     */
-    public void forceReauth(Player player) {
-        try {
-            PlayerTransferState state = currentState(player);
-            if (state == null || !resetTasksIfCurrent(state, false)) {
-                return;
-            }
-            state.retryAttempts().set(0);
-
-            // Usuń z cache
-            authCache.removeAuthorizedPlayer(player.getUniqueId());
-            authCache.endSession(player.getUniqueId());
-            
-            // Transfer na auth server bez blokowania wątku wywołującego.
-            transferToAuthServerAsync(player);
-
-            player.sendMessage(messages.component("auth.logged_out", NamedTextColor.YELLOW));
-
-            if (logger.isDebugEnabled()) {
-                logger.debug("Forced re-authentication for player: {}", player.getUsername());
-            }
-
-        } catch (Exception e) {
-            if (logger.isErrorEnabled()) {
-                logger.error("Error forcing re-authentication for {}", player.getUsername(), e);
-            }
-        }
-    }
-
-    /**
      * Automatycznie transferuje zweryfikowanego gracza z auth server na backend.
      * Wywoływane przez AuthListener.onServerConnected gdy gracz jest już w cache autoryzacji.
      * Używa opóźnienia dla poprawnej synchronizacji ViaVersion/ViaFabric.

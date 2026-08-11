@@ -589,6 +589,7 @@ PostgreSQL schema cannot suppress an additive migration.
 |---------|-------------|--------------|
 | `/register <password> <confirm>` | Create new account | Hidden only while authorization + the matching session are active. Premium nicknames are blocked in strict mode; permissive mixed mode explicitly allows first registration |
 | `/login <password>` | Login to your account | Available to registered password accounts while they are on the auth server |
+| `/logout` | End the current proxy connection and invalidate its authentication state | Self-service; no permission required. Reconnect is a new authentication attempt |
 | `/changepassword <old> <new>` | Change your password | Must be logged in |
 | `/2fa setup` | Enroll a TOTP authenticator (see [2FA.md](2FA.md)) | Must be logged in. Disabled when `two-factor.enabled: false` |
 | `/2fa verify <code>` | Confirm enrollment OR pass 2FA at login | — |
@@ -659,6 +660,18 @@ These messages come from different layers:
 VeloAuth 1.4+ invalidates offline authorization, session state and pending 2FA as soon as Velocity
 emits the disconnect event. A cracked player therefore has to `/login` again after reconnecting;
 this prevents another client on the same public IP from inheriting a previous connection's session.
+
+**Q: What does `/logout` do for cracked, premium and 2FA-enabled players?**
+`/logout` ends the invoking player's current proxy connection; it never transfers that connection
+back to auth/limbo. Disconnect cleanup invalidates that concrete connection's authorization,
+session, pending 2FA challenge, auth timeout and transfer work. Cracked players must enter their
+password (and TOTP when enabled) after reconnecting. Premium and Floodgate clients still perform
+their normal upstream identity handshake and may be authorized automatically under the configured
+bypass policy. Disconnecting discards an unfinished setup challenge but does not remove an already
+stored TOTP secret or reset one-time-code replay protection. If auth/limbo is unavailable on
+reconnect, normal fail-secure
+routing applies; `/logout` does not keep or resurrect the old session. A delayed disconnect from a
+replaced connection cannot clear the newer connection's state.
 
 **Q: The `Failed to transfer player X: TextComponentImpl{content="...", style=StyleImpl{...}}` spam in logs is gone — anything I need to do?**
 No action needed. VeloAuth 1.2.0+ renders kick reasons as plain text via `KickReasonRenderer`. Log lines now read e.g. `Failed to transfer player Alice to server lobby (Status: CONNECTION_CANCELLED): You must link your Discord account to play.`
