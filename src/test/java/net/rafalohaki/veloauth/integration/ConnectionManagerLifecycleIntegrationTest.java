@@ -159,6 +159,39 @@ class ConnectionManagerLifecycleIntegrationTest {
     }
 
     @Test
+    void transferToBackend_NoBackendAvailable_AcceptsOwnedBackgroundWait() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        ProxyConfig proxyConfig = org.mockito.Mockito.mock(ProxyConfig.class);
+        Scheduler scheduler = org.mockito.Mockito.mock(Scheduler.class);
+        Scheduler.TaskBuilder taskBuilder = org.mockito.Mockito.mock(Scheduler.TaskBuilder.class);
+        ScheduledTask backendWaitTask = org.mockito.Mockito.mock(ScheduledTask.class);
+
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("WaitingPlayer");
+        when(player.isActive()).thenReturn(true);
+        when(proxyServer.getConfiguration()).thenReturn(proxyConfig);
+        when(proxyConfig.getAttemptConnectionOrder()).thenReturn(List.of());
+        when(proxyServer.getAllServers()).thenReturn(List.of());
+        when(proxyServer.getScheduler()).thenReturn(scheduler);
+        when(scheduler.buildTask(any(), org.mockito.ArgumentMatchers.<Consumer<ScheduledTask>>any()))
+                .thenReturn(taskBuilder);
+        when(taskBuilder.delay(eq(5L), eq(TimeUnit.SECONDS))).thenReturn(taskBuilder);
+        when(taskBuilder.schedule()).thenReturn(backendWaitTask);
+
+        connectionManager.beginTransferSession(player);
+
+        boolean accepted = connectionManager.transferToBackend(player);
+
+        assertTrue(accepted,
+                "An owned background wait is an accepted transfer request, not a hard failure");
+        verify(player, never()).createConnectionRequest(any(RegisteredServer.class));
+        verify(taskBuilder).schedule();
+        assertSame(player, getStateOwner(playerUuid),
+                "The waiting generation must retain ownership for its scheduled retry");
+    }
+
+    @Test
     void manualAndAutoTransfer_SameGeneration_StartOneBackendConnection() throws Exception {
         UUID playerUuid = UUID.randomUUID();
         Player player = org.mockito.Mockito.mock(Player.class);
