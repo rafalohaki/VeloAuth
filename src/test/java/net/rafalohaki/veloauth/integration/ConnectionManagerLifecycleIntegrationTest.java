@@ -1082,13 +1082,14 @@ class ConnectionManagerLifecycleIntegrationTest {
         connectionManager.beginTransferSession(oldPlayer);
         connectionManager.setForcedHostTarget(oldPlayer, "forced");
         Object oldState = getMap("transferStates").get(playerUuid);
-        Method retrySelection = ConnectionManager.class.getDeclaredMethod(
+        Object backendSelector = getBackendSelector();
+        Method retrySelection = backendSelector.getClass().getDeclaredMethod(
                 "findAvailableBackendServerForRetryAsync", Player.class, oldState.getClass());
         retrySelection.setAccessible(true);
 
         CompletableFuture<Optional<RegisteredServer>> selection =
                 (CompletableFuture<Optional<RegisteredServer>>) retrySelection.invoke(
-                        connectionManager, oldPlayer, oldState);
+                        backendSelector, oldPlayer, oldState);
 
         assertTrue(selection.join().isEmpty());
         verify(forcedBackend, never()).ping();
@@ -1176,13 +1177,14 @@ class ConnectionManagerLifecycleIntegrationTest {
         FallbackSelectionFixture fixture = preparePendingFallbackSelection();
         connectionManager.beginTransferSession(oldPlayer);
         Object oldState = getMap("transferStates").get(playerUuid);
-        Method selectionMethod = ConnectionManager.class.getDeclaredMethod(
+        Object backendSelector = getBackendSelector();
+        Method selectionMethod = backendSelector.getClass().getDeclaredMethod(
                 "findAvailableBackendServerAsync", oldState.getClass());
         selectionMethod.setAccessible(true);
 
         CompletableFuture<Optional<RegisteredServer>> selection =
                 (CompletableFuture<Optional<RegisteredServer>>) selectionMethod.invoke(
-                        connectionManager, oldState);
+                        backendSelector, oldState);
         verify(fixture.fallbackBackend()).ping();
         connectionManager.beginTransferSession(newPlayer);
         fixture.pendingPing().complete(org.mockito.Mockito.mock(ServerPing.class));
@@ -1418,6 +1420,12 @@ class ConnectionManagerLifecycleIntegrationTest {
         Method owner = state.getClass().getDeclaredMethod("owner");
         owner.setAccessible(true);
         return (Player) owner.invoke(state);
+    }
+
+    private Object getBackendSelector() throws Exception {
+        Field field = ConnectionManager.class.getDeclaredField("backendSelector");
+        field.setAccessible(true);
+        return field.get(connectionManager);
     }
 
     private CancellationProbe cancellationProbe(Player probePlayer) throws Exception {

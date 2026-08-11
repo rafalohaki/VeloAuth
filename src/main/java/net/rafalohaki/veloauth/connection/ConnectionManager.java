@@ -17,7 +17,6 @@ import com.velocitypowered.api.scheduler.ScheduledTask;
 import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,10 +24,8 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
@@ -50,7 +47,6 @@ public class ConnectionManager {
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final int MAX_AUTH_SERVER_WAIT_ATTEMPTS = 3;
     private static final int BACKEND_WAIT_REMINDER_INTERVAL = 6;
-    private static final long BACKEND_FALLBACK_WARN_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     /** Current concrete player owner and generation for each UUID. */
     private final ConcurrentMap<UUID, PlayerTransferState> transferStates = new ConcurrentHashMap<>();
@@ -59,8 +55,6 @@ public class ConnectionManager {
     /** Serializes task publication with shutdown so late async completions cannot resurrect work. */
     private final ReentrantLock taskLifecycleLock = new ReentrantLock();
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final AtomicLong backendFallbackWarnAfterNanos = new AtomicLong(System.nanoTime());
-    private final AtomicInteger suppressedBackendFallbackWarnings = new AtomicInteger();
     
     /** Max number of backend wait retries before giving up (5s interval × 60 = 5 minutes) */
     private static final int MAX_BACKEND_WAIT_RETRIES = 60;
@@ -72,6 +66,7 @@ public class ConnectionManager {
     private final Logger logger;
     private final Messages messages;
     private final AuthServerProvider authServerProvider;
+    private final BackendSelector backendSelector;
 
     /**
      * Tworzy nowy ConnectionManager.
@@ -105,6 +100,8 @@ public class ConnectionManager {
         this.logger = plugin.getLogger();
         this.messages = messages;
         this.authServerProvider = authServerProvider;
+        this.backendSelector = new BackendSelector(
+                plugin.getServer(), authServerProvider, logger, this);
 
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("connection.manager.initialized", authServerProvider.serverName()));
@@ -163,7 +160,7 @@ public class ConnectionManager {
         return transferStates.get(state.playerId()) == state;
     }
 
-    private boolean isStale(PlayerTransferState state) {
+    boolean isStale(PlayerTransferState state) {
         return closed.get() || !isCurrent(state);
     }
 
@@ -287,7 +284,7 @@ public class ConnectionManager {
                 .orTimeout(settings.getConnectionTimeoutSeconds(), TimeUnit.SECONDS));
     }
 
-    private CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> startPingIfAllowed(
+    CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> startPingIfAllowed(
             @javax.annotation.Nullable PlayerTransferState state, RegisteredServer targetServer) {
         return startIoIfAllowed(state, () -> targetServer.ping()
                 .orTimeout(settings.getPingTimeoutMillis(), TimeUnit.MILLISECONDS));
@@ -307,7 +304,7 @@ public class ConnectionManager {
         }
     }
 
-    private boolean isIoOwnerUnavailable(@javax.annotation.Nullable PlayerTransferState state) {
+    boolean isIoOwnerUnavailable(@javax.annotation.Nullable PlayerTransferState state) {
         return closed.get() || (state != null && !isCurrent(state));
     }
 
@@ -422,11 +419,11 @@ public class ConnectionManager {
         }
         try {
             // 1. Sprawdź forced host target (zapamiętany z pierwszego połączenia)
-            Optional<RegisteredServer> backendServer = resolveForcedHostTarget(player, state);
+            Optional<RegisteredServer> backendServer = backendSelector.resolveForcedHostTarget(player, state);
 
             // 2. Fallback: znajdź dostępny serwer z try list
             if (backendServer.isEmpty()) {
-                backendServer = findAvailableBackendServer(state);
+                backendServer = backendSelector.findAvailableBackendServer(state);
             }
 
             if (backendServer.isEmpty()) {
@@ -741,7 +738,7 @@ public class ConnectionManager {
                 return;
             }
 
-            findAvailableBackendServerForRetryAsync(player, state)
+            backendSelector.findAvailableBackendServerForRetryAsync(player, state)
                     .whenComplete((server, throwable) ->
                             handleBackendWaitSelection(player, state, attempt, server, throwable));
         });
@@ -994,15 +991,6 @@ public class ConnectionManager {
     }
 
     /**
-     * Znajduje dostępny serwer backend używając Velocity try servers configuration.
-     * Sync wrapper used by callers that already run on a virtual thread; prefer
-     * {@link #findAvailableBackendServerAsync(PlayerTransferState)} when composing async chains.
-     */
-    private Optional<RegisteredServer> findAvailableBackendServer(PlayerTransferState state) {
-        return findAvailableBackendServerAsync(state).join();
-    }
-
-    /**
      * Selects an available non-auth backend for an initial connection whose Velocity target
      * is the auth server. The returned future preserves the configured {@code try} order and
      * never blocks the caller's event thread.
@@ -1010,291 +998,7 @@ public class ConnectionManager {
      * @return future containing the first available backend, or empty when none is reachable
      */
     public CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerForInitialConnectionAsync() {
-        return findAvailableBackendServerAsync(null);
-    }
-
-    /**
-     * Fully-async variant: probes each candidate phase concurrently without blocking the caller.
-     * <p>
-     * Previous behavior: the try-list phase pinged in parallel but the fallback (line 690 in
-     * the old code) used a sequential stream of {@code isServerAvailable(...).join()} — worst
-     * case <em>N × ping-timeout-ms</em> blocked on the calling thread. The new fallback fans out
-     * pings like the try-list, while each phase can finish as soon as its highest-priority reachable
-     * result is known. Worst-case wall time per phase stays at one
-     * {@code connection.ping-timeout-ms} timeout regardless of the number of registered servers.
-     */
-    private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerAsync(
-            @javax.annotation.Nullable PlayerTransferState state) {
-        if (isIoOwnerUnavailable(state)) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-        String authServerName = authServerProvider.serverName();
-        var tryServers = plugin.getServer().getConfiguration().getAttemptConnectionOrder();
-        if (logger.isDebugEnabled()) {
-            logger.debug("Velocity try servers: {}", tryServers);
-        }
-
-        java.util.List<RegisteredServer> tryCandidates = tryServers.stream()
-                .filter(name -> !name.equals(authServerName))
-                .flatMap(name -> plugin.getServer().getServer(name).stream())
-                .toList();
-
-        CompletableFuture<Optional<RegisteredServer>> selection =
-                pickFirstAvailable(tryCandidates, state).thenCompose(found -> {
-                    if (isIoOwnerUnavailable(state)) {
-                        return CompletableFuture.completedFuture(Optional.empty());
-                    }
-                    if (found.isPresent()) {
-                        return CompletableFuture.completedFuture(found);
-                    }
-                    // Fallback: parallel ping of every registered server (minus auth).
-                    logBackendFallbackWarning();
-                    Set<String> alreadyChecked = tryCandidates.stream()
-                            .map(server -> server.getServerInfo().getName())
-                            .collect(java.util.stream.Collectors.toUnmodifiableSet());
-                    java.util.List<RegisteredServer> fallbackCandidates = plugin.getServer().getAllServers().stream()
-                            .filter(server -> !authServerProvider.isAuthServer(server))
-                            .filter(server -> !alreadyChecked.contains(server.getServerInfo().getName()))
-                            .toList();
-                    return pickFirstAvailable(fallbackCandidates, state);
-                });
-        return rejectUnavailableSelection(state, selection);
-    }
-
-    private CompletableFuture<Optional<RegisteredServer>> rejectUnavailableSelection(
-            @javax.annotation.Nullable PlayerTransferState state,
-            CompletableFuture<Optional<RegisteredServer>> selection) {
-        return selection.thenApply(found ->
-                isIoOwnerUnavailable(state) ? Optional.empty() : found);
-    }
-
-    private void logBackendFallbackWarning() {
-        long now = System.nanoTime();
-        long warnAfter = backendFallbackWarnAfterNanos.get();
-        if (now >= warnAfter && backendFallbackWarnAfterNanos.compareAndSet(
-                warnAfter, now + BACKEND_FALLBACK_WARN_INTERVAL_NANOS)) {
-            int suppressed = suppressedBackendFallbackWarnings.getAndSet(0);
-            if (suppressed == 0) {
-                logger.warn("No reachable server from the Velocity try list; attempting fallback");
-            } else {
-                logger.warn(
-                        "No reachable server from the Velocity try list; attempting fallback"
-                                + " ({} repeated checks suppressed)",
-                        suppressed);
-            }
-            return;
-        }
-        suppressedBackendFallbackWarnings.incrementAndGet();
-        if (logger.isDebugEnabled()) {
-            logger.debug("No reachable server from the Velocity try list; fallback check suppressed");
-        }
-    }
-
-    private CompletableFuture<Optional<RegisteredServer>> findAvailableBackendServerForRetryAsync(
-            Player player, PlayerTransferState state) {
-        if (isStale(state)) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-        return resolveForcedHostTargetAsync(player, state).thenCompose(forcedTarget -> {
-            if (isStale(state)) {
-                return CompletableFuture.completedFuture(Optional.empty());
-            }
-            if (forcedTarget.isPresent()) {
-                return CompletableFuture.completedFuture(forcedTarget);
-            }
-            return findAvailableBackendServerAsync(state);
-        });
-    }
-
-    /**
-     * Pings candidates concurrently while preserving input order. Selection completes as soon as
-     * the first reachable candidate and every higher-priority result are known; an unrelated slow
-     * lower-priority ping cannot delay the transfer.
-     */
-    private CompletableFuture<Optional<RegisteredServer>> pickFirstAvailable(
-            java.util.List<RegisteredServer> candidates,
-            @javax.annotation.Nullable PlayerTransferState state) {
-        if (candidates.isEmpty()) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-        OrderedPingSelection selection = new OrderedPingSelection(candidates);
-        for (int index = 0; index < candidates.size() && !selection.future().isDone(); index++) {
-            final int candidateIndex = index;
-            try {
-                CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> ping =
-                        startPingIfAllowed(state, candidates.get(index));
-                if (ping == null) {
-                    selection.record(candidateIndex, false);
-                } else {
-                    ping.whenComplete((ignored, failure) ->
-                            selection.record(candidateIndex, failure == null));
-                }
-            } catch (RuntimeException failure) {
-                selection.record(candidateIndex, false);
-            }
-        }
-        return selection.future();
-    }
-
-    private final class OrderedPingSelection {
-        private final java.util.List<RegisteredServer> candidates;
-        private final AtomicReferenceArray<Boolean> results;
-        private final CompletableFuture<Optional<RegisteredServer>> future = new CompletableFuture<>();
-        private final ReentrantLock lock = new ReentrantLock();
-        private int nextResult;
-
-        private OrderedPingSelection(java.util.List<RegisteredServer> candidates) {
-            this.candidates = candidates;
-            results = new AtomicReferenceArray<>(candidates.size());
-        }
-
-        private void record(int index, boolean available) {
-            RegisteredServer selected = null;
-            boolean shouldComplete = false;
-            lock.lock();
-            try {
-                if (future.isDone() || results.get(index) != null) {
-                    return;
-                }
-                results.set(index, available);
-                while (nextResult < candidates.size()) {
-                    Boolean result = results.get(nextResult);
-                    if (result == null) {
-                        break;
-                    }
-                    if (result) {
-                        selected = candidates.get(nextResult);
-                        shouldComplete = true;
-                        break;
-                    }
-                    nextResult++;
-                }
-                if (nextResult == candidates.size()) {
-                    shouldComplete = true;
-                }
-            } finally {
-                lock.unlock();
-            }
-            if (shouldComplete && future.complete(Optional.ofNullable(selected)) && selected != null) {
-                logger.debug("Found available server: {}", selected.getServerInfo().getName());
-            }
-        }
-
-        private CompletableFuture<Optional<RegisteredServer>> future() {
-            return future;
-        }
-    }
-
-    /**
-     * Resolves a forced host target for the given player.
-     * If the player was redirected from a forced-host connection, this method
-     * retrieves and validates the originally intended server.
-     * <p>
-     * The target is <b>NOT</b> consumed on retrieval — it stays in the owner state until either
-     * a direct transfer succeeds or {@link #clearTransferState(Player)} (player disconnected) fires.
-     * This way a temporarily
-     * offline forced-host target is retried on subsequent attempts instead of being silently
-     * downgraded to a try-list fallback after the first failure.
-     *
-     * @param player the player to resolve for
-     * @return Optional with the target server if available and online
-     */
-    private Optional<RegisteredServer> resolveForcedHostTarget(Player player, PlayerTransferState state) {
-        if (isStale(state)) {
-            return Optional.empty();
-        }
-        Optional<ForcedHostTarget> resolvedTarget = findStoredForcedHostTarget(player, state);
-        if (resolvedTarget.isEmpty()) {
-            return Optional.empty();
-        }
-        ForcedHostTarget target = resolvedTarget.get();
-        if (isServerAvailable(state, target.server(), target.name())) {
-            if (isStale(state)) {
-                return Optional.empty();
-            }
-            logger.debug("Forced host target '{}' for {} is available - using it",
-                    target.name(), player.getUsername());
-            return Optional.of(target.server());
-        }
-
-        // Server is registered but currently offline — keep the entry so the next retry
-        // (scheduleBackendWaitRetry or transferToBackend) can try it again once it comes back up.
-        if (!isStale(state)) {
-            logger.warn("Forced host target '{}' for {} is offline - falling back to try list (will retry forced host on next attempt)",
-                    target.name(), player.getUsername());
-        }
-        return Optional.empty();
-    }
-
-    private CompletableFuture<Optional<RegisteredServer>> resolveForcedHostTargetAsync(
-            Player player, PlayerTransferState state) {
-        if (isStale(state)) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-        Optional<ForcedHostTarget> resolvedTarget = findStoredForcedHostTarget(player, state);
-        if (resolvedTarget.isEmpty()) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-        ForcedHostTarget target = resolvedTarget.get();
-        CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> ping =
-                startPingIfAllowed(state, target.server());
-        if (ping == null) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-        return ping.handle((ignored, throwable) ->
-                handleForcedHostPingResult(player, state, target, throwable));
-    }
-
-    private Optional<ForcedHostTarget> findStoredForcedHostTarget(Player player, PlayerTransferState state) {
-        if (isStale(state)) {
-            return Optional.empty();
-        }
-        String targetName = state.forcedHostTarget().get();
-        if (targetName == null) {
-            return Optional.empty();
-        }
-
-        String authServerName = authServerProvider.serverName();
-        if (targetName.equals(authServerName)) {
-            logger.debug("Forced host target for {} is auth server '{}' - ignoring",
-                    player.getUsername(), targetName);
-            // The auth-server target would loop. Drop it so retries use the try-list directly.
-            if (!isStale(state)) {
-                state.forcedHostTarget().compareAndSet(targetName, null);
-            }
-            return Optional.empty();
-        }
-
-        Optional<RegisteredServer> server = plugin.getServer().getServer(targetName);
-        if (server.isEmpty()) {
-            logger.warn("Forced host target '{}' for {} is not registered - falling back to try list",
-                    targetName, player.getUsername());
-            // An unknown server cannot recover without a new captured target; avoid repeat log spam.
-            if (!isStale(state)) {
-                state.forcedHostTarget().compareAndSet(targetName, null);
-            }
-            return Optional.empty();
-        }
-        return Optional.of(new ForcedHostTarget(targetName, server.get()));
-    }
-
-    private Optional<RegisteredServer> handleForcedHostPingResult(
-            Player player, PlayerTransferState state, ForcedHostTarget target, Throwable throwable) {
-        if (isStale(state)) {
-            return Optional.empty();
-        }
-        if (throwable == null) {
-            logger.debug("Forced host target '{}' for {} is available - using it",
-                    target.name(), player.getUsername());
-            return Optional.of(target.server());
-        }
-        logger.warn("Forced host target '{}' for {} is offline - falling back to try list "
-                        + "(will retry forced host on next attempt)",
-                target.name(), player.getUsername());
-        return Optional.empty();
-    }
-
-    private record ForcedHostTarget(String name, RegisteredServer server) {
+        return backendSelector.findAvailableBackendServerForInitialConnectionAsync();
     }
 
     /**
@@ -1315,34 +1019,6 @@ public class ConnectionManager {
             logger.debug("Saved forced host target '{}' for player UUID: {}",
                     serverName, player.getUniqueId());
         }
-    }
-
-    /**
-     * Sync availability check — only used by {@link #resolveForcedHostTarget(Player, PlayerTransferState)}
-     * which already
-     * runs on a virtual thread (called from transfer paths that are themselves submitted to
-     * the VT executor). For new code prefer pinging in parallel via
-     * {@link #pickFirstAvailable(java.util.List, PlayerTransferState)}.
-     */
-    private boolean isServerAvailable(
-            PlayerTransferState state, RegisteredServer server, String serverName) {
-        try {
-            CompletableFuture<com.velocitypowered.api.proxy.server.ServerPing> ping =
-                    startPingIfAllowed(state, server);
-            if (ping == null) {
-                return false;
-            }
-            Boolean ok = ping
-                    .handle((ignored, ex) -> ex == null)
-                    .join();
-            if (Boolean.TRUE.equals(ok)) {
-                logger.debug("Found available server: {}", serverName);
-                return true;
-            }
-        } catch (Exception e) {
-            logger.debug("Server {} unavailable: {}", serverName, e.getMessage());
-        }
-        return false;
     }
 
     /**
