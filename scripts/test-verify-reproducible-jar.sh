@@ -55,6 +55,10 @@ printf '%s\n' \
   'INVOCATION_LOG=$2' \
   '[[ -d "${BUILD_DIR}" ]]' \
   '[[ -z "$(find "${BUILD_DIR}" -mindepth 1 -print -quit)" ]]' \
+  '[[ "${MAVEN_SKIP_RC:-}" == true ]]' \
+  '[[ "${MAVEN_USER_HOME:-}" == */maven-user-home ]]' \
+  '[[ -f "${VELOAUTH_REPRO_MAVEN_SETTINGS:-}" ]]' \
+  'grep -Fq "<settings" "${VELOAUTH_REPRO_MAVEN_SETTINGS}"' \
   'printf "%s\\n" "${BUILD_DIR}" >>"${INVOCATION_LOG}"' \
   'mkdir -p "${BUILD_DIR}/target"' \
   'printf "orchestrated artifact\\n" >"${BUILD_DIR}/target/veloauth-1.5.0.jar"' \
@@ -124,6 +128,30 @@ HOOK_OUTPUT="${TEMP_DIR}/hook.out"
 run_expect_failure "${HOOK_OUTPUT}" "${VERIFIER}" --test-compare "${FIXTURE_A}" "${FIXTURE_B}"
 grep -Fq "Test-only verifier hooks require VELOAUTH_REPRO_TEST_MODE=true" "${HOOK_OUTPUT}" \
   || fail "test hook must be inaccessible without explicit test mode"
+
+BUILD_AFFECTING_ENVIRONMENT=(
+  MAVEN_ARGS
+  MAVEN_OPTS
+  MAVEN_DEBUG_OPTS
+  JAVA_TOOL_OPTIONS
+  JDK_JAVA_OPTIONS
+  _JAVA_OPTIONS
+  JDK_JAVAC_OPTIONS
+  SOURCE_DATE_EPOCH
+  MAVEN_BASEDIR
+  MAVEN_CONFIG
+  MAVEN_PROJECTBASEDIR
+  MVNW_REPOURL
+)
+for variable_name in "${BUILD_AFFECTING_ENVIRONMENT[@]}"; do
+  ENVIRONMENT_OUTPUT="${TEMP_DIR}/environment-${variable_name}.out"
+  run_expect_failure "${ENVIRONMENT_OUTPUT}" env \
+    VELOAUTH_JAVA21_HOME="${TEMP_DIR}/missing-jdk" \
+    "${variable_name}=fixture-override" "${VERIFIER}"
+  grep -Fq "Build-affecting environment variable must be empty or unset: ${variable_name}" \
+    "${ENVIRONMENT_OUTPUT}" \
+    || fail "${variable_name} must fail before JDK discovery or either Maven build"
+done
 
 CLEANUP_PARENT="${TEMP_DIR}/cleanup-parent"
 mkdir -p "${CLEANUP_PARENT}/unrelated-sibling"

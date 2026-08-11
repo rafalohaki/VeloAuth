@@ -701,9 +701,11 @@ VELOAUTH_JAVA21_HOME=/path/to/temurin-21.0.12+8/Contents/Home \
 ```
 
 On macOS the verifier also checks `java_home`, then `JAVA_HOME` and `PATH`, but accepts only that
-exact Temurin build. It never installs a JDK silently. This identity and reproducibility evidence is
-necessary but not sufficient for production: provenance, the external-limbo canary and explicit
-operator approval remain separate gates.
+exact Temurin build. It never installs a JDK silently. Maven and Java option environment variables
+must be empty or unset, and Maven user/system RC files are disabled for the controlled builds; the
+verifier fails instead of silently producing a different but internally repeatable artifact. This
+identity and reproducibility evidence is necessary but not sufficient for production: provenance,
+the external-limbo canary and explicit operator approval remain separate gates.
 
 The PostgreSQL harness verifies case-insensitive premium nickname reconciliation, batched conflict
 deletion, idempotent LimboAuth migration, insert-only registration ownership and concurrent AUTH

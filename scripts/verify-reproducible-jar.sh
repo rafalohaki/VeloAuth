@@ -58,6 +58,60 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
+reject_build_environment_overrides() {
+  local variable_name variable_value
+  for variable_name in \
+      MAVEN_ARGS \
+      MAVEN_OPTS \
+      MAVEN_DEBUG_OPTS \
+      JAVA_TOOL_OPTIONS \
+      JDK_JAVA_OPTIONS \
+      _JAVA_OPTIONS \
+      JDK_JAVAC_OPTIONS \
+      SOURCE_DATE_EPOCH \
+      MAVEN_BASEDIR \
+      MAVEN_CONFIG \
+      MAVEN_PROJECTBASEDIR \
+      MVNW_REPOURL; do
+    variable_value="${!variable_name-}"
+    [[ -z "${variable_value}" ]] \
+      || fail "Build-affecting environment variable must be empty or unset: ${variable_name}"
+  done
+}
+
+prepare_controlled_maven_files() {
+  local owner_dir=$1
+  TASK_MAVEN_USER_HOME="${owner_dir}/maven-user-home"
+  TASK_MAVEN_SETTINGS="${owner_dir}/maven-settings.xml"
+  mkdir -p "${TASK_MAVEN_USER_HOME}"
+  (
+    umask 077
+    printf '%s\n' \
+      '<?xml version="1.0" encoding="UTF-8"?>' \
+      '<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"' \
+      '          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"' \
+      '          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd" />' \
+      >"${TASK_MAVEN_SETTINGS}"
+  )
+}
+
+configure_controlled_build_environment() {
+  local java_home=${1:-}
+  if [[ -n "${java_home}" ]]; then
+    export JAVA_HOME="${java_home}"
+    export PATH="${JAVA_HOME}/bin:${PATH}"
+  fi
+  unset MAVEN_ARGS MAVEN_OPTS MAVEN_DEBUG_OPTS JAVA_TOOL_OPTIONS \
+    JDK_JAVA_OPTIONS _JAVA_OPTIONS JDK_JAVAC_OPTIONS SOURCE_DATE_EPOCH \
+    MAVEN_BASEDIR MAVEN_CONFIG MAVEN_PROJECTBASEDIR MVNW_REPOURL
+  export MAVEN_USER_HOME="${TASK_MAVEN_USER_HOME}"
+  export MAVEN_SKIP_RC=true
+  export VELOAUTH_REPRO_MAVEN_SETTINGS="${TASK_MAVEN_SETTINGS}"
+  export TZ=UTC
+  export LC_ALL=C
+  export LANG=C
+}
+
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -158,11 +212,15 @@ if [[ $# -gt 0 && ( "$1" == --test-compare || "$1" == --test-orchestrate \
       [[ $# -eq 3 ]] || fail "Usage in test mode: $0 --test-orchestrate BUILDER INVOCATION_LOG"
       [[ -x "$2" ]] || fail "Test builder is not executable: $2"
       initialize_work_dir
+      prepare_controlled_maven_files "${WORK_DIR}"
       TEST_BUILD_A="${WORK_DIR}/test-build-a"
       TEST_BUILD_B="${WORK_DIR}/test-build-b"
       mkdir -p "${TEST_BUILD_A}" "${TEST_BUILD_B}"
-      "$2" "${TEST_BUILD_A}" "$3"
-      "$2" "${TEST_BUILD_B}" "$3"
+      (
+        configure_controlled_build_environment
+        "$2" "${TEST_BUILD_A}" "$3"
+        "$2" "${TEST_BUILD_B}" "$3"
+      )
       compare_build_outputs "${TEST_BUILD_A}" "${TEST_BUILD_B}"
       exit 0
       ;;
@@ -177,6 +235,7 @@ fi
 [[ "${TEST_MODE}" == false ]] \
   || fail "VELOAUTH_REPRO_TEST_MODE=true is valid only with an explicit test-only hook"
 [[ $# -eq 0 ]] || fail "Usage: $0"
+reject_build_environment_overrides
 
 require_command awk
 require_command basename
@@ -275,8 +334,8 @@ CLONE_A="${WORK_DIR}/source-a"
 CLONE_B="${WORK_DIR}/source-b"
 REPO_A="${WORK_DIR}/repository-a"
 REPO_B="${WORK_DIR}/repository-b"
-TASK_MAVEN_USER_HOME="${WORK_DIR}/maven-user-home"
-mkdir -p "${REPO_A}" "${REPO_B}" "${TASK_MAVEN_USER_HOME}"
+prepare_controlled_maven_files "${WORK_DIR}"
+mkdir -p "${REPO_A}" "${REPO_B}"
 
 git clone --quiet --local --no-hardlinks --no-checkout "${PROJECT_DIR}" "${CLONE_A}"
 git clone --quiet --local --no-hardlinks --no-checkout "${PROJECT_DIR}" "${CLONE_B}"
@@ -295,13 +354,9 @@ run_build() {
   local repository=$2
   (
     cd -- "${clone_dir}"
-    export JAVA_HOME="${PINNED_JAVA_HOME}"
-    export PATH="${JAVA_HOME}/bin:${PATH}"
-    export MAVEN_USER_HOME="${TASK_MAVEN_USER_HOME}"
-    export TZ=UTC
-    export LC_ALL=C
-    export LANG=C
-    ./mvnw -B -ntp -Dmaven.repo.local="${repository}" clean package -DskipTests
+    configure_controlled_build_environment "${PINNED_JAVA_HOME}"
+    ./mvnw -B -ntp -s "${VELOAUTH_REPRO_MAVEN_SETTINGS}" \
+      -Dmaven.repo.local="${repository}" clean package -DskipTests
   )
 }
 
