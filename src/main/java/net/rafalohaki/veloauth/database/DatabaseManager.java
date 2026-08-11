@@ -267,20 +267,6 @@ public class DatabaseManager {
         }
     }
 
-    // ===== Health Check delegation =====
-
-    public boolean isHealthy() {
-        return connected && healthCheck.wasLastHealthCheckPassed();
-    }
-
-    public long getLastHealthCheckTime() {
-        return healthCheck.getLastHealthCheckTime();
-    }
-
-    public boolean wasLastHealthCheckPassed() {
-        return healthCheck.wasLastHealthCheckPassed();
-    }
-
     // ===== Shutdown =====
 
     public void shutdown() {
@@ -994,50 +980,12 @@ public class DatabaseManager {
         return DbResult.success(premium);
     }
 
-    /**
-     * Pobiera wszystkich graczy.
-     */
-    public CompletableFuture<List<RegisteredPlayer>> getAllPlayers() {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                if (!connected || playerDao == null) {
-                    if (logger.isWarnEnabled()) {
-                        logger.warn(DB_MARKER, DATABASE_NOT_CONNECTED);
-                    }
-                    return List.of();
-                }
-
-                List<RegisteredPlayer> players = playerDao.queryForAll();
-                if (logger.isDebugEnabled()) {
-                    logger.debug(DB_MARKER, "Pobrano {} graczy z bazy danych", players.size());
-                }
-
-                return players;
-
-            } catch (SQLException e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error(DB_MARKER, "Error fetching all players", e);
-                }
-                return List.of();
-            }
-        }, dbExecutor);
-    }
-
     // ===== Cache Operations =====
 
     public void clearCache() {
         playerCache.invalidateAll();
         if (logger.isDebugEnabled()) {
             logger.debug(CACHE_MARKER, "Cache graczy wyczyszczony");
-        }
-    }
-
-    public void removeCachedPlayer(String lowercaseNickname) {
-        if (lowercaseNickname != null) {
-            playerCache.invalidate(lowercaseNickname);
-            if (logger.isDebugEnabled()) {
-                logger.debug(DB_MARKER, "Removed player from cache: {}", lowercaseNickname);
-            }
         }
     }
 
@@ -1066,10 +1014,8 @@ public class DatabaseManager {
     /**
      * Indicates whether the database pool is initialized and the manager has not been shut down.
      * <p>
-     * Distinct from {@link #isHealthy()}: a manager that just finished initialization is
-     * {@code connected} immediately, but {@code healthy} only after the first health check
-     * completes successfully. Admin commands gate on this method so they do not falsely
-     * report "database not connected" during the 30s window before the first scheduled check.
+     * Admin commands gate on this method so they do not falsely report "database not connected"
+     * after initialization and before the first scheduled health-check retry.
      */
     public boolean isConnected() {
         return connected;
@@ -1365,10 +1311,6 @@ public class DatabaseManager {
         }
 
         @javax.annotation.Nonnull
-        public java.util.Optional<T> getValueOptional() {
-            return java.util.Optional.ofNullable(value);
-        }
-
         public boolean isDatabaseError() {
             return isDatabaseError;
         }

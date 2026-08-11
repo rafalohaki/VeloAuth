@@ -23,24 +23,17 @@ class DatabaseHealthCheck {
     private final Messages messages;
     private final ScheduledExecutorService healthCheckExecutor;
 
-    private volatile long lastHealthCheckTime;
-    private volatile boolean lastHealthCheckPassed;
-
     DatabaseHealthCheck(JdbcAuthDao jdbcAuthDao, Messages messages) {
         this.jdbcAuthDao = jdbcAuthDao;
         this.messages = messages;
         this.healthCheckExecutor = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofVirtual().name("veloauth-healthcheck-", 0).factory());
-        this.lastHealthCheckTime = 0;
-        this.lastHealthCheckPassed = false;
     }
 
     /**
      * Starts periodic database health checks.
      * <p>
-     * Performs one synchronous check immediately so callers gating on
-     * {@link #wasLastHealthCheckPassed()} observe a real value instead of the
-     * default {@code false} during the first 30s after startup.
+     * Performs one synchronous check immediately before scheduling later probes.
      */
     public void start() {
         try {
@@ -72,8 +65,6 @@ class DatabaseHealthCheck {
     void performHealthCheck() {
         try {
             boolean healthy = jdbcAuthDao.healthCheck();
-            lastHealthCheckTime = System.currentTimeMillis();
-            lastHealthCheckPassed = healthy;
 
             if (!healthy) {
                 if (logger.isWarnEnabled()) {
@@ -86,27 +77,10 @@ class DatabaseHealthCheck {
             }
 
         } catch (RuntimeException e) {
-            lastHealthCheckTime = System.currentTimeMillis();
-            lastHealthCheckPassed = false;
             if (logger.isErrorEnabled()) {
                 logger.error(DB_MARKER, "❌ Database health check FAILED with exception: {}", e.getMessage());
             }
         }
-    }
-
-    /**
-     * Checks if the database is healthy (last health check passed).
-     */
-    public boolean isHealthy() {
-        return lastHealthCheckPassed;
-    }
-
-    public long getLastHealthCheckTime() {
-        return lastHealthCheckTime;
-    }
-
-    public boolean wasLastHealthCheckPassed() {
-        return lastHealthCheckPassed;
     }
 
     /**

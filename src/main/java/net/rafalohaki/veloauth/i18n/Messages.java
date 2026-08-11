@@ -510,33 +510,4 @@ public class Messages {
         return properties;
     }
 
-    /**
-     * Gets the language display name in English.
-     * Only includes built-in languages - custom languages will return the code.
-     *
-     * @param languageCode Language code
-     * @return Display name or the code if not found
-     */
-    public String getLanguageDisplayName(String languageCode) {
-        return switch (languageCode.toLowerCase(Locale.ROOT)) {
-            case "en" -> "English";
-            case "pl" -> "Polish";
-            default -> languageCode; // Custom languages return their code
-        };
-    }
-
-    /**
-     * Gets the language display name in its native language.
-     * Only includes built-in languages - custom languages will return the code.
-     *
-     * @param languageCode Language code
-     * @return Native display name or the code if not found
-     */
-    public String getLanguageNativeName(String languageCode) {
-        return switch (languageCode.toLowerCase(Locale.ROOT)) {
-            case "en" -> "English";
-            case "pl" -> "Polski";
-            default -> languageCode; // Custom languages return their code
-        };
-    }
 }

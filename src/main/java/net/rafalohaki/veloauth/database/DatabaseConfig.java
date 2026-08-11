@@ -512,33 +512,6 @@ public final class DatabaseConfig {
     }
 
     /**
-     * Zwraca hostname serwera.
-     *
-     * @return Hostname
-     */
-    public String getHostname() {
-        return hostname;
-    }
-
-    /**
-     * Zwraca port serwera.
-     *
-     * @return Port
-     */
-    public int getPort() {
-        return port;
-    }
-
-    /**
-     * Zwraca nazwę bazy danych.
-     *
-     * @return Nazwa bazy danych
-     */
-    public String getDatabase() {
-        return database;
-    }
-
-    /**
      * Zwraca użytkownika bazy danych.
      *
      * @return Użytkownik
@@ -554,15 +527,6 @@ public final class DatabaseConfig {
      */
     public String getPassword() {
         return password;
-    }
-
-    /**
-     * Zwraca rozmiar connection pool.
-     *
-     * @return Rozmiar connection pool
-     */
-    public int getConnectionPoolSize() {
-        return connectionPoolSize;
     }
 
     /**
@@ -630,29 +594,9 @@ public final class DatabaseConfig {
      *
      * @return true jeśli H2 lub SQLite
      */
-    public boolean isLocalDatabase() {
+    private boolean isLocalDatabase() {
         DatabaseType dbType = DatabaseType.fromName(storageType);
         return dbType != null && dbType.isLocalDatabase();
-    }
-
-    /**
-     * Sprawdza czy to zdalna baza danych.
-     *
-     * @return true jeśli MySQL lub PostgreSQL
-     */
-    public boolean isRemoteDatabase() {
-        DatabaseType dbType = DatabaseType.fromName(storageType);
-        return dbType != null && dbType.isRemoteDatabase();
-    }
-
-    /**
-     * Zwraca domyślny port dla typu bazy danych.
-     *
-     * @return Domyślny port
-     */
-    public int getDefaultPort() {
-        DatabaseType dbType = DatabaseType.fromName(storageType);
-        return dbType != null ? dbType.getDefaultPort() : 0;
     }
 
     @Override
