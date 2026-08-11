@@ -732,6 +732,45 @@ Run the normal Java/H2/SQLite gates and the explicit duplication gate together w
 ./scripts/test-mysql.sh
 ```
 
+Dependency declarations are a release gate, not documentation-only metadata. The build pins
+[Maven Dependency Plugin 3.11.0](https://maven.apache.org/plugins/maven-dependency-plugin/analyze-only-mojo.html)
+and runs `analyze-only` during `verify` with warnings fatal and non-compile scopes included. The
+same check can be reproduced directly:
+
+```bash
+./mvnw -B test-compile dependency:analyze-only \
+  -DfailOnWarning=true -DignoreNonCompile=false
+```
+
+The only unused-declaration exceptions are runtime-discovered dependencies: the four JDBC drivers
+(`java.sql.Driver` SPI and trusted driver class names), Velocity-provided Gson/Netty handler types
+used through embedded-runtime descriptors, and the JUnit Jupiter `TestEngine` SPI. The dependency
+tree proves `netty-resolver` is already supplied by `netty-transport`; the broad `netty-codec`
+aggregator is replaced by the directly used `netty-codec-base` module.
+
+[CycloneDX Maven Plugin 2.9.3](https://github.com/CycloneDX/cyclonedx-maven-plugin/releases/tag/cyclonedx-maven-plugin-2.9.3)
+generates `target/veloauth-1.5.0.cdx.json` as a CycloneDX 1.6 production SBOM during `package`.
+Compile, runtime and provided dependencies are included; test-only dependencies are excluded.
+After packaging, this fixture verifies the SBOM, the shaded inventory, all four original JDBC
+drivers and their merged SPI descriptor, relocated private libraries, and absence of proxy-owned
+SLF4J, Jakarta Inject, Adventure, Gson and Netty classes:
+
+```bash
+./scripts/test-dependency-hygiene.sh
+```
+
+CI pins [Dependency Review v5.0.0](https://github.com/actions/dependency-review-action/releases/tag/v5.0.0)
+to `a1d282b36b6f3519aa1f3fc636f609c47dddb294` for pull requests and pins
+[OSV-Scanner v2.5.0](https://github.com/google/osv-scanner-action/releases/tag/v2.5.0) to
+`8deb546fdb875b9996d27d4950be7312dac076a1` for full `pom.xml` scans on pushes, tags and the weekly
+schedule. OSV cannot resolve the immutable timestamped MCProtocolLib build by itself, so the same
+workflow first resolves Maven's complete production graph into the tested CycloneDX SBOM. OSV scans
+both the direct POM inventory and that same-run transitive inventory with external
+re-resolution disabled; this avoids silently dropping custom-repository dependencies. A tag release
+waits for the OSV job from the same workflow run, so candidate construction cannot race vulnerability
+admission. There are no vulnerability allowlists. Any future vulnerability exception must include an
+advisory ID, reason, owner and expiry date; an expired or incomplete exception is invalid.
+
 After the exact candidate JAR and SHA-256 sidecar exist, verify its identity before any smoke,
 attestation or upload:
 

@@ -6,6 +6,8 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main, master]
+  schedule:
+    - cron: '23 4 * * 1'
 
 permissions:
   contents: read
@@ -15,8 +17,74 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  dependency-review:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the exact pull-request source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Reject vulnerable runtime dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: low
+          fail-on-scopes: runtime
+
+  dependency-inventory:
+    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up exact Temurin 21.0.12+8 for dependency resolution
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21.0.12'
+          show-download-progress: true
+
+      - name: Resolve and verify the complete Maven production inventory
+        run: |
+          ./mvnw -B -V clean package -DskipTests
+          ./scripts/test-dependency-hygiene.sh
+
+      - name: Upload the same-run OSV inventory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: veloauth-osv-input-${{ github.sha }}
+          path: target/veloauth-1.5.0.cdx.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 5
+
+  osv-scan:
+    needs: dependency-inventory
+    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0
+    with:
+      download-artifact: veloauth-osv-input-${{ github.sha }}
+      scan-args: |-
+        --no-resolve
+        --lockfile=pom.xml
+        --lockfile=veloauth-1.5.0.cdx.json
+      fail-on-vuln: true
+      upload-sarif: true
+
   verify:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ github.event_name != 'schedule' && !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -80,6 +148,9 @@ jobs:
 
       - name: Run the complete Maven quality gate
         run: ./mvnw -B -V clean verify pmd:cpd-check -DskipTests=false
+
+      - name: Verify SBOM and shaded dependency inventory
+        run: ./scripts/test-dependency-hygiene.sh
 
       - name: Prove the committed JAR is reproducible
         env:
@@ -228,6 +299,13 @@ jobs:
           mkdir -p "${candidate_dir}"
           ./scripts/verify-release-candidate.sh --build "${candidate_dir}"
 
+      - name: Verify the canonical candidate dependency inventory
+        env:
+          JAR_NAME: ${{ steps.identity.outputs.jar-name }}
+        run: >-
+          ./scripts/test-dependency-hygiene.sh --jar-only
+          "${RUNNER_TEMP}/veloauth-release-candidate/${JAR_NAME}"
+
       - name: Verify PostgreSQL without replacing the candidate JAR
         run: >-
           ./mvnw -B test
@@ -292,8 +370,8 @@ jobs:
           retention-days: 30
 
   release:
-    needs: candidate
-    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.candidate.result == 'success' }}
+    needs: [candidate, osv-scan]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.candidate.result == 'success' && needs.osv-scan.result == 'success' }}
     runs-on: ubuntu-latest
     environment: production-release
     permissions:

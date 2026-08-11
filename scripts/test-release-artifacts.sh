@@ -750,10 +750,10 @@ jobs = workflow.fetch("jobs")
 verify = jobs.fetch("verify")
 candidate = jobs.fetch("candidate")
 release = jobs.fetch("release")
-setup_steps = jobs.values.flat_map { |job| job.fetch("steps") }.select do |step|
+setup_steps = jobs.values.flat_map { |job| job.fetch("steps", []) }.select do |step|
   step.fetch("uses", "").start_with?("actions/setup-java@")
 end
-raise "TEST FAILURE: expected five exact setup-java steps" unless setup_steps.length == 5
+raise "TEST FAILURE: expected six exact setup-java steps" unless setup_steps.length == 6
 setup_steps.each do |step|
   unless step.fetch("with").fetch("show-download-progress") == true
     raise "TEST FAILURE: every setup-java step must prevent inherited MAVEN_ARGS=-ntp"
@@ -762,7 +762,9 @@ end
 raise "TEST FAILURE: branch/PR verifier must reject tag refs" unless verify.fetch("if").include?("!startsWith")
 raise "TEST FAILURE: candidate must be tag-only" unless candidate.fetch("if").include?("refs/tags/v")
 raise "TEST FAILURE: release must be tag-only" unless release.fetch("if").include?("refs/tags/v")
-raise "TEST FAILURE: release cannot depend on main verification" unless release.fetch("needs") == "candidate"
+unless release.fetch("needs").sort == ["candidate", "osv-scan"]
+  raise "TEST FAILURE: release must depend only on candidate and same-run OSV admission"
+end
 raise "TEST FAILURE: release lacks protected environment" unless release.fetch("environment") == "production-release"
 
 candidate_scripts = candidate.fetch("steps").map { |step| step["run"] }.compact.join("\n")
