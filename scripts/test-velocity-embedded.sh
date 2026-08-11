@@ -3,6 +3,40 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+PLUGIN_JAR_OVERRIDE="${VELOAUTH_PLUGIN_JAR:-}"
+COPY_TEST_MODE="${VELOAUTH_SMOKE_COPY_TEST_MODE:-false}"
+COPY_TEST_DESTINATION="${VELOAUTH_SMOKE_COPY_DESTINATION:-}"
+
+if [[ "${COPY_TEST_MODE}" != true && -n "${COPY_TEST_DESTINATION}" ]]; then
+  echo "VELOAUTH_SMOKE_COPY_DESTINATION requires VELOAUTH_SMOKE_COPY_TEST_MODE=true" >&2
+  exit 1
+fi
+if [[ -n "${PLUGIN_JAR_OVERRIDE}" ]]; then
+  if [[ "${PLUGIN_JAR_OVERRIDE}" != /* || ! -f "${PLUGIN_JAR_OVERRIDE}" \
+      || -L "${PLUGIN_JAR_OVERRIDE}" ]]; then
+    echo "VELOAUTH_PLUGIN_JAR must be an absolute regular non-symlink file: ${PLUGIN_JAR_OVERRIDE}" >&2
+    exit 1
+  fi
+  PLUGIN_JAR="${PLUGIN_JAR_OVERRIDE}"
+fi
+case "${COPY_TEST_MODE}" in
+  true)
+    if [[ -z "${PLUGIN_JAR_OVERRIDE}" || "${COPY_TEST_DESTINATION}" != /* \
+        || -e "${COPY_TEST_DESTINATION}" || ! -d "$(dirname -- "${COPY_TEST_DESTINATION}")" ]]; then
+      echo "Copy-only smoke fixture requires an explicit plugin and a fresh absolute destination" >&2
+      exit 1
+    fi
+    cp -- "${PLUGIN_JAR}" "${COPY_TEST_DESTINATION}"
+    echo "Copied explicit VeloAuth candidate without Maven discovery: ${PLUGIN_JAR}"
+    exit 0
+    ;;
+  false) ;;
+  *)
+    echo "VELOAUTH_SMOKE_COPY_TEST_MODE must be true or false" >&2
+    exit 1
+    ;;
+esac
+
 VELOCITY_URL="${VELOAUTH_VELOCITY_URL:-https://fill-data.papermc.io/v1/objects/0c3d16b70ed757638b696a9a87d670b4301f23a6fef30c3acbbd9b0e0d7b29bb/velocity-3.5.0-SNAPSHOT-609.jar}"
 VELOCITY_SHA256="${VELOAUTH_VELOCITY_SHA256:-0c3d16b70ed757638b696a9a87d670b4301f23a6fef30c3acbbd9b0e0d7b29bb}"
 VELOCITY_LABEL="${VELOAUTH_VELOCITY_LABEL:-Velocity 3.5}"
@@ -33,19 +67,49 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if command -v mvnd >/dev/null 2>&1; then
-  MAVEN=(mvnd)
-elif [[ -x "${PROJECT_DIR}/mvnw" ]]; then
+if [[ -x "${PROJECT_DIR}/mvnw" ]]; then
   MAVEN=("${PROJECT_DIR}/mvnw")
+elif command -v mvnd >/dev/null 2>&1; then
+  MAVEN=(mvnd)
 elif command -v mvn >/dev/null 2>&1; then
   MAVEN=(mvn)
 else
   echo "Maven, mvnd or ./mvnw is required" >&2
   exit 1
 fi
+if [[ -n "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" ]]; then
+  if [[ "${VELOAUTH_SMOKE_MAVEN_SETTINGS}" != /* \
+      || ! -f "${VELOAUTH_SMOKE_MAVEN_SETTINGS}" \
+      || -L "${VELOAUTH_SMOKE_MAVEN_SETTINGS}" ]]; then
+    echo "VELOAUTH_SMOKE_MAVEN_SETTINGS must be an absolute regular non-symlink file" >&2
+    exit 1
+  fi
+  MAVEN+=(-s "${VELOAUTH_SMOKE_MAVEN_SETTINGS}")
+fi
+if [[ -n "${VELOAUTH_SMOKE_MAVEN_REPOSITORY:-}" ]]; then
+  if [[ "${VELOAUTH_SMOKE_MAVEN_REPOSITORY}" != /* \
+      || ! -d "${VELOAUTH_SMOKE_MAVEN_REPOSITORY}" \
+      || -L "${VELOAUTH_SMOKE_MAVEN_REPOSITORY}" ]]; then
+    echo "VELOAUTH_SMOKE_MAVEN_REPOSITORY must be an absolute real directory" >&2
+    exit 1
+  fi
+  MAVEN+=("-Dmaven.repo.local=${VELOAUTH_SMOKE_MAVEN_REPOSITORY}")
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required to reserve a free local smoke-test port" >&2
+  exit 1
+fi
+
+SMOKE_JAVA="${VELOAUTH_SMOKE_JAVA:-java}"
+if [[ "${SMOKE_JAVA}" == */* ]]; then
+  [[ "${SMOKE_JAVA}" == /* && -x "${SMOKE_JAVA}" ]] \
+    || {
+      echo "VELOAUTH_SMOKE_JAVA must be an absolute executable path" >&2
+      exit 1
+    }
+elif ! command -v "${SMOKE_JAVA}" >/dev/null 2>&1; then
+  echo "Smoke-test Java command is unavailable: ${SMOKE_JAVA}" >&2
   exit 1
 fi
 
@@ -74,10 +138,12 @@ evaluate_maven_expression() {
     | awk 'NF && $0 !~ /^\[/ { value=$0 } END { print value }'
 }
 
-FINAL_NAME="$(evaluate_maven_expression project.build.finalName)"
-PLUGIN_JAR="${VELOAUTH_PLUGIN_JAR:-${PROJECT_DIR}/target/${FINAL_NAME}.jar}"
+if [[ -z "${PLUGIN_JAR_OVERRIDE}" ]]; then
+  FINAL_NAME="$(evaluate_maven_expression project.build.finalName)"
+  PLUGIN_JAR="${PROJECT_DIR}/target/${FINAL_NAME}.jar"
+fi
 if [[ ! -f "${PLUGIN_JAR}" ]]; then
-  if [[ -n "${VELOAUTH_PLUGIN_JAR:-}" ]]; then
+  if [[ -n "${PLUGIN_JAR_OVERRIDE}" ]]; then
     echo "Requested VeloAuth plugin JAR does not exist: ${PLUGIN_JAR}" >&2
     exit 1
   fi
@@ -138,7 +204,7 @@ start_velocity() {
   VELOCITY_LOG="$1"
   (
     cd "${SMOKE_DIR}"
-    java -Xms128m -Xmx512m -jar velocity.jar --port "${PROXY_PORT}" \
+    "${SMOKE_JAVA}" -Xms128m -Xmx512m -jar velocity.jar --port "${PROXY_PORT}" \
       <"${CONSOLE_PIPE}" >"${VELOCITY_LOG}" 2>&1
   ) &
   VELOCITY_PID=$!

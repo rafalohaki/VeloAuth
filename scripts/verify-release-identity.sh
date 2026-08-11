@@ -67,9 +67,23 @@ else
   fi
 fi
 
-[[ $# -le 1 ]] || fail "Usage: $0 [expected-tag]"
+[[ $# -le 2 ]] || fail "Usage: $0 [expected-tag] [absolute-candidate-jar]"
 EXPECTED_TAG="${1:-}"
+CANDIDATE_OVERRIDE="${2:-}"
 [[ -f "${PROJECT_DIR}/pom.xml" ]] || fail "Missing Maven project: ${PROJECT_DIR}/pom.xml"
+
+IDENTITY_MAVEN_SETTINGS="${VELOAUTH_RELEASE_IDENTITY_MAVEN_SETTINGS:-}"
+IDENTITY_MAVEN_REPOSITORY="${VELOAUTH_RELEASE_IDENTITY_MAVEN_REPOSITORY:-}"
+if [[ -n "${IDENTITY_MAVEN_SETTINGS}" || -n "${IDENTITY_MAVEN_REPOSITORY}" ]]; then
+  [[ "${IDENTITY_MAVEN_SETTINGS}" == /* && -f "${IDENTITY_MAVEN_SETTINGS}" \
+      && ! -L "${IDENTITY_MAVEN_SETTINGS}" ]] \
+    || fail "Release identity Maven settings must be an absolute regular non-symlink file"
+  [[ "${IDENTITY_MAVEN_REPOSITORY}" == /* && -d "${IDENTITY_MAVEN_REPOSITORY}" \
+      && ! -L "${IDENTITY_MAVEN_REPOSITORY}" ]] \
+    || fail "Release identity Maven repository must be an absolute real directory"
+  MAVEN+=(-s "${IDENTITY_MAVEN_SETTINGS}" \
+    "-Dmaven.repo.local=${IDENTITY_MAVEN_REPOSITORY}")
+fi
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
@@ -100,7 +114,12 @@ fi
 
 TARGET_DIR="${PROJECT_DIR}/target"
 CANDIDATE_JARS=()
-if [[ -d "${TARGET_DIR}" ]]; then
+if [[ -n "${CANDIDATE_OVERRIDE}" ]]; then
+  [[ "${CANDIDATE_OVERRIDE}" == /* && -f "${CANDIDATE_OVERRIDE}" \
+      && ! -L "${CANDIDATE_OVERRIDE}" ]] \
+    || fail "Release candidate override must be an absolute regular non-symlink file"
+  CANDIDATE_JARS+=("${CANDIDATE_OVERRIDE}")
+elif [[ -d "${TARGET_DIR}" ]]; then
   while IFS= read -r candidate; do
     CANDIDATE_JARS+=("${candidate}")
   done < <(find "${TARGET_DIR}" -maxdepth 1 -type f -name 'veloauth-*.jar' -print | sort)

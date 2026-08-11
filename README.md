@@ -118,6 +118,27 @@ producer is present, the same command also requires and validates the adjacent m
 operator privately distributed an earlier 1.5.0 build cannot be inferred from Git history; that is
 an external release gate. If confirmed, bump the candidate to 1.5.1 everywhere before tagging.
 
+Version tags are the only publication trigger; pushes to `main` or pull requests verify but never
+release. A tag job builds one candidate with the checked-in Maven 3.9.16 wrapper and exact Temurin
+21.0.12+8, carries the same absolute JAR through both real-proxy smokes, then publishes a workflow
+artifact containing exactly the JAR, its SHA-256 sidecar and its canonical manifest. Maven/JVM
+override variables are rejected; user/system Maven RC files are disabled, and the canonical build
+uses a task-owned settings file, Maven user home and local repository. The manifest's stable
+`buildCommand` records the public build contract; those controlled environment files are the
+hermetic execution context for that command. Velocity-CTD build 355 itself uses Java 25 bytecode,
+so only that proxy process runs on exact Temurin 25.0.4+7 during its smoke; the plugin build,
+Maven integration client, ordinary Velocity smoke and manifest identity remain on exact Temurin
+21.0.12+8.
+
+The GitHub `production-release` environment is a mandatory protected environment with manual
+maintainer approval. Before anyone creates a version tag, GitHub's immutable-releases repository
+setting and that environment protection must already be enabled. The release job can be approved
+only after the exact workflow candidate passes the external-limbo canary; protected environment
+variables must set `EXTERNAL_CANARY_GREEN=true` and
+`OPERATOR_RELEASE_SIGNOFF=v1.5.0:<40-character-source-commit>`. The job downloads the same workflow
+artifact, verifies its provenance, and refuses to create or modify an already existing release. It
+never moves a `latest` tag, renames the JAR, rebuilds the candidate, or replaces release assets.
+
 ## Requirements
 
 - **Java 21 or newer**
@@ -690,6 +711,26 @@ attestation or upload:
 ```bash
 ./scripts/verify-release-identity.sh v1.5.0
 ```
+
+The canonical tag candidate is created only by CI. A downloaded candidate directory can be checked
+without rebuilding or running either smoke test:
+
+```bash
+./scripts/verify-release-candidate.sh --existing /absolute/candidate-directory v1.5.0
+gh attestation verify /absolute/candidate-directory/veloauth-1.5.0.jar \
+  --repo rafalohaki/VeloAuth \
+  --signer-workflow rafalohaki/VeloAuth/.github/workflows/build-and-release.yml \
+  --source-ref refs/tags/v1.5.0 \
+  --source-digest <40-character-source-commit>
+```
+
+The verifier requires exactly three flat files, canonical JSON, a decimal workflow run ID, the POM
+version/output timestamp, current source commit, fixed signer workflow and an exact checksum. In
+GitHub Actions it additionally matches every available `GITHUB_*` identity field. It also runs the
+read-only Task5 internal identity check for `velocity-plugin.json`, packaged `pom.properties` and
+`BuildConstants.VERSION` using exact Temurin 21 and controlled Maven settings. `--existing`
+performs zero builds and zero smoke tests; it is the offline Task8/canary handoff contract and
+requires exact Temurin 21.0.12+8 to be discoverable or supplied through `VELOAUTH_JAVA21_HOME`.
 
 Prove byte-for-byte reproducibility from a clean committed HEAD with the exact Temurin 21.0.12+8
 toolchain. The verifier creates two local, no-hardlink clones, gives each build an isolated Maven

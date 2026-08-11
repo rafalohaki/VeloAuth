@@ -1,45 +1,22 @@
-name: Build and Release
+name: Build, attest, and release
 
 on:
   push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
+    branches: [main, master]
+    tags: ['v*']
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
 
 permissions:
   contents: read
 
 concurrency:
   group: build-release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  # Check if there are actual source code changes (excluding docs, workflows, etc.)
-  check-changes:
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-    outputs:
-      should-release: ${{ steps.changes.outputs.source-changed }}
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      with:
-        fetch-depth: 2
-        
-    - name: Check for source changes
-      id: changes
-      run: |
-        # Check if there are changes in source files (excluding docs, workflows, etc.)
-        if git diff --name-only HEAD~1 HEAD | grep -E '\.(java|xml|yml|yaml|json|properties)$' | grep -v -E '\.github/|README\.md|\.gitignore'; then
-          echo "source-changed=true" >> "$GITHUB_OUTPUT"
-          echo "Source code changes detected - will create release"
-        else
-          echo "source-changed=false" >> "$GITHUB_OUTPUT"
-          echo "No source code changes - skipping release"
-        fi
-
-  build:
+  verify:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -69,174 +46,392 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      
-    - name: Set up JDK 21
-      uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
-      with:
-        java-version: '21'
-        distribution: 'temurin'
-        cache: 'maven'
-        
-    # Use Maven CLI on GitHub runners
-    - name: Prepare Maven
-      run: mvn -v
+      - name: Checkout the exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-    - name: Verify embedded protocol dependency checksums
-      run: ./scripts/verify-embedded-dependencies.sh
+      - name: Install exact Temurin 25.0.4+7 for the Velocity-CTD proxy only
+        id: verify-java25
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25.0.4+7'
+          show-download-progress: true
 
-    - name: Test latest protocol snapshot resolver with offline fixtures
-      run: ./scripts/test-protocol-build-resolver.sh
-        
-    - name: Build and verify with Maven
-      run: mvn -B -V clean verify pmd:cpd-check -DskipTests=false
+      - name: Restore exact Temurin 21.0.12+8 as the build default
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21.0.12'
+          show-download-progress: true
 
-    - name: Smoke test embedded limbo on a real Velocity proxy
-      run: ./scripts/test-velocity-embedded.sh
+      - name: Verify release and reproducibility fixtures
+        run: |
+          ./scripts/test-release-artifacts.sh
+          ./scripts/test-verify-reproducible-jar.sh
 
-    - name: Smoke test embedded limbo with Velocity-CTD modern forwarding
-      run: ./scripts/test-velocity-ctd-embedded.sh
+      - name: Verify embedded dependency and protocol fixtures
+        run: |
+          ./scripts/verify-embedded-dependencies.sh
+          ./scripts/test-protocol-build-resolver.sh
 
-    - name: Verify AUTH and premium UUID behavior on PostgreSQL
-      run: >-
-        mvn -B test
-        -Dtest=PremiumUuidDaoPostgreSqlIT,JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT
-        -Dveloauth.postgres.url=jdbc:postgresql://127.0.0.1:5432/veloauth_it
-        -Dveloauth.postgres.user=veloauth_it
-        -Dveloauth.postgres.password=veloauth_it_password
-        -Dveloauth.database.type=POSTGRESQL
-        -Dveloauth.database.url=jdbc:postgresql://127.0.0.1:5432/veloauth_it?sslmode=disable
-        -Dveloauth.database.user=veloauth_it
-        -Dveloauth.database.password=veloauth_it_password
+      - name: Run the complete Maven quality gate
+        run: ./mvnw -B -V clean verify pmd:cpd-check -DskipTests=false
 
-    - name: Verify AUTH behavior on MySQL
-      run: >-
-        mvn -B test
-        -Dtest=JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT
-        -Dveloauth.database.type=MYSQL
-        -Dveloauth.database.url='jdbc:mysql://127.0.0.1:3306/veloauth_it?useSSL=false&serverTimezone=UTC'
-        -Dveloauth.database.user=veloauth_it
-        -Dveloauth.database.password=veloauth_it_password
-      
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-      with:
-        name: veloauth-jar
-        path: target/veloauth-*.jar
-        retention-days: 30
-        
-        
-  release:
-    needs: [check-changes, build]
+      - name: Prove the committed JAR is reproducible
+        env:
+          VELOAUTH_JAVA21_HOME: ${{ env.JAVA_HOME }}
+        run: ./scripts/verify-reproducible-jar.sh
+
+      - name: Smoke the embedded topology on Velocity
+        run: ./scripts/test-velocity-embedded.sh
+
+      - name: Smoke modern forwarding on Velocity-CTD
+        env:
+          VELOAUTH_CTD_JAVA25_HOME: ${{ steps.verify-java25.outputs.path }}
+          VELOAUTH_CTD_REQUIRE_PINNED_JAVA25: 'true'
+        run: ./scripts/test-velocity-ctd-embedded.sh
+
+      - name: Verify PostgreSQL behavior
+        run: >-
+          ./mvnw -B test
+          -Dtest=PremiumUuidDaoPostgreSqlIT,JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT
+          -Dveloauth.postgres.url=jdbc:postgresql://127.0.0.1:5432/veloauth_it
+          -Dveloauth.postgres.user=veloauth_it
+          -Dveloauth.postgres.password=veloauth_it_password
+          -Dveloauth.database.type=POSTGRESQL
+          -Dveloauth.database.url=jdbc:postgresql://127.0.0.1:5432/veloauth_it?sslmode=disable
+          -Dveloauth.database.user=veloauth_it
+          -Dveloauth.database.password=veloauth_it_password
+
+      - name: Verify MySQL behavior
+        run: >-
+          ./mvnw -B test
+          -Dtest=JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT
+          -Dveloauth.database.type=MYSQL
+          -Dveloauth.database.url='jdbc:mysql://127.0.0.1:3306/veloauth_it?useSSL=false&serverTimezone=UTC'
+          -Dveloauth.database.user=veloauth_it
+          -Dveloauth.database.password=veloauth_it_password
+
+  candidate:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
-    # Release on tag pushes always; on main/master pushes only when check-changes
-    # detected source changes (doc-only commits skip the release). check-changes is
-    # skipped entirely on tag refs, hence !cancelled() instead of the default success().
-    if: |
-      !cancelled() && needs.build.result == 'success' &&
-      github.event_name != 'pull_request' &&
-      (startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.should-release == 'true')
-    env:
-      VERSION: ""
-      RELEASE_NAME: ""
-      RELEASE_PRERELEASE: "false"
-      RELEASE_MAKE_LATEST: "false"
-      RELEASE_NOTES: ""
     permissions:
-      contents: write
-    
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      artifact-name: ${{ steps.identity.outputs.artifact-name }}
+      jar-name: ${{ steps.identity.outputs.jar-name }}
+      version: ${{ steps.identity.outputs.version }}
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: veloauth_it
+          POSTGRES_USER: veloauth_it
+          POSTGRES_PASSWORD: veloauth_it_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U veloauth_it -d veloauth_it"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: veloauth_it
+          MYSQL_USER: veloauth_it
+          MYSQL_PASSWORD: veloauth_it_password
+          MYSQL_ROOT_PASSWORD: veloauth_it_root_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uveloauth_it -pveloauth_it_password --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
     steps:
-    - name: Checkout code
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      with:
-        fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Download build artifacts
-      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-      with:
-        name: veloauth-jar
-        path: ./
+      - name: Checkout the immutable tag source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-    - name: Generate release notes
-      run: |
-        git fetch --tags --prune
-        git log -n 10 --pretty=format:'- %h %s (%an)' > release_notes.txt || true
-        if [ ! -s release_notes.txt ]; then
-          echo "- No recent commits found." > release_notes.txt
-        fi
-        
-    
-        
-    - name: Create/update latest tag
-      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-      run: |
-        VERSION="latest"
-        printf 'VERSION=%s\n' "$VERSION" >> "$GITHUB_ENV"
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # Force update existing latest tag or create new one
-        if git rev-parse -q --verify "refs/tags/latest" >/dev/null; then
-          git tag -d latest
-          git push origin :latest
-        fi
-        git tag -a "latest" -m "Release latest - $(date +%Y-%m-%d)"
-        git push origin "latest"
-        
-    - name: Set version from tag
-      if: startsWith(github.ref, 'refs/tags/')
-      env:
-        RELEASE_TAG_NAME: ${{ github.ref_name }}
-      run: |
-        printf 'VERSION=%s\n' "$RELEASE_TAG_NAME" >> "$GITHUB_ENV"
-        
-    - name: Rename JAR for release
-      run: |
-        set -- veloauth-*.jar
-        if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
-          echo "Expected exactly one VeloAuth JAR, found $#" >&2
-          exit 1
-        fi
-        mv -- "$1" "veloauth-$VERSION.jar"
-        
-    - name: Prepare release metadata
-      run: |
-        recent_notes="$(cat release_notes.txt)"
-        if [ "$VERSION" = "latest" ]; then
-          echo "RELEASE_NAME=Rolling Latest Build" >> "$GITHUB_ENV"
-          {
-            echo "Rolling release updated on $(date -u '+%Y-%m-%d %H:%M UTC')."
-            echo
-            echo "Recent changes:"
-            echo "$recent_notes"
-          } > release_body.txt
-          echo "RELEASE_PRERELEASE=false" >> "$GITHUB_ENV"
-          echo "RELEASE_MAKE_LATEST=true" >> "$GITHUB_ENV"
-        else
-          printf 'RELEASE_NAME=%s\n' "$VERSION" >> "$GITHUB_ENV"
-          {
-            echo "Release for tag ${VERSION}."
-            echo
-            echo "Recent changes:"
-            echo "$recent_notes"
-          } > release_body.txt
-          echo "RELEASE_PRERELEASE=false" >> "$GITHUB_ENV"
-          echo "RELEASE_MAKE_LATEST=true" >> "$GITHUB_ENV"
-        fi
+      - name: Install exact Temurin 25.0.4+7 for the Velocity-CTD proxy only
+        id: candidate-java25
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25.0.4+7'
+          show-download-progress: true
 
-    - name: Publish (update) release
-      uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b
-      with:
-        tag: ${{ env.VERSION }}
-        name: ${{ env.RELEASE_NAME }}
-        bodyFile: release_body.txt
-        allowUpdates: true
-        replacesArtifacts: true
-        makeLatest: ${{ env.RELEASE_MAKE_LATEST }}
-        draft: false
-        prerelease: ${{ env.RELEASE_PRERELEASE }}
-        artifacts: "veloauth-*.jar"
+      - name: Restore exact Temurin 21.0.12+8 as the build default
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21.0.12'
+          show-download-progress: true
+
+      - name: Bind tag, POM, and source commit
+        id: identity
+        env:
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version="$(python3 - <<'PY'
+          import xml.etree.ElementTree as ElementTree
+          root = ElementTree.parse("pom.xml").getroot()
+          namespace = root.tag.rpartition("}")[0] + "}" if "}" in root.tag else ""
+          print((root.findtext(f"{namespace}version") or "").strip())
+          PY
+          )"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "POM does not contain a release version: ${version:-<empty>}" >&2
+            exit 1
+          fi
+          expected_tag="v${version}"
+          if [[ "${RELEASE_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "Tag/POM mismatch: expected ${expected_tag}, found ${RELEASE_REF_NAME}" >&2
+            exit 1
+          fi
+          if ! git show-ref --verify --quiet "refs/tags/${RELEASE_REF_NAME}"; then
+            echo "Release tag is missing from the fetched repository" >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "${RELEASE_SHA}" \
+              || "$(git rev-parse "refs/tags/${RELEASE_REF_NAME}^{commit}")" != "${RELEASE_SHA}" ]]; then
+            echo "Release tag, checkout, and workflow SHA must name the same commit" >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "${version}" >>"${GITHUB_OUTPUT}"
+          printf 'jar-name=veloauth-%s.jar\n' "${version}" >>"${GITHUB_OUTPUT}"
+          printf 'artifact-name=veloauth-release-candidate-%s\n' "${RELEASE_SHA}" >>"${GITHUB_OUTPUT}"
+
+      - name: Run release artifact fixture tests
+        run: ./scripts/test-release-artifacts.sh
+
+      - name: Prove reproducibility before creating the candidate
+        env:
+          VELOAUTH_JAVA21_HOME: ${{ env.JAVA_HOME }}
+        run: |
+          ./scripts/test-verify-reproducible-jar.sh
+          ./scripts/verify-reproducible-jar.sh
+
+      - name: Build and smoke the single canonical candidate
+        env:
+          VELOAUTH_JAVA21_HOME: ${{ env.JAVA_HOME }}
+          VELOAUTH_CTD_JAVA25_HOME: ${{ steps.candidate-java25.outputs.path }}
+        run: |
+          candidate_dir="${RUNNER_TEMP}/veloauth-release-candidate"
+          mkdir -p "${candidate_dir}"
+          ./scripts/verify-release-candidate.sh --build "${candidate_dir}"
+
+      - name: Verify PostgreSQL without replacing the candidate JAR
+        run: >-
+          ./mvnw -B test
+          -Dtest=PremiumUuidDaoPostgreSqlIT,JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT
+          -Dveloauth.postgres.url=jdbc:postgresql://127.0.0.1:5432/veloauth_it
+          -Dveloauth.postgres.user=veloauth_it
+          -Dveloauth.postgres.password=veloauth_it_password
+          -Dveloauth.database.type=POSTGRESQL
+          -Dveloauth.database.url=jdbc:postgresql://127.0.0.1:5432/veloauth_it?sslmode=disable
+          -Dveloauth.database.user=veloauth_it
+          -Dveloauth.database.password=veloauth_it_password
+
+      - name: Verify MySQL without replacing the candidate JAR
+        run: >-
+          ./mvnw -B test
+          -Dtest=JdbcAuthDaoDatabaseIT,DatabaseMigrationDatabaseIT
+          -Dveloauth.database.type=MYSQL
+          -Dveloauth.database.url='jdbc:mysql://127.0.0.1:3306/veloauth_it?useSSL=false&serverTimezone=UTC'
+          -Dveloauth.database.user=veloauth_it
+          -Dveloauth.database.password=veloauth_it_password
+
+      - name: Re-verify candidate bytes after database tests
+        env:
+          JAR_NAME: ${{ steps.identity.outputs.jar-name }}
+        run: >-
+          ./scripts/verify-release-candidate.sh --existing
+          "${RUNNER_TEMP}/veloauth-release-candidate"
+          "${GITHUB_REF_NAME}"
+
+      - name: Attest the exact candidate JAR
+        uses: actions/attest-build-provenance@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/veloauth-release-candidate/${{ steps.identity.outputs.jar-name }}
+
+      - name: Verify attestation identity before handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JAR_NAME: ${{ steps.identity.outputs.jar-name }}
+        run: |
+          gh attestation verify "${RUNNER_TEMP}/veloauth-release-candidate/${JAR_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/build-and-release.yml" \
+            --source-ref "${GITHUB_REF}" \
+            --source-digest "${GITHUB_SHA}"
+
+      - name: Re-hash the attested candidate before upload
+        run: >-
+          ./scripts/verify-release-candidate.sh --existing
+          "${RUNNER_TEMP}/veloauth-release-candidate"
+          "${GITHUB_REF_NAME}"
+
+      - name: Upload the immutable three-file candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.identity.outputs.artifact-name }}
+          path: |
+            ${{ runner.temp }}/veloauth-release-candidate/${{ steps.identity.outputs.jar-name }}
+            ${{ runner.temp }}/veloauth-release-candidate/${{ steps.identity.outputs.jar-name }}.sha256
+            ${{ runner.temp }}/veloauth-release-candidate/${{ steps.identity.outputs.jar-name }}.manifest.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 30
+
+  release:
+    needs: candidate
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.candidate.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: production-release
+    permissions:
+      attestations: read
+      contents: write
+    steps:
+      - name: Checkout the attested source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up exact Temurin 21.0.12+8 for read-only identity verification
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21.0.12'
+          show-download-progress: true
+
+      - name: Download the candidate from this workflow run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.candidate.outputs.artifact-name }}
+          path: ${{ runner.temp }}/veloauth-release-candidate
+
+      - name: Enforce canary and operator approval evidence
+        env:
+          EXTERNAL_CANARY_GREEN: ${{ vars.EXTERNAL_CANARY_GREEN }}
+          OPERATOR_RELEASE_SIGNOFF: ${{ vars.OPERATOR_RELEASE_SIGNOFF }}
+        run: |
+          expected_signoff="${GITHUB_REF_NAME}:${GITHUB_SHA}"
+          if [[ "${EXTERNAL_CANARY_GREEN}" != true ]]; then
+            echo "Protected environment must set EXTERNAL_CANARY_GREEN=true" >&2
+            exit 1
+          fi
+          if [[ "${OPERATOR_RELEASE_SIGNOFF}" != "${expected_signoff}" ]]; then
+            echo "Protected environment must set OPERATOR_RELEASE_SIGNOFF=${expected_signoff}" >&2
+            exit 1
+          fi
+
+      - name: Verify the downloaded candidate without rebuilding or smoking
+        run: >-
+          ./scripts/verify-release-candidate.sh --existing
+          "${RUNNER_TEMP}/veloauth-release-candidate"
+          "${GITHUB_REF_NAME}"
+
+      - name: Verify the exact attestation before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JAR_NAME: ${{ needs.candidate.outputs.jar-name }}
+        run: |
+          gh attestation verify "${RUNNER_TEMP}/veloauth-release-candidate/${JAR_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/build-and-release.yml" \
+            --source-ref "${GITHUB_REF}" \
+            --source-digest "${GITHUB_SHA}"
+
+      - name: Re-hash the attested candidate before publication
+        run: >-
+          ./scripts/verify-release-candidate.sh --existing
+          "${RUNNER_TEMP}/veloauth-release-candidate"
+          "${GITHUB_REF_NAME}"
+
+      - name: Refuse to mutate an existing GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          response="$(gh api --include "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" 2>&1)"
+          status=$?
+          set -e
+          if [[ ${status} -eq 0 ]]; then
+            echo "GitHub release ${GITHUB_REF_NAME} already exists; refusing mutation" >&2
+            exit 1
+          fi
+          if ! grep -Eq '^HTTP/[0-9.]+ 404' <<<"${response}"; then
+            printf '%s\n' "${response}" >&2
+            echo "Unable to prove that the GitHub release does not exist" >&2
+            exit 1
+          fi
+
+      - name: Render deterministic release notes
+        env:
+          VERSION: ${{ needs.candidate.outputs.version }}
+        run: |
+          notes="${RUNNER_TEMP}/veloauth-release-notes.md"
+          ./scripts/verify-release-candidate.sh --render-notes \
+            "${GITHUB_WORKSPACE}/.github/RELEASE_TEMPLATE.md" \
+            "${GITHUB_WORKSPACE}/CHANGELOG.md" "${notes}" "${VERSION}"
+          if grep -Eq '{{[^{}]+}}' "${notes}"; then
+            echo "Rendered release notes contain a template placeholder" >&2
+            exit 1
+          fi
+
+      - name: Publish one immutable release with exactly three assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JAR_NAME: ${{ needs.candidate.outputs.jar-name }}
+          VERSION: ${{ needs.candidate.outputs.version }}
+        run: |
+          candidate_dir="${RUNNER_TEMP}/veloauth-release-candidate"
+          gh release create "${GITHUB_REF_NAME}" \
+            "${candidate_dir}/${JAR_NAME}" \
+            "${candidate_dir}/${JAR_NAME}.sha256" \
+            "${candidate_dir}/${JAR_NAME}.manifest.json" \
+            --verify-tag \
+            --title "VeloAuth ${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/veloauth-release-notes.md" \
+            --latest=false
+
+      - name: Verify immutable published assets byte for byte
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JAR_NAME: ${{ needs.candidate.outputs.jar-name }}
+        run: |
+          if [[ "$(gh release view "${GITHUB_REF_NAME}" --json isImmutable --jq .isImmutable)" != true ]]; then
+            echo "Published release is not immutable" >&2
+            exit 1
+          fi
+          actual_assets="$(gh release view "${GITHUB_REF_NAME}" --json assets \
+            --jq '.assets | map(.name) | sort | .[]')"
+          expected_assets="$(printf '%s\n' \
+            "${JAR_NAME}" "${JAR_NAME}.manifest.json" "${JAR_NAME}.sha256" | sort)"
+          if [[ "${actual_assets}" != "${expected_assets}" ]]; then
+            echo "Published release does not contain exactly the three canonical assets" >&2
+            printf '%s\n' "${actual_assets}" >&2
+            exit 1
+          fi
+          published_dir="${RUNNER_TEMP}/veloauth-published-release"
+          mkdir -p "${published_dir}"
+          gh release download "${GITHUB_REF_NAME}" --dir "${published_dir}"
+          for asset in "${JAR_NAME}" "${JAR_NAME}.sha256" "${JAR_NAME}.manifest.json"; do
+            cmp -- "${RUNNER_TEMP}/veloauth-release-candidate/${asset}" \
+              "${published_dir}/${asset}"
+          done
+          ./scripts/verify-release-candidate.sh --existing \
+            "${published_dir}" "${GITHUB_REF_NAME}"

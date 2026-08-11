@@ -1,5 +1,38 @@
 # VeloAuth {{VERSION}}
 
+This immutable release publishes exactly three files produced by one canonical build:
+`veloauth-{{VERSION}}.jar`, `veloauth-{{VERSION}}.jar.sha256`, and
+`veloauth-{{VERSION}}.jar.manifest.json`. The JAR name and bytes are unchanged between build,
+both real-proxy smoke tests, attestation, the protected approval gate, and publication.
+
+## Provenance and publication gate
+
+Before the tag is created, GitHub's immutable-releases repository setting must already be enabled
+and the `production-release` environment must require a maintainer's manual approval. Tagging is
+forbidden if that protection is absent. Approve the release job only after the exact workflow
+candidate passed the external-limbo canary and the protected environment contains:
+
+- `EXTERNAL_CANARY_GREEN=true`
+- `OPERATOR_RELEASE_SIGNOFF=v{{VERSION}}:<40-character-source-commit>`
+
+The release job downloads the same three-file workflow artifact; it does not build or smoke again.
+It refuses an existing GitHub release, verifies the canonical manifest and checksum, and verifies
+the JAR's internal Task5 identity on exact Temurin 21.0.12+8. The Velocity-CTD build 355 smoke uses
+exact Temurin 25.0.4+7 only for that proxy process because CTD is compiled for Java 25; this does not
+change the candidate's Java 21 build identity. The release job then verifies
+the JAR attestation against repository `rafalohaki/VeloAuth`, signer workflow
+`.github/workflows/build-and-release.yml`, source ref `refs/tags/v{{VERSION}}`, and the tagged source
+commit. An operator can repeat that verification after download with:
+
+```bash
+gh attestation verify veloauth-{{VERSION}}.jar \
+  --repo rafalohaki/VeloAuth \
+  --signer-workflow rafalohaki/VeloAuth/.github/workflows/build-and-release.yml \
+  --source-ref refs/tags/v{{VERSION}} \
+  --source-digest <40-character-source-commit>
+./scripts/verify-release-candidate.sh --existing /absolute/candidate-directory v{{VERSION}}
+```
+
 ## Installation
 
 ```bash
@@ -42,11 +75,13 @@ wget https://github.com/rafalohaki/VeloAuth/releases/download/v{{VERSION}}/veloa
    has null/blank `HASH` and `PREMIUMUUID` null/equal to `AUTH.UUID`; rows with a distinct premium UUID
    and hashed offline accounts must not be auto-marked. Candidate/marked counts on a run further
    require `PRESERVE_UUID` null/false, so already-true eligible rows are not rerun candidates.
-4. Run `mvnd clean verify pmd:cpd-check`,
+4. Run `./mvnw -B -V clean verify pmd:cpd-check -DskipTests=false`,
    `./scripts/verify-release-identity.sh v{{VERSION}}`,
    `./scripts/verify-embedded-dependencies.sh`, `./scripts/test-velocity-embedded.sh`,
    `./scripts/test-postgresql.sh` and `./scripts/test-mysql.sh`; retain the CI logs with the release.
-   The identity command must validate the adjacent checksum and release manifest.
+   The identity command must validate the adjacent checksum and release manifest. Retain the
+   candidate workflow artifact and verify it with `verify-release-candidate.sh --existing`; never
+   substitute a later local build.
 5. Keep `premium.bypass-auth-server: false` unless premium direct routing has been tested on a
    staging proxy with forced hosts, the Velocity `try` order and every backend destination.
 6. Existing configs without `auth-server.mode` and fresh configs use `external`; explicit embedded
