@@ -895,6 +895,13 @@ legacy origin-trusted pending manifest while retaining client availability throu
 keepalive boundary. It also submits a rejected `/login` attempt and verifies that the cracked client
 remains in limbo with authentication commands still usable.
 
+A disposable Mineflayer 4.37.1 release audit additionally completed two full connections each for
+1.8.9, 1.12.2, 1.16.5, 1.20.1 and 1.21.4 through the real pinned Velocity proxy. Every probe reached
+the End spectator holding state, received the VeloAuth brand, kept a stable position through the
+first keepalive and received the expected authentication-command response; the second pass covered
+reconnect. This temporary Node harness is not shipped or declared as a VeloAuth dependency. See
+`docs/quality-gates.md` for its evidence boundary and remaining manual-client gates.
+
 Automated tests do not prove the real Velocity protocol flow. Before production, test premium,
 cracked and Floodgate clients on a staging proxy with forced hosts, `try` fallback, reconnects,
 backend outages and both values of `premium.bypass-auth-server`.

@@ -25,6 +25,9 @@ All notable user-visible changes to VeloAuth are documented in this file.
   budgets, JFR/NMT/GC evidence, candidate re-hashing and clean-shutdown verification. The recorded
   10k reference run completed every login and keepalive with zero client failures; production caps
   still require a target-Linux soak.
+- A disposable real-proxy client audit covering two complete connections each for Minecraft 1.8.9,
+  1.12.2, 1.16.5, 1.20.1 and 1.21.4, including End spectator state, stable position, keepalive,
+  authentication-command response and reconnect. The temporary Node harness is not shipped.
 - `connection.auto-transfer-delay-ms` (default `1500`, range `0-30000`) controls the compatibility
   buffer before automatic auth/limbo-to-backend transfers.
 - Protocol-47 embedded limbo sends explicit spectator `PlayerAbilities` and `MC|Brand`
