@@ -133,7 +133,7 @@ gates, then require operator sign-off.
 ## Support
 
 - Issues: <https://github.com/rafalohaki/VeloAuth/issues>
-- Architecture and operator behavior: `ARCHITECTURE.md` and `README.md`
+- Operator behavior: `README.md`
 - Admin command help: `/vauth help`
 
 Redact database passwords, forwarding secrets, webhook URLs, TOTP secrets/codes and complete

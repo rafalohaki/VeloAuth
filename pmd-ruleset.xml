@@ -84,8 +84,8 @@
     </rule>
 
     <!-- PMD reports values greater than or equal to each threshold. These ratchets are exactly
-         one above the measured 2026-08-12 maxima documented in docs/quality-gates.md. Do not
-         raise them without an explicit baseline review. -->
+         one above the measured 2026-08-12 maxima. Do not raise them without an explicit
+         baseline review. -->
     <rule ref="category/java/design.xml/CognitiveComplexity">
         <properties>
             <property name="reportLevel" value="25"/>

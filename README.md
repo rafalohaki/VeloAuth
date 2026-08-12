@@ -104,8 +104,6 @@ matches never grant this bypass.
 
 ## Architecture and releases
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) documents trust boundaries, event flow, persistence,
-  configuration reload semantics and upgrade constraints.
 - Published release notes and downloadable artifacts are available on
   [GitHub Releases](https://github.com/rafalohaki/VeloAuth/releases) and
   [Modrinth](https://modrinth.com/plugin/veloauth).
@@ -899,8 +897,7 @@ A disposable Mineflayer 4.37.1 release audit additionally completed two full con
 1.8.9, 1.12.2, 1.16.5, 1.20.1 and 1.21.4 through the real pinned Velocity proxy. Every probe reached
 the End spectator holding state, received the VeloAuth brand, kept a stable position through the
 first keepalive and received the expected authentication-command response; the second pass covered
-reconnect. This temporary Node harness is not shipped or declared as a VeloAuth dependency. See
-`docs/quality-gates.md` for its evidence boundary and remaining manual-client gates.
+reconnect. This temporary Node harness is not shipped or declared as a VeloAuth dependency.
 
 Automated tests do not prove the real Velocity protocol flow. Before production, test premium,
 cracked and Floodgate clients on a staging proxy with forced hosts, `try` fallback, reconnects,
@@ -908,7 +905,7 @@ backend outages and both values of `premium.bypass-auth-server`.
 
 ## Contributing
 
-Contributions are welcome. Read [ARCHITECTURE.md](ARCHITECTURE.md), follow the coding rules in
+Contributions are welcome. Follow the coding rules in
 `.github/skills/java-coding-standards/SKILL.md`, and run all verification commands above before
 opening a pull request.
 
