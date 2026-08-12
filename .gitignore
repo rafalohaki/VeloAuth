@@ -130,7 +130,8 @@ analiza.md
 data/
 copilot-instructions.md
 CLAUDE.md
-roadmap.md
 AGENTS.md
 .claude
 skrypt.sh
+roadmap.md
+ARCHITECTURE.md
