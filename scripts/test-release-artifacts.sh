@@ -18,6 +18,16 @@ fail() {
   exit 1
 }
 
+# Fixtures are validated against the real project identity, so they must track the POM
+# version instead of hardcoding one. FOREIGN_VERSION is the deliberately-wrong value used
+# by mismatch fixtures; it can never collide with a released version.
+VERSION="$("${SCRIPT_DIR}/print-project-version.sh")" \
+  || fail "cannot resolve the Maven project version"
+VERSION="${VERSION#version=}"
+FOREIGN_VERSION="0.0.0"
+JAR_NAME="veloauth-${VERSION}.jar"
+TAG="v${VERSION}"
+
 cleanup() {
   local exit_status=$?
   trap - EXIT
@@ -55,24 +65,24 @@ copy_candidate() {
   local source=$1
   local destination=$2
   mkdir -p "${destination}"
-  cp -- "${source}/veloauth-1.5.0.jar" \
-    "${source}/veloauth-1.5.0.jar.sha256" \
-    "${source}/veloauth-1.5.0.jar.manifest.json" "${destination}/"
+  cp -- "${source}/${JAR_NAME}" \
+    "${source}/${JAR_NAME}.sha256" \
+    "${source}/${JAR_NAME}.manifest.json" "${destination}/"
 }
 
 trap cleanup EXIT
 TEMP_DIR="$(mktemp -d "${TEMP_PREFIX}XXXXXX")"
 chmod 700 "${TEMP_DIR}"
 EXISTING_IDENTITY="${TEMP_DIR}/existing-identity.sh"
-cat >"${EXISTING_IDENTITY}" <<'SH'
+cat >"${EXISTING_IDENTITY}" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == "v1.5.0" ]]
-[[ "$2" == /*/veloauth-1.5.0.jar && -f "$2" ]]
-if [[ -n "${VELOAUTH_RELEASE_TEST_EXISTING_IDENTITY_LOG:-}" ]]; then
-  printf 'existing-identity:%s\n' "$2" >>"${VELOAUTH_RELEASE_TEST_EXISTING_IDENTITY_LOG}"
+[[ "\$1" == "${TAG}" ]]
+[[ "\$2" == /*/${JAR_NAME} && -f "\$2" ]]
+if [[ -n "\${VELOAUTH_RELEASE_TEST_EXISTING_IDENTITY_LOG:-}" ]]; then
+  printf 'existing-identity:%s\n' "\$2" >>"\${VELOAUTH_RELEASE_TEST_EXISTING_IDENTITY_LOG}"
 fi
-if grep -Fq 'invalid-internal-identity' "$2"; then
+if grep -Fq 'invalid-internal-identity' "\$2"; then
   echo "Fixture internal release identity mismatch" >&2
   exit 1
 fi
@@ -89,18 +99,18 @@ done
 # The manifest is exact, canonical, deterministic, and binds all candidate metadata.
 VALID_CANDIDATE="${TEMP_DIR}/valid-candidate"
 mkdir -p "${VALID_CANDIDATE}"
-printf 'deterministic release candidate\n' >"${VALID_CANDIDATE}/veloauth-1.5.0.jar"
+printf 'deterministic release candidate\n' >"${VALID_CANDIDATE}/${JAR_NAME}"
 TEST_COMMIT="0123456789abcdef0123456789abcdef01234567"
 VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true \
 VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
-  "${MANIFEST_CREATOR}" "${VALID_CANDIDATE}/veloauth-1.5.0.jar" \
+  "${MANIFEST_CREATOR}" "${VALID_CANDIDATE}/${JAR_NAME}" \
   >"${TEMP_DIR}/manifest-create.out"
-VALID_SHA="$(sha256_file "${VALID_CANDIDATE}/veloauth-1.5.0.jar")"
-[[ "$(cat "${VALID_CANDIDATE}/veloauth-1.5.0.jar.sha256")" \
-    == "${VALID_SHA}  veloauth-1.5.0.jar" ]] \
+VALID_SHA="$(sha256_file "${VALID_CANDIDATE}/${JAR_NAME}")"
+[[ "$(cat "${VALID_CANDIDATE}/${JAR_NAME}.sha256")" \
+    == "${VALID_SHA}  ${JAR_NAME}" ]] \
   || fail "checksum sidecar must be canonical and bind the exact artifact name"
-python3 - "${VALID_CANDIDATE}/veloauth-1.5.0.jar.manifest.json" \
-  "${VALID_SHA}" "${TEST_COMMIT}" <<'PY' || exit 1
+python3 - "${VALID_CANDIDATE}/${JAR_NAME}.manifest.json" \
+  "${VALID_SHA}" "${TEST_COMMIT}" "${JAR_NAME}" "${VERSION}" <<'PY' || exit 1
 import json
 import pathlib
 import sys
@@ -109,7 +119,7 @@ path = pathlib.Path(sys.argv[1])
 sha256 = sys.argv[2]
 commit = sys.argv[3]
 expected = {
-    "artifact": "veloauth-1.5.0.jar",
+    "artifact": sys.argv[4],
     "buildCommand": "./mvnw -B -V clean verify pmd:cpd-check -DskipTests=false",
     "channel": "local",
     "commit": commit,
@@ -120,7 +130,7 @@ expected = {
     "runId": "local",
     "schemaVersion": 1,
     "sha256": sha256,
-    "version": "1.5.0",
+    "version": sys.argv[5],
     "workflow": "local",
 }
 raw = path.read_bytes()
@@ -149,9 +159,9 @@ assert_contains "${VERIFY_OUTPUT}" "Verified single release candidate" \
 
 INTERNAL_MISMATCH="${TEMP_DIR}/internal-mismatch"
 mkdir -p "${INTERNAL_MISMATCH}"
-printf 'invalid-internal-identity\n' >"${INTERNAL_MISMATCH}/veloauth-1.5.0.jar"
+printf 'invalid-internal-identity\n' >"${INTERNAL_MISMATCH}/${JAR_NAME}"
 VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
-  "${MANIFEST_CREATOR}" "${INTERNAL_MISMATCH}/veloauth-1.5.0.jar" >/dev/null
+  "${MANIFEST_CREATOR}" "${INTERNAL_MISMATCH}/${JAR_NAME}" >/dev/null
 run_expect_failure "${TEMP_DIR}/internal-mismatch.out" env \
   VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
   VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
@@ -163,7 +173,7 @@ assert_contains "${TEMP_DIR}/internal-mismatch.out" \
 # Any missing, ambiguous, malformed, mutated, or non-canonical artifact set is rejected.
 MISSING="${TEMP_DIR}/missing-candidate"
 copy_candidate "${VALID_CANDIDATE}" "${MISSING}"
-rm -- "${MISSING}/veloauth-1.5.0.jar.manifest.json"
+rm -- "${MISSING}/${JAR_NAME}.manifest.json"
 run_expect_failure "${TEMP_DIR}/missing.out" env \
   VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
   "${CANDIDATE_VERIFIER}" --existing "${MISSING}"
@@ -181,7 +191,7 @@ assert_contains "${TEMP_DIR}/ambiguous.out" "exactly three flat entries, found 4
 
 MUTATED="${TEMP_DIR}/mutated-candidate"
 copy_candidate "${VALID_CANDIDATE}" "${MUTATED}"
-printf 'x' >>"${MUTATED}/veloauth-1.5.0.jar"
+printf 'x' >>"${MUTATED}/${JAR_NAME}"
 run_expect_failure "${TEMP_DIR}/mutated.out" env \
   VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
   "${CANDIDATE_VERIFIER}" --existing "${MUTATED}"
@@ -191,7 +201,7 @@ assert_contains "${TEMP_DIR}/mutated.out" "checksum sidecar is non-canonical or 
 MALFORMED_CHECKSUM="${TEMP_DIR}/malformed-checksum"
 copy_candidate "${VALID_CANDIDATE}" "${MALFORMED_CHECKSUM}"
 printf '%s\n%s\n' "${VALID_SHA}" "${VALID_SHA}" \
-  >"${MALFORMED_CHECKSUM}/veloauth-1.5.0.jar.sha256"
+  >"${MALFORMED_CHECKSUM}/${JAR_NAME}.sha256"
 run_expect_failure "${TEMP_DIR}/malformed-checksum.out" env \
   VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
   "${CANDIDATE_VERIFIER}" --existing "${MALFORMED_CHECKSUM}"
@@ -200,7 +210,7 @@ assert_contains "${TEMP_DIR}/malformed-checksum.out" "checksum sidecar is non-ca
 
 MALFORMED_MANIFEST="${TEMP_DIR}/malformed-manifest"
 copy_candidate "${VALID_CANDIDATE}" "${MALFORMED_MANIFEST}"
-printf '{not-json}\n' >"${MALFORMED_MANIFEST}/veloauth-1.5.0.jar.manifest.json"
+printf '{not-json}\n' >"${MALFORMED_MANIFEST}/${JAR_NAME}.manifest.json"
 run_expect_failure "${TEMP_DIR}/malformed-manifest.out" env \
   VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
   "${CANDIDATE_VERIFIER}" --existing "${MALFORMED_MANIFEST}"
@@ -209,7 +219,7 @@ assert_contains "${TEMP_DIR}/malformed-manifest.out" "Unreadable release manifes
 
 NONCANONICAL_MANIFEST="${TEMP_DIR}/noncanonical-manifest"
 copy_candidate "${VALID_CANDIDATE}" "${NONCANONICAL_MANIFEST}"
-python3 - "${NONCANONICAL_MANIFEST}/veloauth-1.5.0.jar.manifest.json" <<'PY'
+python3 - "${NONCANONICAL_MANIFEST}/${JAR_NAME}.manifest.json" <<'PY'
 import json
 import pathlib
 import sys
@@ -226,7 +236,7 @@ for key in artifact buildCommand channel commit jdk maven outputTimestamp reposi
     schemaVersion sha256 version workflow; do
   MISMATCH_DIR="${TEMP_DIR}/mismatch-${key}"
   copy_candidate "${VALID_CANDIDATE}" "${MISMATCH_DIR}"
-  python3 - "${MISMATCH_DIR}/veloauth-1.5.0.jar.manifest.json" "${key}" <<'PY'
+  python3 - "${MISMATCH_DIR}/${JAR_NAME}.manifest.json" "${key}" "${FOREIGN_VERSION}" <<'PY'
 import json
 import pathlib
 import sys
@@ -246,7 +256,7 @@ mutations = {
     "runId": "1",
     "schemaVersion": "1",
     "sha256": "0" * 64,
-    "version": "1.5.1",
+    "version": sys.argv[3],
     "workflow": "other",
 }
 manifest[key] = mutations[key]
@@ -265,15 +275,15 @@ done
 TAG_CANDIDATE="${TEMP_DIR}/tag-candidate"
 copy_candidate "${VALID_CANDIDATE}" "${TAG_CANDIDATE}"
 HEAD_COMMIT="$(git -C "${PROJECT_DIR}" rev-parse HEAD)"
-python3 - "${TAG_CANDIDATE}/veloauth-1.5.0.jar.manifest.json" \
-  "${VALID_SHA}" "${HEAD_COMMIT}" <<'PY'
+python3 - "${TAG_CANDIDATE}/${JAR_NAME}.manifest.json" \
+  "${VALID_SHA}" "${HEAD_COMMIT}" "${JAR_NAME}" "${VERSION}" "${TAG}" <<'PY'
 import json
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
 manifest = {
-    "artifact": "veloauth-1.5.0.jar",
+    "artifact": sys.argv[4],
     "buildCommand": "./mvnw -B -V clean verify pmd:cpd-check -DskipTests=false",
     "channel": "tag",
     "commit": sys.argv[3],
@@ -284,20 +294,20 @@ manifest = {
     "runId": "123456789",
     "schemaVersion": 1,
     "sha256": sys.argv[2],
-    "version": "1.5.0",
-    "workflow": "rafalohaki/VeloAuth/.github/workflows/build-and-release.yml@refs/tags/v1.5.0",
+    "version": sys.argv[5],
+    "workflow": "rafalohaki/VeloAuth/.github/workflows/build-and-release.yml@refs/tags/" + sys.argv[6],
 }
 path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_CHANNEL=tag \
 VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
-  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" v1.5.0 \
+  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" ${TAG} \
   >"${TEMP_DIR}/tag-existing.out" 2>&1 \
   || fail "downloaded tag candidate must be verifiable without live GitHub metadata"
 
 NON_ASCII_RUN_ID="${TEMP_DIR}/non-ascii-run-id"
 copy_candidate "${TAG_CANDIDATE}" "${NON_ASCII_RUN_ID}"
-python3 - "${NON_ASCII_RUN_ID}/veloauth-1.5.0.jar.manifest.json" <<'PY'
+python3 - "${NON_ASCII_RUN_ID}/${JAR_NAME}.manifest.json" <<'PY'
 import json
 import pathlib
 import sys
@@ -309,7 +319,7 @@ PY
 run_expect_failure "${TEMP_DIR}/non-ascii-run-id.out" \
   env VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_CHANNEL=tag \
   VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
-  "${CANDIDATE_VERIFIER}" --existing "${NON_ASCII_RUN_ID}" v1.5.0
+  "${CANDIDATE_VERIFIER}" --existing "${NON_ASCII_RUN_ID}" ${TAG}
 assert_contains "${TEMP_DIR}/non-ascii-run-id.out" "runId must be a decimal string" \
   "release runId must use ASCII decimal digits only"
 
@@ -317,25 +327,25 @@ run_expect_failure "${TEMP_DIR}/tag-ci-mismatch.out" env \
   VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_CHANNEL=tag \
   VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
   GITHUB_ACTIONS=true GITHUB_REPOSITORY=rafalohaki/VeloAuth \
-  GITHUB_REF=refs/tags/v1.5.0 GITHUB_WORKFLOW_REF=rafalohaki/VeloAuth/.github/workflows/build-and-release.yml@refs/tags/v1.5.0 \
+  GITHUB_REF=refs/tags/${TAG} GITHUB_WORKFLOW_REF=rafalohaki/VeloAuth/.github/workflows/build-and-release.yml@refs/tags/${TAG} \
   GITHUB_RUN_ID=123456789 GITHUB_SHA=ffffffffffffffffffffffffffffffffffffffff \
-  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" v1.5.0
+  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" ${TAG}
 assert_contains "${TEMP_DIR}/tag-ci-mismatch.out" "GITHUB_SHA" \
   "CI verification must bind the manifest to the live source commit"
 
 # Test-only metadata and orchestration hooks cannot leak into production mode.
 GUARD_CANDIDATE="${TEMP_DIR}/guard-candidate"
 mkdir -p "${GUARD_CANDIDATE}"
-printf 'guard\n' >"${GUARD_CANDIDATE}/veloauth-1.5.0.jar"
+printf 'guard\n' >"${GUARD_CANDIDATE}/${JAR_NAME}"
 run_expect_failure "${TEMP_DIR}/manifest-guard.out" env \
   VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
-  "${MANIFEST_CREATOR}" "${GUARD_CANDIDATE}/veloauth-1.5.0.jar"
+  "${MANIFEST_CREATOR}" "${GUARD_CANDIDATE}/${JAR_NAME}"
 assert_contains "${TEMP_DIR}/manifest-guard.out" \
   "Test-only manifest override requires VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true" \
   "manifest test metadata must be guarded"
 run_expect_failure "${TEMP_DIR}/existing-identity-guard.out" env \
   VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
-  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" v1.5.0
+  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" ${TAG}
 assert_contains "${TEMP_DIR}/existing-identity-guard.out" \
   "Test-only release override requires VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true" \
   "--existing identity test helper must be guarded"
@@ -345,27 +355,27 @@ FAKE_REPRO="${TEMP_DIR}/fake-repro.sh"
 FAKE_SMOKE_A="${TEMP_DIR}/fake-smoke-a.sh"
 FAKE_SMOKE_B="${TEMP_DIR}/fake-smoke-b.sh"
 FAKE_IDENTITY="${TEMP_DIR}/fake-identity.sh"
-cat >"${FAKE_BUILDER}" <<'SH'
+cat >"${FAKE_BUILDER}" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
-build_dir=$1
-log=$2
-[[ -d "${build_dir}" && -z "$(find "${build_dir}" -mindepth 1 -print -quit)" ]]
-[[ "${MAVEN_SKIP_RC:-}" == true ]]
-[[ "${MAVEN_USER_HOME:-}" == */maven-user-home ]]
-[[ -f "${VELOAUTH_RELEASE_MAVEN_SETTINGS:-}" ]]
-[[ -d "${VELOAUTH_RELEASE_MAVEN_REPOSITORY:-}" ]]
-printf 'build:%s\n' "${build_dir}" >>"${log}"
-mkdir -p "${build_dir}/target"
-printf 'one canonical build\n' >"${build_dir}/target/veloauth-1.5.0.jar"
+build_dir=\$1
+log=\$2
+[[ -d "\${build_dir}" && -z "\$(find "\${build_dir}" -mindepth 1 -print -quit)" ]]
+[[ "\${MAVEN_SKIP_RC:-}" == true ]]
+[[ "\${MAVEN_USER_HOME:-}" == */maven-user-home ]]
+[[ -f "\${VELOAUTH_RELEASE_MAVEN_SETTINGS:-}" ]]
+[[ -d "\${VELOAUTH_RELEASE_MAVEN_REPOSITORY:-}" ]]
+printf 'build:%s\n' "\${build_dir}" >>"\${log}"
+mkdir -p "\${build_dir}/target"
+printf 'one canonical build\n' >"\${build_dir}/target/${JAR_NAME}"
 SH
-cat >"${FAKE_REPRO}" <<'SH'
+cat >"${FAKE_REPRO}" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == "--compare-existing" ]]
-[[ "$2" == /*/veloauth-1.5.0.jar && -f "$2" ]]
-grep -Fxq 'one canonical build' "$2"
-printf 'repro:%s\n' "$2" >>"${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
+[[ "\$1" == "--compare-existing" ]]
+[[ "\$2" == /*/${JAR_NAME} && -f "\$2" ]]
+grep -Fxq 'one canonical build' "\$2"
+printf 'repro:%s\n' "\$2" >>"\${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
 SH
 cat >"${FAKE_SMOKE_A}" <<'SH'
 #!/usr/bin/env bash
@@ -399,12 +409,12 @@ if [[ "${VELOAUTH_SMOKE_MAVEN_SETTINGS:-}" != "${task_root}/maven-settings.xml" 
 fi
 printf 'smoke-b:%s\n' "${VELOAUTH_PLUGIN_JAR}" >>"${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
 SH
-cat >"${FAKE_IDENTITY}" <<'SH'
+cat >"${FAKE_IDENTITY}" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == "v1.5.0" ]]
-[[ "$2" == /*/veloauth-1.5.0.jar && -f "$2" ]]
-printf 'identity:%s\n' "$2" >>"${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
+[[ "\$1" == "${TAG}" ]]
+[[ "\$2" == /*/${JAR_NAME} && -f "\$2" ]]
+printf 'identity:%s\n' "\$2" >>"\${VELOAUTH_RELEASE_TEST_INVOCATION_LOG}"
 SH
 chmod 700 "${FAKE_BUILDER}" "${FAKE_REPRO}" "${FAKE_SMOKE_A}" "${FAKE_SMOKE_B}" \
   "${FAKE_IDENTITY}"
@@ -434,7 +444,7 @@ VELOAUTH_RELEASE_TEST_COMMIT="${TEST_COMMIT}" \
   }
 [[ "$(grep -c '^build:' "${INVOCATION_LOG}")" == 1 ]] \
   || fail "canonical candidate must be built exactly once"
-EXPECTED_ORCHESTRATED_JAR="${ORCHESTRATED}/veloauth-1.5.0.jar"
+EXPECTED_ORCHESTRATED_JAR="${ORCHESTRATED}/${JAR_NAME}"
 [[ "$(grep -c "^repro:${EXPECTED_ORCHESTRATED_JAR}$" "${INVOCATION_LOG}")" == 1 ]] \
   || fail "both fresh reproducibility builds must be compared to the canonical candidate"
 [[ "$(grep -Ec "^smoke-[ab]:${EXPECTED_ORCHESTRATED_JAR}$" "${INVOCATION_LOG}")" == 2 ]] \
@@ -568,16 +578,16 @@ SH
 chmod 700 "${HASH_BIN}/sha256sum"
 RACE_CANDIDATE="${TEMP_DIR}/race-candidate"
 mkdir -p "${RACE_CANDIDATE}"
-printf 'race\n' >"${RACE_CANDIDATE}/veloauth-1.5.0.jar"
+printf 'race\n' >"${RACE_CANDIDATE}/${JAR_NAME}"
 run_expect_failure "${TEMP_DIR}/race.out" env \
   PATH="${HASH_BIN}:${PATH}" VELOAUTH_HASH_CALLS="${TEMP_DIR}/hash-calls" \
   VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true \
-  "${MANIFEST_CREATOR}" "${RACE_CANDIDATE}/veloauth-1.5.0.jar"
+  "${MANIFEST_CREATOR}" "${RACE_CANDIDATE}/${JAR_NAME}"
 assert_contains "${TEMP_DIR}/race.out" \
   "Release artifact changed while its metadata was being created" \
   "manifest producer must re-hash before publishing metadata"
-[[ ! -e "${RACE_CANDIDATE}/veloauth-1.5.0.jar.sha256" \
-    && ! -e "${RACE_CANDIDATE}/veloauth-1.5.0.jar.manifest.json" ]] \
+[[ ! -e "${RACE_CANDIDATE}/${JAR_NAME}.sha256" \
+    && ! -e "${RACE_CANDIDATE}/${JAR_NAME}.manifest.json" ]] \
   || fail "failed manifest publication left partial metadata"
 
 # The guarded copy seam proves explicit absolute JAR selection happens before Maven discovery.
@@ -653,18 +663,18 @@ NOTES_B="${TEMP_DIR}/notes-b.md"
 printf '# VeloAuth {{VERSION}}\n\n{{CHANGELOG}}\n\nVersion {{VERSION}}\n' >"${NOTES_TEMPLATE}"
 printf '%s\n' '- Fixed one thing.' '- Fixed another thing.' >"${NOTES_CHANGELOG}"
 "${CANDIDATE_VERIFIER}" --render-notes "${NOTES_TEMPLATE}" "${NOTES_CHANGELOG}" \
-  "${NOTES_A}" 1.5.0
+  "${NOTES_A}" "${VERSION}"
 "${CANDIDATE_VERIFIER}" --render-notes "${NOTES_TEMPLATE}" "${NOTES_CHANGELOG}" \
-  "${NOTES_B}" 1.5.0
+  "${NOTES_B}" "${VERSION}"
 cmp -s "${NOTES_A}" "${NOTES_B}" || fail "release-note rendering must be deterministic"
 if grep -Eq '{{[^{}]+}}' "${NOTES_A}"; then
   fail "rendered release notes contain a literal placeholder"
 fi
-assert_contains "${NOTES_A}" "# VeloAuth 1.5.0" "release-note version was not rendered"
+assert_contains "${NOTES_A}" "# VeloAuth ${VERSION}" "release-note version was not rendered"
 assert_contains "${NOTES_A}" "- Fixed another thing." "release changelog was not rendered"
 ACTUAL_NOTES="${TEMP_DIR}/actual-release-notes.md"
 "${CANDIDATE_VERIFIER}" --render-notes "${RELEASE_TEMPLATE}" \
-  "${PROJECT_DIR}/CHANGELOG.md" "${ACTUAL_NOTES}" 1.5.0
+  "${PROJECT_DIR}/CHANGELOG.md" "${ACTUAL_NOTES}" "${VERSION}"
 if grep -Eq '{{[^{}]+}}' "${ACTUAL_NOTES}"; then
   fail "actual release template leaves unresolved placeholders"
 fi
@@ -673,7 +683,7 @@ BAD_NOTES_TEMPLATE="${TEMP_DIR}/bad-notes-template.md"
 printf '{{VERSION}}\n{{CHANGELOG}}\n{{UNRESOLVED}}\n' >"${BAD_NOTES_TEMPLATE}"
 run_expect_failure "${TEMP_DIR}/bad-notes.out" "${CANDIDATE_VERIFIER}" \
   --render-notes "${BAD_NOTES_TEMPLATE}" "${NOTES_CHANGELOG}" \
-  "${TEMP_DIR}/bad-rendered.md" 1.5.0
+  "${TEMP_DIR}/bad-rendered.md" "${VERSION}"
 assert_contains "${TEMP_DIR}/bad-notes.out" "unresolved placeholder" \
   "unresolved release-note placeholders must fail"
 

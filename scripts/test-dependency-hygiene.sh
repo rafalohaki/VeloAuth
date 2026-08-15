@@ -3,8 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
-DEFAULT_JAR="${PROJECT_DIR}/target/veloauth-1.5.0.jar"
-DEFAULT_SBOM="${PROJECT_DIR}/target/veloauth-1.5.0.cdx.json"
+PROJECT_VERSION="$("${SCRIPT_DIR}/print-project-version.sh")" \
+  || { echo "TEST FAILURE: cannot resolve the Maven project version" >&2; exit 1; }
+PROJECT_VERSION="${PROJECT_VERSION#version=}"
+DEFAULT_JAR="${PROJECT_DIR}/target/veloauth-${PROJECT_VERSION}.jar"
+DEFAULT_SBOM="${PROJECT_DIR}/target/veloauth-${PROJECT_VERSION}.cdx.json"
 JAR_PATH="${DEFAULT_JAR}"
 SBOM_PATH="${DEFAULT_SBOM}"
 
@@ -32,7 +35,7 @@ fi
 
 python3 - "${PROJECT_DIR}/pom.xml" \
   "${PROJECT_DIR}/.github/workflows/build-and-release.yml" \
-  "${PROJECT_DIR}/README.md" "${JAR_PATH}" "${SBOM_PATH}" <<'PY'
+  "${PROJECT_DIR}/README.md" "${JAR_PATH}" "${SBOM_PATH}" "${PROJECT_VERSION}" <<'PY'
 import json
 import pathlib
 import sys
@@ -41,6 +44,7 @@ import zipfile
 
 pom_path, workflow_path, readme_path, jar_path = map(pathlib.Path, sys.argv[1:5])
 sbom_path = pathlib.Path(sys.argv[5]) if sys.argv[5] else None
+project_version = sys.argv[6]
 
 
 def fail(message: str) -> None:
@@ -157,7 +161,8 @@ workflow_fragments = (
     "osv-scan:\n    needs: dependency-inventory\n    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}",
     "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0",
     "download-artifact: veloauth-osv-input-${{ github.sha }}",
-    "--no-resolve\n        --lockfile=pom.xml\n        --lockfile=veloauth-1.5.0.cdx.json",
+    "--no-resolve\n        --lockfile=pom.xml\n"
+    "        --lockfile=veloauth-${{ needs.dependency-inventory.outputs.version }}.cdx.json",
     "needs: [candidate, osv-scan]",
     "needs.osv-scan.result == 'success'",
 )
@@ -269,8 +274,9 @@ if sbom_path:
     if sbom.get("bomFormat") != "CycloneDX" or sbom.get("specVersion") != "1.6":
         fail("SBOM must be CycloneDX schema 1.6 JSON")
     metadata_component = sbom.get("metadata", {}).get("component", {})
-    if metadata_component.get("name") != "veloauth" or metadata_component.get("version") != "1.5.0":
-        fail("SBOM metadata must identify VeloAuth 1.5.0")
+    if metadata_component.get("name") != "veloauth" \
+            or metadata_component.get("version") != project_version:
+        fail(f"SBOM metadata must identify VeloAuth {project_version}")
     components = {
         (component.get("group"), component.get("name"), component.get("version"))
         for component in sbom.get("components", [])

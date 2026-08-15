@@ -128,7 +128,15 @@ case "${TEST_MODE}" in
     WORKFLOW="${GITHUB_WORKFLOW_REF}"
     ;;
   true)
-    VERSION="${VELOAUTH_RELEASE_TEST_VERSION:-1.5.0}"
+    # Default to the POM version. The production branch above resolves it through Maven;
+    # test mode reads it offline so a version bump cannot leave this default stale.
+    if [[ -n "${VELOAUTH_RELEASE_TEST_VERSION:-}" ]]; then
+      VERSION="${VELOAUTH_RELEASE_TEST_VERSION}"
+    else
+      VERSION="$("${SCRIPT_DIR}/print-project-version.sh")" \
+        || fail "Unable to resolve the Maven project version for test-mode manifest creation"
+      VERSION="${VERSION#version=}"
+    fi
     OUTPUT_TIMESTAMP="${VELOAUTH_RELEASE_TEST_OUTPUT_TIMESTAMP:-2026-08-11T00:00:00Z}"
     [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
       || fail "Test manifest version must be a release version"

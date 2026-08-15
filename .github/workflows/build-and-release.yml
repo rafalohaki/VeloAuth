@@ -39,6 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.project-version.outputs.version }}
     steps:
       - name: Checkout the exact source commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,11 +59,17 @@ jobs:
           ./mvnw -B -V clean package -DskipTests
           ./scripts/test-dependency-hygiene.sh
 
+      # Derived from the POM so a version bump cannot silently desynchronise the
+      # OSV inventory artifact from the packaged SBOM.
+      - name: Resolve the project version
+        id: project-version
+        run: ./scripts/print-project-version.sh >>"${GITHUB_OUTPUT}"
+
       - name: Upload the same-run OSV inventory
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: veloauth-osv-input-${{ github.sha }}
-          path: target/veloauth-1.5.0.cdx.json
+          path: target/veloauth-${{ steps.project-version.outputs.version }}.cdx.json
           if-no-files-found: error
           overwrite: false
           retention-days: 5
@@ -79,7 +87,7 @@ jobs:
       scan-args: |-
         --no-resolve
         --lockfile=pom.xml
-        --lockfile=veloauth-1.5.0.cdx.json
+        --lockfile=veloauth-${{ needs.dependency-inventory.outputs.version }}.cdx.json
       fail-on-vuln: true
       upload-sarif: true
 

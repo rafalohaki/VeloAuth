@@ -29,8 +29,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ReleaseIdentityTest {
 
-    private static final String VERSION = "1.5.0";
-    private static final String EXPECTED_TAG = "v1.5.0";
+    /**
+     * The fixtures embed the real compiled {@code BuildConstants.class}, so the fixture's
+     * declared version must track the Maven project version. Hardcoding it here made every
+     * version bump fail the whole class with "BuildConstants.VERSION mismatch".
+     */
+    private static final String VERSION = BuildConstants.VERSION;
+    private static final String EXPECTED_TAG = "v" + VERSION;
+    /** Deliberately-wrong identity for mismatch fixtures; never equals a real release version. */
+    private static final String FOREIGN_VERSION = "0.0.0";
+    private static final String FOREIGN_TAG = "v" + FOREIGN_VERSION;
     private static final String BUILD_CONSTANTS_CLASS =
             "net/rafalohaki/veloauth/BuildConstants.class";
     private static final String POM_PROPERTIES =
@@ -69,7 +77,7 @@ class ReleaseIdentityTest {
         VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
 
         assertEquals(0, result.exitCode(), result.output());
-        assertTrue(result.output().contains("Verified release identity 1.5.0 (v1.5.0)"), result.output());
+        assertTrue(result.output().contains("Verified release identity " + VERSION + " (" + EXPECTED_TAG + ")"), result.output());
     }
 
     @Test
@@ -79,7 +87,7 @@ class ReleaseIdentityTest {
         VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
 
         assertEquals(0, result.exitCode(), result.output());
-        assertTrue(result.output().contains("Verified release identity 1.5.0 (v1.5.0)"), result.output());
+        assertTrue(result.output().contains("Verified release identity " + VERSION + " (" + EXPECTED_TAG + ")"), result.output());
     }
 
     @Test
@@ -102,11 +110,11 @@ class ReleaseIdentityTest {
                   <parent>
                     <groupId>net.rafalohaki</groupId>
                     <artifactId>parent</artifactId>
-                    <version>1.5.0</version>
+                    <version>%s</version>
                   </parent>
                   <artifactId>veloauth</artifactId>
                 </project>
-                """, StandardCharsets.UTF_8);
+                """.formatted(VERSION), StandardCharsets.UTF_8);
 
         VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
 
@@ -123,10 +131,10 @@ class ReleaseIdentityTest {
                   <modelVersion>4.0.0</modelVersion>
                   <groupId>net.rafalohaki.veloauth</groupId>
                   <artifactId>veloauth</artifactId>
-                  <version>1.5.0</version>
-                  <version>1.5.0</version>
+                  <version>%1$s</version>
+                  <version>%1$s</version>
                 </project>
-                """, StandardCharsets.UTF_8);
+                """.formatted(VERSION), StandardCharsets.UTF_8);
 
         VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
 
@@ -139,22 +147,22 @@ class ReleaseIdentityTest {
     void verifier_MismatchedTag_FailsWithSpecificDiagnostic() throws Exception {
         Fixture fixture = createFixture(VERSION);
 
-        VerificationResult result = runVerifier(fixture, "v1.5.1");
+        VerificationResult result = runVerifier(fixture, FOREIGN_TAG);
 
         assertEquals(1, result.exitCode(), result.output());
         assertTrue(result.output().contains(
-                "Release tag mismatch: expected v1.5.0, found v1.5.1"), result.output());
+                "Release tag mismatch: expected " + EXPECTED_TAG + ", found " + FOREIGN_TAG), result.output());
     }
 
     @Test
     void verifier_MismatchedPluginMetadata_FailsWithSpecificDiagnostic() throws Exception {
-        Fixture fixture = createFixture("1.4.0");
+        Fixture fixture = createFixture(FOREIGN_VERSION);
 
         VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
 
         assertEquals(1, result.exitCode(), result.output());
         assertTrue(result.output().contains(
-                "velocity-plugin.json version mismatch: expected 1.5.0, found 1.4.0"), result.output());
+                "velocity-plugin.json version mismatch: expected " + VERSION + ", found " + FOREIGN_VERSION), result.output());
     }
 
     @Test
@@ -181,7 +189,7 @@ class ReleaseIdentityTest {
     @Test
     void verifier_MultipleCandidateJars_FailsWithSpecificDiagnostic() throws Exception {
         Fixture fixture = createFixture(VERSION);
-        Files.copy(fixture.jar(), fixture.root().resolve("target/veloauth-1.5.1.jar"));
+        Files.copy(fixture.jar(), fixture.root().resolve("target/veloauth-" + FOREIGN_VERSION + ".jar"));
 
         VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
 
@@ -199,7 +207,7 @@ class ReleaseIdentityTest {
 
         assertEquals(1, result.exitCode(), result.output());
         assertTrue(result.output().contains(
-                "Missing release checksum: veloauth-1.5.0.jar.sha256"), result.output());
+                "Missing release checksum: veloauth-" + VERSION + ".jar.sha256"), result.output());
     }
 
     @Test
@@ -226,21 +234,21 @@ class ReleaseIdentityTest {
 
         assertEquals(1, result.exitCode(), result.output());
         assertTrue(result.output().contains(
-                "Missing release manifest: veloauth-1.5.0.jar.manifest.json"), result.output());
+                "Missing release manifest: veloauth-" + VERSION + ".jar.manifest.json"), result.output());
     }
 
     @Test
     void verifier_PresentManifestWithWrongVersion_FailsWithSpecificDiagnostic() throws Exception {
         Fixture fixture = createFixture(VERSION);
         Files.writeString(fixture.manifest(), """
-                {"artifact":"veloauth-1.5.0.jar","version":"1.4.0","sha256":"%s"}
-                """.formatted(fixture.sha256()), StandardCharsets.UTF_8);
+                {"artifact":"veloauth-%s.jar","version":"%s","sha256":"%s"}
+                """.formatted(VERSION, FOREIGN_VERSION, fixture.sha256()), StandardCharsets.UTF_8);
 
         VerificationResult result = runVerifier(fixture, EXPECTED_TAG);
 
         assertEquals(1, result.exitCode(), result.output());
         assertTrue(result.output().contains(
-                "Release manifest version mismatch: expected 1.5.0, found 1.4.0"), result.output());
+                "Release manifest version mismatch: expected " + VERSION + ", found " + FOREIGN_VERSION), result.output());
     }
 
     @Test
@@ -273,9 +281,9 @@ class ReleaseIdentityTest {
                   <modelVersion>4.0.0</modelVersion>
                   <groupId>net.rafalohaki.veloauth</groupId>
                   <artifactId>veloauth</artifactId>
-                  <version>1.5.0</version>
+                  <version>%s</version>
                 </project>
-                """, StandardCharsets.UTF_8);
+                """.formatted(VERSION), StandardCharsets.UTF_8);
         Path mavenMarker = root.resolve("maven-invoked");
         Path fakeMaven = root.resolve("mvnw");
         Files.writeString(fakeMaven, """
@@ -287,7 +295,7 @@ class ReleaseIdentityTest {
                 """, StandardCharsets.UTF_8);
         assertTrue(fakeMaven.toFile().setExecutable(true), "Poison Maven wrapper must be executable");
 
-        Path jar = target.resolve("veloauth-1.5.0.jar");
+        Path jar = target.resolve("veloauth-" + VERSION + ".jar");
         writeFixtureJar(jar, pluginMetadataVersion, buildConstantsContent);
         String sha256 = sha256(jar);
         Path checksum = Path.of(jar + ".sha256");
@@ -313,8 +321,8 @@ class ReleaseIdentityTest {
             writeJarEntry(jar, POM_PROPERTIES, """
                     artifactId=veloauth
                     groupId=net.rafalohaki.veloauth
-                    version=1.5.0
-                    """.getBytes(StandardCharsets.ISO_8859_1));
+                    version=%s
+                    """.formatted(VERSION).getBytes(StandardCharsets.ISO_8859_1));
             if (buildConstantsContent != null) {
                 writeJarEntry(jar, BUILD_CONSTANTS_CLASS, buildConstantsContent);
             }
