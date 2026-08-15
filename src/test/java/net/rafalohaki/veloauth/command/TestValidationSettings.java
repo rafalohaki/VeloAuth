@@ -10,6 +10,7 @@ class TestValidationSettings extends Settings {
     private final int maxLen;
     private final PasswordPolicy policy;
     private boolean reportEnabled = true;
+    private int ipLimitRegistrations = 3;
 
     TestValidationSettings(Path dataDirectory, int minLen, int maxLen) {
         this(dataDirectory, minLen, maxLen, 0, 0, 0, 0);
@@ -40,7 +41,11 @@ class TestValidationSettings extends Settings {
 
     @Override
     public PasswordSettings getPasswordSettings() {
-        return new PasswordSettings(10, 3, minLen, maxLen, policy);
+        return new PasswordSettings(10, ipLimitRegistrations, minLen, maxLen, policy);
+    }
+
+    void setIpLimitRegistrationsForTesting(int limit) {
+        ipLimitRegistrations = limit;
     }
 
     @Override

@@ -216,9 +216,16 @@ class RegisterCommand implements SimpleCommand {
     private boolean exceedsIpRegistrationLimit(
             AuthenticationContext authContext,
             Settings.PasswordSettings passwordSettings) {
+        int limit = passwordSettings.ipLimitRegistrations();
+        // A non-positive limit disables the cap — the same reading canProceedWithoutAddress
+        // uses. Without this guard `ipCount >= 0` is always true and disabling the feature
+        // would refuse every registration on the proxy.
+        if (limit <= 0) {
+            return false;
+        }
         String playerIp = PlayerAddressUtils.getPlayerIp(authContext.player());
         long ipCount = ctx.databaseManager().countRegistrationsByIp(playerIp).join();
-        return ipCount >= passwordSettings.ipLimitRegistrations();
+        return ipCount >= limit;
     }
 
     private RegisteredPlayer buildNewPlayer(

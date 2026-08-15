@@ -90,7 +90,7 @@ class CommandFlowFixesTest {
     private ConnectionManager connectionManager;
 
     private Messages messages;
-    private Settings settings;
+    private TestValidationSettings settings;
     private AuthCache authCache;
     private StubDatabaseManager databaseManager;
     private InlineCommandContext inlineContext;
@@ -482,6 +482,45 @@ class CommandFlowFixesTest {
                 "A retired concrete connection must not recreate its session");
         verify(connectionManager, never()).transferToBackend(player);
         verify(player, never()).sendMessage(org.mockito.ArgumentMatchers.any(Component.class));
+    }
+
+    @Test
+    void testRegisterCommand_IpLimitDisabledWithZero_AllowsRegistration() {
+        // RegisterCommand.canProceedWithoutAddress treats ip-limit-registrations <= 0 as
+        // "feature disabled". exceedsIpRegistrationLimit must agree, otherwise disabling the
+        // limit blocks every registration on the proxy.
+        settings.setIpLimitRegistrationsForTesting(0);
+        databaseManager.setFindResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
+        databaseManager.setRegistrationCount(CompletableFuture.completedFuture(0L));
+        // DUPLICATE stops the flow right after the persist attempt, so the assertion isolates
+        // the IP gate without dragging PostAuthFlow's collaborators into this test.
+        databaseManager.enqueueRegistrationResult(DatabaseManager.DbResult.success(false));
+
+        new RegisterCommand(inlineContext).execute(invocation(player, "secret123", "secret123"));
+
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
+        List<String> sentMessages = capturedTexts(messagesCaptor);
+        assertFalse(sentMessages.contains(messages.get("register.ip_limit_reached")),
+                "ip-limit-registrations=0 means disabled, so registration must not be refused");
+        assertTrue(sentMessages.contains(messages.get("auth.register.already_registered")),
+                "Flow must reach the persist step, proving the IP gate did not short-circuit it");
+    }
+
+    @Test
+    void testRegisterCommand_IpLimitPositive_StillEnforcedAtThreshold() {
+        settings.setIpLimitRegistrationsForTesting(3);
+        databaseManager.setFindResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(null)));
+        databaseManager.setRegistrationCount(CompletableFuture.completedFuture(3L));
+
+        new RegisterCommand(inlineContext).execute(invocation(player, "secret123", "secret123"));
+
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
+        assertTrue(capturedTexts(messagesCaptor).contains(messages.get("register.ip_limit_reached")),
+                "Reaching the configured limit must still refuse registration");
     }
 
     @Test
