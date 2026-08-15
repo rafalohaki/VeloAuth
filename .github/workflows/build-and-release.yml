@@ -126,7 +126,7 @@ jobs:
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
-          java-version: '25.0.4+7'
+          java-version: '25.0.4+7.0.LTS'
           show-download-progress: true
 
       - name: Restore exact Temurin 21.0.12+8 as the build default
@@ -238,7 +238,7 @@ jobs:
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
-          java-version: '25.0.4+7'
+          java-version: '25.0.4+7.0.LTS'
           show-download-progress: true
 
       - name: Restore exact Temurin 21.0.12+8 as the build default

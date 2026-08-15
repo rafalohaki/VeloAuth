@@ -703,7 +703,7 @@ required = [
     "--source-digest",
     "--latest=false",
     "EXTERNAL_CANARY_GREEN",
-    "java-version: '25.0.4+7'",
+    "java-version: '25.0.4+7.0.LTS'",
     "VELOAUTH_CTD_JAVA25_HOME",
     "RELEASE_POLICY_TOKEN",
     "repos/${GITHUB_REPOSITORY}/immutable-releases",
