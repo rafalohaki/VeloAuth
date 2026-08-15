@@ -61,6 +61,17 @@ assert_contains() {
   grep -Fq -- "${expected}" "${file}" || fail "${description}"
 }
 
+# Offline-verification fixtures must not inherit the runner's GitHub Actions metadata.
+# They exist to prove a downloaded candidate verifies without live CI context, but the
+# verifier switches to its CI branch whenever GITHUB_ACTIONS=true and then demands
+# GITHUB_REF=refs/tags/<tag> — never true on a branch push, so these assertions could only
+# ever pass outside CI. Scrubbing the ambient values makes the fixture mean the same thing
+# on a workstation and on a runner.
+without_ci_metadata() {
+  env -u GITHUB_ACTIONS -u GITHUB_REPOSITORY -u GITHUB_REF -u GITHUB_WORKFLOW_REF \
+    -u GITHUB_RUN_ID -u GITHUB_SHA "$@"
+}
+
 copy_candidate() {
   local source=$1
   local destination=$2
@@ -299,9 +310,10 @@ manifest = {
 }
 path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
-VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_CHANNEL=tag \
-VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
-  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" ${TAG} \
+without_ci_metadata \
+  VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_CHANNEL=tag \
+  VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
+  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" "${TAG}" \
   >"${TEMP_DIR}/tag-existing.out" 2>&1 \
   || fail "downloaded tag candidate must be verifiable without live GitHub metadata"
 
@@ -317,9 +329,10 @@ manifest["runId"] = "１２３"
 path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 run_expect_failure "${TEMP_DIR}/non-ascii-run-id.out" \
-  env VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true VELOAUTH_RELEASE_TEST_CHANNEL=tag \
+  without_ci_metadata VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true \
+  VELOAUTH_RELEASE_TEST_CHANNEL=tag \
   VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
-  "${CANDIDATE_VERIFIER}" --existing "${NON_ASCII_RUN_ID}" ${TAG}
+  "${CANDIDATE_VERIFIER}" --existing "${NON_ASCII_RUN_ID}" "${TAG}"
 assert_contains "${TEMP_DIR}/non-ascii-run-id.out" "runId must be a decimal string" \
   "release runId must use ASCII decimal digits only"
 
@@ -343,9 +356,9 @@ run_expect_failure "${TEMP_DIR}/manifest-guard.out" env \
 assert_contains "${TEMP_DIR}/manifest-guard.out" \
   "Test-only manifest override requires VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true" \
   "manifest test metadata must be guarded"
-run_expect_failure "${TEMP_DIR}/existing-identity-guard.out" env \
-  VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
-  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" ${TAG}
+run_expect_failure "${TEMP_DIR}/existing-identity-guard.out" \
+  without_ci_metadata VELOAUTH_RELEASE_TEST_IDENTITY="${EXISTING_IDENTITY}" \
+  "${CANDIDATE_VERIFIER}" --existing "${TAG_CANDIDATE}" "${TAG}"
 assert_contains "${TEMP_DIR}/existing-identity-guard.out" \
   "Test-only release override requires VELOAUTH_RELEASE_ARTIFACT_TEST_MODE=true" \
   "--existing identity test helper must be guarded"
