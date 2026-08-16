@@ -4,6 +4,14 @@ on:
   push:
     branches: [main, master]
     tags: ['v*']
+    # Only prose that no build or test consumes may skip the pipeline. Deliberately absent:
+    # README.md and CHANGELOG.md are read by the hygiene and release-note contracts, while
+    # LICENSE and THIRD_PARTY_NOTICES.md are packaged into META-INF/veloauth and therefore
+    # change the artifact bytes. Editing any of those must still run the full matrix.
+    paths-ignore:
+      - '2FA.md'
+      - 'docs/**'
+      - '.github/skills/**'
   pull_request:
     branches: [main, master]
   schedule:
