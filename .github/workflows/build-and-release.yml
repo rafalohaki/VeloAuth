@@ -269,15 +269,18 @@ jobs:
         run: |
           set -euo pipefail
           notes="${RUNNER_TEMP}/rolling-notes.md"
+          # Every line goes through a '%s\n' format string: a literal leading '-' would
+          # otherwise be parsed as a printf option and abort the step.
           {
-            printf 'Rolling build of `main`, published only after the full verify matrix passed.\n\n'
-            printf '- Version: `%s`\n' "${VERSION}"
-            printf '- Commit: %s\n' "${GITHUB_SHA}"
-            printf '- SHA-256: `%s`\n' "${SHA256}"
-            printf '\nPermanent download: '
-            printf 'https://github.com/%s/releases/latest/download/veloauth-latest.jar\n' \
-              "${GITHUB_REPOSITORY}"
-            printf '\nThis release is updated in place; see CHANGELOG.md for released changes.\n'
+            printf '%s\n' 'Rolling build of `main`, published only after the full verify matrix passed.'
+            printf '%s\n' ''
+            printf '%s\n' "- Version: \`${VERSION}\`"
+            printf '%s\n' "- Commit: ${GITHUB_SHA}"
+            printf '%s\n' "- SHA-256: \`${SHA256}\`"
+            printf '%s\n' ''
+            printf '%s\n' "Permanent download: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/veloauth-latest.jar"
+            printf '%s\n' ''
+            printf '%s\n' 'This release is updated in place; see CHANGELOG.md for released changes.'
           } >"${notes}"
           if gh release view latest >/dev/null 2>&1; then
             gh release edit latest --title "Rolling Latest Build" --notes-file "${notes}" \
