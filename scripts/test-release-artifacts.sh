@@ -785,11 +785,37 @@ if not re.search(r"(?ms)^  release:.*?actions/download-artifact@", text):
     raise SystemExit("TEST FAILURE: release job must download the candidate workflow artifact")
 for forbidden in (
     "allowUpdates", "replacesArtifacts", "ncipollo/release-action", "overwrite: true",
-    "--clobber", "refs/tags/latest", "git tag -a latest", "$(date", "date -u",
+    "$(date", "date -u",
     "actions/attest-build-provenance@",
 ):
     if forbidden.lower() in text.lower():
         raise SystemExit(f"TEST FAILURE: workflow contains forbidden mutable token: {forbidden}")
+
+# In-place release mutation belongs to the rolling job and nowhere else. The versioned path
+# publishes immutable artifacts, so a --clobber leaking into it would silently make an
+# "immutable" release overwritable.
+def job_section(name, following):
+    body = text.split(f"\n  {name}:", 1)
+    if len(body) != 2:
+        raise SystemExit(f"TEST FAILURE: workflow is missing the {name} job")
+    return body[1].split(f"\n  {following}:", 1)[0]
+
+
+rolling_section = job_section("rolling", "candidate")
+versioned_section = text.split("\n  candidate:", 1)[1]
+for mutable_token in ("--clobber", "refs/tags/latest", "git tag -a latest"):
+    if mutable_token.lower() in versioned_section.lower():
+        raise SystemExit(
+            f"TEST FAILURE: versioned release path must stay immutable: {mutable_token}")
+if "--clobber" not in rolling_section:
+    raise SystemExit("TEST FAILURE: rolling release must replace assets in place")
+for rolling_token in (
+    "needs: verify",
+    "github.ref == 'refs/heads/main'",
+    "Expected exactly one release",
+):
+    if rolling_token not in rolling_section:
+        raise SystemExit(f"TEST FAILURE: rolling contract is missing: {rolling_token}")
 if not re.search(r"(?m)^\s+pull_request:\s*$", text):
     raise SystemExit("TEST FAILURE: workflow must verify pull requests")
 if "tags:" not in text or "v*" not in text:

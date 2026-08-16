@@ -195,6 +195,120 @@ jobs:
           -Dveloauth.database.user=veloauth_it
           -Dveloauth.database.password=veloauth_it_password
 
+      # The rolling release must publish the exact bytes this job verified, so the JAR is
+      # handed to the rolling job as an artifact instead of being rebuilt there.
+      - name: Resolve the project version
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        id: project-version
+        run: ./scripts/print-project-version.sh >>"${GITHUB_OUTPUT}"
+
+      - name: Upload the verified rolling candidate
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: veloauth-rolling-${{ github.sha }}
+          path: target/veloauth-${{ steps.project-version.outputs.version }}.jar
+          if-no-files-found: error
+          retention-days: 5
+
+  # Exactly one rolling release, updated in place. The release object and its tag name are
+  # never recreated: the tag is repointed through the git ref API and the asset is replaced
+  # with --clobber, so watchers are not notified again on every push. Publishing is gated on
+  # the full verify matrix, so a red build can never reach the download link.
+  rolling:
+    needs: verify
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the exact source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the verified rolling candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v6.0.0
+        with:
+          name: veloauth-rolling-${{ github.sha }}
+          path: rolling-candidate
+
+      - name: Stage the rolling assets under a stable name
+        id: assets
+        run: |
+          set -euo pipefail
+          version="$(./scripts/print-project-version.sh)"
+          version="${version#version=}"
+          source_jar="rolling-candidate/veloauth-${version}.jar"
+          [[ -f "${source_jar}" ]] || { echo "Verified rolling candidate is missing" >&2; exit 1; }
+          mkdir -p rolling-assets
+          # A stable file name keeps /releases/latest/download/veloauth-latest.jar permanent.
+          cp -- "${source_jar}" rolling-assets/veloauth-latest.jar
+          ( cd rolling-assets && sha256sum veloauth-latest.jar >veloauth-latest.jar.sha256 )
+          echo "version=${version}" >>"${GITHUB_OUTPUT}"
+          echo "sha256=$(cut -d' ' -f1 <rolling-assets/veloauth-latest.jar.sha256)" >>"${GITHUB_OUTPUT}"
+
+      - name: Repoint the rolling tag at this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/latest" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" \
+              -f "sha=${GITHUB_SHA}" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref=refs/tags/latest -f "sha=${GITHUB_SHA}" >/dev/null
+          fi
+
+      - name: Publish or update the single rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.assets.outputs.version }}
+          SHA256: ${{ steps.assets.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          notes="${RUNNER_TEMP}/rolling-notes.md"
+          {
+            printf 'Rolling build of `main`, published only after the full verify matrix passed.\n\n'
+            printf '- Version: `%s`\n' "${VERSION}"
+            printf '- Commit: %s\n' "${GITHUB_SHA}"
+            printf '- SHA-256: `%s`\n' "${SHA256}"
+            printf '\nPermanent download: '
+            printf 'https://github.com/%s/releases/latest/download/veloauth-latest.jar\n' \
+              "${GITHUB_REPOSITORY}"
+            printf '\nThis release is updated in place; see CHANGELOG.md for released changes.\n'
+          } >"${notes}"
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --title "Rolling Latest Build" --notes-file "${notes}" \
+              --prerelease=false --latest
+            gh release upload latest \
+              rolling-assets/veloauth-latest.jar \
+              rolling-assets/veloauth-latest.jar.sha256 --clobber
+          else
+            gh release create latest --title "Rolling Latest Build" --notes-file "${notes}" \
+              --prerelease=false --latest \
+              rolling-assets/veloauth-latest.jar \
+              rolling-assets/veloauth-latest.jar.sha256
+          fi
+
+      - name: Prove exactly one release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          count="$(gh release list --limit 100 --json tagName --jq 'length')"
+          if [[ "${count}" != 1 ]]; then
+            echo "Expected exactly one release, found ${count}" >&2
+            gh release list --limit 100 >&2
+            exit 1
+          fi
+
+  # Dormant. The versioned, attested release path is retained but is only reachable by pushing a
+  # `v*` tag, which the rolling model above does not do. Note that its "Require immutable-release
+  # policy" step will fail while the repository setting is disabled — immutability had to be turned
+  # off so the rolling release can reuse the `latest` tag name. Re-enabling the versioned path means
+  # turning immutable releases back on and retiring the rolling job first.
   candidate:
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
