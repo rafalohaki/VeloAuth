@@ -138,7 +138,42 @@ if template.count("{{VERSION}}") == 0 or template.count("{{CHANGELOG}}") != 1:
     print("Release-note template must contain VERSION and exactly one CHANGELOG placeholder", file=sys.stderr)
     raise SystemExit(1)
 
-rendered = template.replace("{{VERSION}}", version).replace("{{CHANGELOG}}", changelog)
+
+def released_section(text, released_version):
+    """Returns the Keep-a-Changelog body for exactly one version.
+
+    Substituting the whole changelog would put the entire project history — and the
+    previous version's heading — into every release's notes. The section runs from its
+    own `## [x.y.z]` heading to the next `## ` heading or end of file; the heading is
+    dropped because the template already titles the notes with the version.
+    """
+    heading = re.compile(r"^## +\[" + re.escape(released_version) + r"\](?: .*)?$")
+    next_heading = re.compile(r"^## +")
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        if heading.match(line):
+            body = []
+            for candidate in lines[index + 1:]:
+                if next_heading.match(candidate):
+                    break
+                body.append(candidate)
+            return "\n".join(body).strip("\n")
+    return None
+
+
+section = released_section(changelog, version)
+if section is None:
+    print(
+        f"Changelog has no '## [{version}]' section; "
+        "document the release before tagging it",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if not section.strip():
+    print(f"Changelog section for {version} is empty", file=sys.stderr)
+    raise SystemExit(1)
+
+rendered = template.replace("{{VERSION}}", version).replace("{{CHANGELOG}}", section)
 if re.search(r"{{[^{}]+}}", rendered):
     print("Rendered release notes contain an unresolved placeholder", file=sys.stderr)
     raise SystemExit(1)

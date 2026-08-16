@@ -2,6 +2,30 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
+## [1.5.1] - 2026-08-16
+
+### Fixed
+
+- `security.ip-limit-registrations: 0` no longer refuses every registration. The value is the
+  documented way to disable the per-IP cap, but the limit check compared `count >= limit`, which is
+  always true at `0`, so disabling the feature silently bricked `/register` for every player.
+  Non-positive values now disable the cap, matching the reading already used elsewhere in the
+  registration flow. Positive limits are unchanged and still refuse at the configured threshold.
+
+### Changed
+
+- Release notes now contain only the changelog section for the version being released instead of
+  the entire file, and tagging fails when that section is missing. The newest release is marked as
+  `Latest` on GitHub so `/releases/latest` resolves to a current build.
+- Release tooling derives the project version from `pom.xml` instead of hardcoding it. Version bumps
+  no longer desynchronise the SBOM inventory, the release fixtures or the OSV lockfile name.
+
+### Upgrade notes
+
+- No configuration or database changes. Operators who set `security.ip-limit-registrations: 0` to
+  disable the cap should verify that registration works again after upgrading.
+- A full proxy restart is required, as for every VeloAuth upgrade.
+
 ## [1.5.0] - 2026-08-11
 
 ### Added

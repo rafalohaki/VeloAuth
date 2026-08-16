@@ -531,7 +531,7 @@ jobs:
             --verify-tag \
             --title "VeloAuth ${VERSION}" \
             --notes-file "${RUNNER_TEMP}/veloauth-release-notes.md" \
-            --latest=false
+            --latest=true
 
       - name: Verify immutable published assets byte for byte
         env:

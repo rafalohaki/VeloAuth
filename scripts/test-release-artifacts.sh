@@ -674,7 +674,15 @@ NOTES_CHANGELOG="${TEMP_DIR}/notes-changelog.md"
 NOTES_A="${TEMP_DIR}/notes-a.md"
 NOTES_B="${TEMP_DIR}/notes-b.md"
 printf '# VeloAuth {{VERSION}}\n\n{{CHANGELOG}}\n\nVersion {{VERSION}}\n' >"${NOTES_TEMPLATE}"
-printf '%s\n' '- Fixed one thing.' '- Fixed another thing.' >"${NOTES_CHANGELOG}"
+# Keep-a-Changelog fixture with a neighbouring version, so the assertions below prove the
+# renderer emits exactly one section instead of the whole file.
+{
+  printf '# Changelog\n\n'
+  printf '## [%s] - 2026-08-16\n\n' "${VERSION}"
+  printf '%s\n' '- Fixed one thing.' '- Fixed another thing.'
+  printf '\n## [%s] - 2026-08-11\n\n' "${FOREIGN_VERSION}"
+  printf '%s\n' '- Older release detail that must not leak.'
+} >"${NOTES_CHANGELOG}"
 "${CANDIDATE_VERIFIER}" --render-notes "${NOTES_TEMPLATE}" "${NOTES_CHANGELOG}" \
   "${NOTES_A}" "${VERSION}"
 "${CANDIDATE_VERIFIER}" --render-notes "${NOTES_TEMPLATE}" "${NOTES_CHANGELOG}" \
@@ -685,6 +693,35 @@ if grep -Eq '{{[^{}]+}}' "${NOTES_A}"; then
 fi
 assert_contains "${NOTES_A}" "# VeloAuth ${VERSION}" "release-note version was not rendered"
 assert_contains "${NOTES_A}" "- Fixed another thing." "release changelog was not rendered"
+# Only the released version's section may appear: neither the neighbouring section's body
+# nor any '## [' heading from the changelog belongs in a single release's notes.
+if grep -Fq 'Older release detail that must not leak.' "${NOTES_A}"; then
+  fail "release notes must not include another version's changelog section"
+fi
+if grep -Eq '^## \[' "${NOTES_A}"; then
+  fail "release notes must not repeat changelog version headings"
+fi
+
+# A version with no changelog section must stop the release instead of publishing empty notes.
+UNDOCUMENTED_CHANGELOG="${TEMP_DIR}/undocumented-changelog.md"
+printf '# Changelog\n\n## [%s] - 2026-08-11\n\n- Only the other version is documented.\n' \
+  "${FOREIGN_VERSION}" >"${UNDOCUMENTED_CHANGELOG}"
+run_expect_failure "${TEMP_DIR}/undocumented-notes.out" "${CANDIDATE_VERIFIER}" \
+  --render-notes "${NOTES_TEMPLATE}" "${UNDOCUMENTED_CHANGELOG}" \
+  "${TEMP_DIR}/undocumented-rendered.md" "${VERSION}"
+assert_contains "${TEMP_DIR}/undocumented-notes.out" "has no '## [${VERSION}]' section" \
+  "releasing a version with no changelog section must fail"
+
+# An empty section is as undocumented as a missing one.
+EMPTY_SECTION_CHANGELOG="${TEMP_DIR}/empty-section-changelog.md"
+printf '# Changelog\n\n## [%s] - 2026-08-16\n\n## [%s] - 2026-08-11\n\n- Older.\n' \
+  "${VERSION}" "${FOREIGN_VERSION}" >"${EMPTY_SECTION_CHANGELOG}"
+run_expect_failure "${TEMP_DIR}/empty-section.out" "${CANDIDATE_VERIFIER}" \
+  --render-notes "${NOTES_TEMPLATE}" "${EMPTY_SECTION_CHANGELOG}" \
+  "${TEMP_DIR}/empty-section-rendered.md" "${VERSION}"
+assert_contains "${TEMP_DIR}/empty-section.out" "is empty" \
+  "an empty changelog section must fail"
+
 ACTUAL_NOTES="${TEMP_DIR}/actual-release-notes.md"
 "${CANDIDATE_VERIFIER}" --render-notes "${RELEASE_TEMPLATE}" \
   "${PROJECT_DIR}/CHANGELOG.md" "${ACTUAL_NOTES}" "${VERSION}"
@@ -724,7 +761,7 @@ required = [
     "--signer-workflow",
     "--source-ref",
     "--source-digest",
-    "--latest=false",
+    "--latest=true",
     "EXTERNAL_CANARY_GREEN",
     "java-version: '25.0.4+7.0.LTS'",
     "VELOAUTH_CTD_JAVA25_HOME",
