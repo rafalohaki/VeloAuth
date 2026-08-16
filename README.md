@@ -16,6 +16,10 @@
 
 VeloAuth is a comprehensive authentication system for Velocity proxy that handles all player authorization before they reach your backend servers. It includes a loopback-only embedded limbo and can also keep using an existing external limbo server, while protecting nickname ownership through intelligent conflict resolution.
 
+## Live test server
+
+Want to see VeloAuth in action? **[2b2t.pl](https://2b2t.pl)** runs the plugin in production — join the server to test premium auto-login, offline registration and nickname protection on a live network.
+
 ## Key Features
 
 - 🔒 **Intelligent Nickname Protection** - Premium nicknames are reserved unless already registered by cracked players
