@@ -230,7 +230,7 @@
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>
-            <version>3.1.8</version>
+            <version>3.2.4</version>
         </dependency>
 
         <!-- Velocity 3.5 owns this Configurate/SnakeYAML type universe. -->
