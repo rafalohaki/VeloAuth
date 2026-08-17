@@ -48,7 +48,7 @@
         <mcprotocollib.resolved-version>${mcprotocollib.version}</mcprotocollib.resolved-version>
         <mcprotocollib.sha256>07ec18ba92c8b4041286eeff2470e08257fd1f383881515cba4a0a9bf6fa98c1</mcprotocollib.sha256>
         <!-- Compile/test contract for the Netty API supplied by Velocity at runtime. -->
-        <embedded.netty.version>4.2.15.Final</embedded.netty.version>
+        <embedded.netty.version>4.2.17.Final</embedded.netty.version>
         <!--
           The embedded protocol runtime is downloaded on first use, verified byte-for-byte and
           loaded from VeloAuth's private runtime directory. The coordinate remains a compile-only
