@@ -15,7 +15,8 @@ public enum ResolverConfig {
             HttpURLConnection.HTTP_NOT_FOUND,
             "uuid",
             "username",
-            false
+            false,
+            ResolverConfig.UNKNOWN_REPORTED_LIMIT
     ),
 
     WPME(
@@ -24,7 +25,8 @@ public enum ResolverConfig {
             HttpURLConnection.HTTP_NOT_FOUND,
             "uuid",
             "username",
-            false
+            false,
+            ResolverConfig.UNKNOWN_REPORTED_LIMIT
     ),
 
     /**
@@ -38,8 +40,12 @@ public enum ResolverConfig {
             -1,
             "id",
             "name",
-            true
+            true,
+            200
     );
+
+    /** Sentinel for providers that do not publish a per-minute request limit. */
+    static final int UNKNOWN_REPORTED_LIMIT = 0;
 
     private final String id;
     private final String endpoint;
@@ -47,15 +53,18 @@ public enum ResolverConfig {
     private final String uuidField;
     private final String usernameField;
     private final boolean usesRawUuidFormat;
+    private final int reportedLimitPerMinute;
 
     ResolverConfig(String id, String endpoint, int notFoundResponseCode,
-                   String uuidField, String usernameField, boolean usesRawUuidFormat) {
+                   String uuidField, String usernameField, boolean usesRawUuidFormat,
+                   int reportedLimitPerMinute) {
         this.id = id;
         this.endpoint = endpoint;
         this.notFoundResponseCode = notFoundResponseCode;
         this.uuidField = uuidField;
         this.usernameField = usernameField;
         this.usesRawUuidFormat = usesRawUuidFormat;
+        this.reportedLimitPerMinute = reportedLimitPerMinute;
     }
 
     public String id() {
@@ -80,5 +89,13 @@ public enum ResolverConfig {
 
     public boolean usesRawUuidFormat() {
         return usesRawUuidFormat;
+    }
+
+    /**
+     * Commonly reported per-minute request limit for this provider, or
+     * {@link #UNKNOWN_REPORTED_LIMIT} when the provider does not publish one.
+     */
+    int reportedLimitPerMinute() {
+        return reportedLimitPerMinute;
     }
 }

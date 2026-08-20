@@ -51,9 +51,6 @@ public class PremiumResolverService {
     /** Below this, an upstream ceiling refuses ordinary logins instead of pacing them. */
     private static final int MIN_SANE_REQUESTS_PER_MINUTE = 10;
 
-    /** Commonly reported ceiling for the Mojang profile endpoint, per source IP. */
-    private static final int MOJANG_REPORTED_LIMIT_PER_MINUTE = 200;
-
     /** Resolver ID treated as authoritative for OFFLINE classification. Must match
      *  {@link ResolverConfig#MOJANG}{@code .id()} — that resolver is the single source of
      *  truth for "this name exists / does not exist as a premium account". Other resolvers
@@ -86,20 +83,7 @@ public class PremiumResolverService {
         this.dao = Objects.requireNonNull(premiumUuidDao, "premiumUuidDao");
         this.alertService = alertService;
 
-        if (logger.isInfoEnabled()) {
-            logger.info(PREMIUM_MARKER, "[PremiumResolver] Config - Mojang: {}, Ashcon: {}, Wpme: {}",
-                    rs.isMojangEnabled(),
-                    rs.isAshconEnabled(),
-                    rs.isWpmeEnabled());
-            Settings.ResolverRateLimitSettings limits = rs.getRateLimit();
-            logger.info(PREMIUM_MARKER,
-                    "[PremiumResolver] Upstream request ceiling per minute - Mojang: {}, Ashcon: {}, "
-                            + "Wpme: {} (max wait {}ms, 0 = unlimited)",
-                    limits.getMojangRequestsPerMinute(),
-                    limits.getAshconRequestsPerMinute(),
-                    limits.getWpmeRequestsPerMinute(),
-                    limits.getMaxWaitMillis());
-        }
+        logResolverConfiguration(rs);
 
         this.resolvers = createDefaultResolvers(logger, rs);
 
@@ -132,20 +116,16 @@ public class PremiumResolverService {
         if (!logger.isWarnEnabled()) {
             return;
         }
-        Settings.ResolverRateLimitSettings limits = rs.getRateLimit();
-        warnAboutUpstreamBudget(rs.isMojangEnabled(), ResolverConfig.MOJANG.id(),
-                limits.getMojangRequestsPerMinute(), MOJANG_REPORTED_LIMIT_PER_MINUTE);
-        warnAboutUpstreamBudget(rs.isAshconEnabled(), ResolverConfig.ASHCON.id(),
-                limits.getAshconRequestsPerMinute(), 0);
-        warnAboutUpstreamBudget(rs.isWpmeEnabled(), ResolverConfig.WPME.id(),
-                limits.getWpmeRequestsPerMinute(), 0);
+        for (ResolverConfig config : ResolverConfig.values()) {
+            if (isEnabled(config, rs)) {
+                warnAboutUpstreamBudget(config.id(), requestsPerMinute(config, rs),
+                        config.reportedLimitPerMinute());
+            }
+        }
     }
 
-    private void warnAboutUpstreamBudget(boolean resolverEnabled, String resolverId,
-                                         int requestsPerMinute, int reportedProviderLimit) {
-        if (!resolverEnabled) {
-            return;
-        }
+    private void warnAboutUpstreamBudget(String resolverId, int requestsPerMinute,
+                                         int reportedProviderLimit) {
         if (requestsPerMinute == 0) {
             logger.warn(PREMIUM_MARKER,
                     "[PremiumResolver] {} request ceiling disabled — a join wave of new players can "
@@ -154,7 +134,8 @@ public class PremiumResolverService {
             logger.warn(PREMIUM_MARKER,
                     "[PremiumResolver] {} ceiling of {}/min is very low — ordinary logins will be "
                             + "refused rather than paced", resolverId, requestsPerMinute);
-        } else if (reportedProviderLimit > 0 && requestsPerMinute > reportedProviderLimit) {
+        } else if (reportedProviderLimit != ResolverConfig.UNKNOWN_REPORTED_LIMIT
+                && requestsPerMinute > reportedProviderLimit) {
             logger.warn(PREMIUM_MARKER,
                     "[PremiumResolver] {} ceiling of {}/min exceeds the commonly reported {}/min "
                             + "limit, and an idle burst adds up to 25% more",
@@ -233,22 +214,53 @@ public class PremiumResolverService {
 
     private static List<PremiumResolver> createDefaultResolvers(Logger logger, PremiumResolverSettings settings) {
         int timeoutMs = Math.max(100, settings.getRequestTimeoutMs());
-        Settings.ResolverRateLimitSettings limits = settings.getRateLimit();
-        int maxWaitMs = limits.getMaxWaitMillis();
+        int maxWaitMs = settings.getRateLimit().getMaxWaitMillis();
         List<PremiumResolver> resolverList = new ArrayList<>();
-        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isMojangEnabled(), timeoutMs,
-                ResolverConfig.MOJANG,
-                UpstreamRateLimiter.perMinute(
-                        ResolverConfig.MOJANG.id(), limits.getMojangRequestsPerMinute(), maxWaitMs)));
-        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isAshconEnabled(), timeoutMs,
-                ResolverConfig.ASHCON,
-                UpstreamRateLimiter.perMinute(
-                        ResolverConfig.ASHCON.id(), limits.getAshconRequestsPerMinute(), maxWaitMs)));
-        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isWpmeEnabled(), timeoutMs,
-                ResolverConfig.WPME,
-                UpstreamRateLimiter.perMinute(
-                        ResolverConfig.WPME.id(), limits.getWpmeRequestsPerMinute(), maxWaitMs)));
+        for (ResolverConfig config : ResolverConfig.values()) {
+            resolverList.add(new ConfigurablePremiumResolver(
+                    logger, isEnabled(config, settings), timeoutMs, config,
+                    UpstreamRateLimiter.perMinute(
+                            config.id(), requestsPerMinute(config, settings), maxWaitMs)));
+        }
         return Collections.unmodifiableList(resolverList);
+    }
+
+    /**
+     * Maps a resolver to its {@code *-enabled} flag. Keeping the mapping in one switch means a
+     * new resolver is a compile error here rather than a silently unconfigured one.
+     */
+    private static boolean isEnabled(ResolverConfig config, PremiumResolverSettings settings) {
+        return switch (config) {
+            case MOJANG -> settings.isMojangEnabled();
+            case ASHCON -> settings.isAshconEnabled();
+            case WPME -> settings.isWpmeEnabled();
+        };
+    }
+
+    /** Maps a resolver to its {@code *-requests-per-minute} ceiling. */
+    private static int requestsPerMinute(ResolverConfig config, PremiumResolverSettings settings) {
+        Settings.ResolverRateLimitSettings limits = settings.getRateLimit();
+        return switch (config) {
+            case MOJANG -> limits.getMojangRequestsPerMinute();
+            case ASHCON -> limits.getAshconRequestsPerMinute();
+            case WPME -> limits.getWpmeRequestsPerMinute();
+        };
+    }
+
+    private void logResolverConfiguration(PremiumResolverSettings rs) {
+        if (!logger.isInfoEnabled()) {
+            return;
+        }
+        logger.info(PREMIUM_MARKER, "[PremiumResolver] Config - Mojang: {}, Ashcon: {}, Wpme: {}",
+                rs.isMojangEnabled(), rs.isAshconEnabled(), rs.isWpmeEnabled());
+        Settings.ResolverRateLimitSettings limits = rs.getRateLimit();
+        logger.info(PREMIUM_MARKER,
+                "[PremiumResolver] Upstream request ceiling per minute - Mojang: {}, Ashcon: {}, "
+                        + "Wpme: {} (max wait {}ms, 0 = unlimited)",
+                limits.getMojangRequestsPerMinute(),
+                limits.getAshconRequestsPerMinute(),
+                limits.getWpmeRequestsPerMinute(),
+                limits.getMaxWaitMillis());
     }
 
     /**

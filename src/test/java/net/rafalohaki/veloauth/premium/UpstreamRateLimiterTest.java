@@ -117,7 +117,6 @@ class UpstreamRateLimiterTest {
         UpstreamRateLimiter limiter = new UpstreamRateLimiter(
                 "mojang", 0, 0, clockNanos::get, nanos -> true);
 
-        assertFalse(limiter.enabled());
         for (int i = 0; i < 1000; i++) {
             assertTrue(limiter.tryAcquire(true), "A disabled ceiling must never refuse");
         }

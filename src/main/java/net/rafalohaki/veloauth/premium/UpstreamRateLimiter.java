@@ -88,10 +88,6 @@ final class UpstreamRateLimiter {
         this.nextPermitNanos = nanoClock.getAsLong() - this.burstNanos;
     }
 
-    boolean enabled() {
-        return intervalNanos > 0L;
-    }
-
     /**
      * Claims budget for one outbound request.
      * <p>
