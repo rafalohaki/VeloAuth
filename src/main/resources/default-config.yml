@@ -260,6 +260,24 @@ premium:
     # Maximum distinct cold lookups executing at once. Concurrent requests for
     # the same nickname share one lookup and consume only one global slot.
     max-concurrent-lookups: 32
+    # Ceiling on outbound requests VeloAuth sends to each API, per minute.
+    # The limits above bound lookups; these bound traffic. One cold lookup asks
+    # every enabled resolver and each retry costs another request, so a join wave
+    # produces a multiple of itself upstream — these values are what keeps that
+    # multiple under the provider's limit. Set 0 to disable a ceiling.
+    # Mojang's practical limit is around 200/min per source IP; 120 leaves headroom.
+    # An idle budget banks a quarter of a minute's worth of requests, so a burst can
+    # briefly push a rolling minute to 1.25x the value set here (150 at the default).
+    mojang-requests-per-minute: 120
+    ashcon-requests-per-minute: 60
+    wpme-requests-per-minute: 60
+    # How long a lookup may wait for a free slot before failing closed (0-2000).
+    # Waiting turns a burst into a slightly slower login instead of a kick. Only the
+    # first attempt waits, so a lookup adds this delay at most once — it is spent on
+    # top of request-timeout-ms and counts against Velocity's connection-timeout
+    # (velocity.toml, 5000ms by default), which closes the connection when PreLogin
+    # takes longer. A waiting lookup also keeps holding one max-concurrent-lookups slot.
+    rate-limit-max-wait-ms: 1000
 
 # Floodgate / Bedrock support configuration
 # Must stay aligned with your Floodgate proxy config.

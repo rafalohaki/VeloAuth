@@ -37,7 +37,8 @@ import java.util.regex.Pattern;
  * <p>
  * Cache expiry and eviction are delegated to Caffeine. Cold external work is additionally
  * protected by per-source admission, single-flight nickname deduplication and a global
- * concurrency semaphore.
+ * concurrency semaphore. Those bound how many lookups run; the outbound request rate each
+ * upstream sees is bounded separately by {@link UpstreamRateLimiter}, one per resolver.
  */
 public class PremiumResolverService {
 
@@ -46,6 +47,12 @@ public class PremiumResolverService {
     private static final Marker PREMIUM_MARKER = MarkerFactory.getMarker("PREMIUM");
     private static final int DEFAULT_MAX_LOOKUPS_PER_IP_PER_MINUTE = 30;
     private static final int DEFAULT_MAX_CONCURRENT_LOOKUPS = 32;
+
+    /** Below this, an upstream ceiling refuses ordinary logins instead of pacing them. */
+    private static final int MIN_SANE_REQUESTS_PER_MINUTE = 10;
+
+    /** Commonly reported ceiling for the Mojang profile endpoint, per source IP. */
+    private static final int MOJANG_REPORTED_LIMIT_PER_MINUTE = 200;
 
     /** Resolver ID treated as authoritative for OFFLINE classification. Must match
      *  {@link ResolverConfig#MOJANG}{@code .id()} — that resolver is the single source of
@@ -84,6 +91,14 @@ public class PremiumResolverService {
                     rs.isMojangEnabled(),
                     rs.isAshconEnabled(),
                     rs.isWpmeEnabled());
+            Settings.ResolverRateLimitSettings limits = rs.getRateLimit();
+            logger.info(PREMIUM_MARKER,
+                    "[PremiumResolver] Upstream request ceiling per minute - Mojang: {}, Ashcon: {}, "
+                            + "Wpme: {} (max wait {}ms, 0 = unlimited)",
+                    limits.getMojangRequestsPerMinute(),
+                    limits.getAshconRequestsPerMinute(),
+                    limits.getWpmeRequestsPerMinute(),
+                    limits.getMaxWaitMillis());
         }
 
         this.resolvers = createDefaultResolvers(logger, rs);
@@ -104,6 +119,46 @@ public class PremiumResolverService {
         }
         if (missTtlMillis == 0 && logger.isWarnEnabled()) {
             logger.warn(PREMIUM_MARKER, "[PremiumResolver] missTtlMinutes = 0 — miss cache disabled, every unknown player will query API!");
+        }
+        warnAboutRiskyUpstreamBudgets(rs);
+    }
+
+    /**
+     * Flags request ceilings that are more likely to be a mistake than a choice. Throttling
+     * misconfigured downwards denies legitimate players, and misconfigured upwards defeats the
+     * point of having a ceiling — both are silent until someone reads the logs.
+     */
+    private void warnAboutRiskyUpstreamBudgets(PremiumResolverSettings rs) {
+        if (!logger.isWarnEnabled()) {
+            return;
+        }
+        Settings.ResolverRateLimitSettings limits = rs.getRateLimit();
+        warnAboutUpstreamBudget(rs.isMojangEnabled(), ResolverConfig.MOJANG.id(),
+                limits.getMojangRequestsPerMinute(), MOJANG_REPORTED_LIMIT_PER_MINUTE);
+        warnAboutUpstreamBudget(rs.isAshconEnabled(), ResolverConfig.ASHCON.id(),
+                limits.getAshconRequestsPerMinute(), 0);
+        warnAboutUpstreamBudget(rs.isWpmeEnabled(), ResolverConfig.WPME.id(),
+                limits.getWpmeRequestsPerMinute(), 0);
+    }
+
+    private void warnAboutUpstreamBudget(boolean resolverEnabled, String resolverId,
+                                         int requestsPerMinute, int reportedProviderLimit) {
+        if (!resolverEnabled) {
+            return;
+        }
+        if (requestsPerMinute == 0) {
+            logger.warn(PREMIUM_MARKER,
+                    "[PremiumResolver] {} request ceiling disabled — a join wave of new players can "
+                            + "exceed the provider's own limit", resolverId);
+        } else if (requestsPerMinute < MIN_SANE_REQUESTS_PER_MINUTE) {
+            logger.warn(PREMIUM_MARKER,
+                    "[PremiumResolver] {} ceiling of {}/min is very low — ordinary logins will be "
+                            + "refused rather than paced", resolverId, requestsPerMinute);
+        } else if (reportedProviderLimit > 0 && requestsPerMinute > reportedProviderLimit) {
+            logger.warn(PREMIUM_MARKER,
+                    "[PremiumResolver] {} ceiling of {}/min exceeds the commonly reported {}/min "
+                            + "limit, and an idle burst adds up to 25% more",
+                    resolverId, requestsPerMinute, reportedProviderLimit);
         }
     }
 
@@ -178,10 +233,21 @@ public class PremiumResolverService {
 
     private static List<PremiumResolver> createDefaultResolvers(Logger logger, PremiumResolverSettings settings) {
         int timeoutMs = Math.max(100, settings.getRequestTimeoutMs());
+        Settings.ResolverRateLimitSettings limits = settings.getRateLimit();
+        int maxWaitMs = limits.getMaxWaitMillis();
         List<PremiumResolver> resolverList = new ArrayList<>();
-        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isMojangEnabled(), timeoutMs, ResolverConfig.MOJANG));
-        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isAshconEnabled(), timeoutMs, ResolverConfig.ASHCON));
-        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isWpmeEnabled(), timeoutMs, ResolverConfig.WPME));
+        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isMojangEnabled(), timeoutMs,
+                ResolverConfig.MOJANG,
+                UpstreamRateLimiter.perMinute(
+                        ResolverConfig.MOJANG.id(), limits.getMojangRequestsPerMinute(), maxWaitMs)));
+        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isAshconEnabled(), timeoutMs,
+                ResolverConfig.ASHCON,
+                UpstreamRateLimiter.perMinute(
+                        ResolverConfig.ASHCON.id(), limits.getAshconRequestsPerMinute(), maxWaitMs)));
+        resolverList.add(new ConfigurablePremiumResolver(logger, settings.isWpmeEnabled(), timeoutMs,
+                ResolverConfig.WPME,
+                UpstreamRateLimiter.perMinute(
+                        ResolverConfig.WPME.id(), limits.getWpmeRequestsPerMinute(), maxWaitMs)));
         return Collections.unmodifiableList(resolverList);
     }
 

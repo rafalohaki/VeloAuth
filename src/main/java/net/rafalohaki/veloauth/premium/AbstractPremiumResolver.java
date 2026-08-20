@@ -18,11 +18,14 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
     private final Logger logger;
     private final boolean enabled;
     private final int timeoutMs;
+    private final UpstreamRateLimiter rateLimiter;
 
-    protected AbstractPremiumResolver(Logger logger, boolean enabled, int timeoutMs) {
+    protected AbstractPremiumResolver(Logger logger, boolean enabled, int timeoutMs,
+                                      UpstreamRateLimiter rateLimiter) {
         this.logger = Objects.requireNonNull(logger, "logger");
         this.enabled = enabled;
         this.timeoutMs = timeoutMs;
+        this.rateLimiter = Objects.requireNonNull(rateLimiter, "rateLimiter");
     }
 
     @Override
@@ -59,6 +62,13 @@ abstract class AbstractPremiumResolver implements PremiumResolver {
     }
 
     private PremiumResolution tryResolveAttempt(String username, int attempt, int maxRetries) {
+        // Budget is charged per attempt, so a retry storm cannot outrun the upstream ceiling.
+        // A refusal is terminal: retrying would only spend another caller's wait budget on an
+        // upstream that is already saturated.
+        if (!rateLimiter.tryAcquire(attempt == 0)) {
+            return PremiumResolution.unknown(id(), "upstream rate limit");
+        }
+
         try {
             HttpJsonClient.HttpJsonResponse response = HttpJsonClient.get(getEndpoint(), username, timeoutMs);
             PremiumResolution result = resolveFromResponse(response, username);

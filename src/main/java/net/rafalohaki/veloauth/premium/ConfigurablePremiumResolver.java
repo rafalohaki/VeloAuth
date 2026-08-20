@@ -12,8 +12,9 @@ class ConfigurablePremiumResolver extends AbstractPremiumResolver {
 
     private final ResolverConfig config;
 
-    ConfigurablePremiumResolver(Logger logger, boolean enabled, int timeoutMs, ResolverConfig config) {
-        super(logger, enabled, timeoutMs);
+    ConfigurablePremiumResolver(Logger logger, boolean enabled, int timeoutMs, ResolverConfig config,
+                                UpstreamRateLimiter rateLimiter) {
+        super(logger, enabled, timeoutMs, rateLimiter);
         this.config = config;
     }
 

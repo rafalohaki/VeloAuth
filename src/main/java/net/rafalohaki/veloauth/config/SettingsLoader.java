@@ -371,12 +371,31 @@ final class SettingsLoader {
                         "max-lookups-per-ip-per-minute",
                         target.getMaxLookupsPerIpPerMinute()),
                 YamlParserUtils.getInt(
-                        resolver, "max-concurrent-lookups", target.getMaxConcurrentLookups()));
+                        resolver, "max-concurrent-lookups", target.getMaxConcurrentLookups()),
+                readResolverRateLimits(resolver, target.getRateLimit()));
         state.premiumSettings = new Settings.PremiumSettings(
                 premium.checkEnabled(),
                 premium.allowCrackedOnPremiumNicks(),
                 premium.bypassAuthServer(),
                 configured);
+    }
+
+    private static Settings.ResolverRateLimitSettings readResolverRateLimits(
+            Map<String, Object> resolver,
+            Settings.ResolverRateLimitSettings target) {
+        return new Settings.ResolverRateLimitSettings(
+                YamlParserUtils.getInt(
+                        resolver,
+                        "mojang-requests-per-minute",
+                        target.getMojangRequestsPerMinute()),
+                YamlParserUtils.getInt(
+                        resolver,
+                        "ashcon-requests-per-minute",
+                        target.getAshconRequestsPerMinute()),
+                YamlParserUtils.getInt(
+                        resolver, "wpme-requests-per-minute", target.getWpmeRequestsPerMinute()),
+                YamlParserUtils.getInt(
+                        resolver, "rate-limit-max-wait-ms", target.getMaxWaitMillis()));
     }
 
     private static void loadAlertSettings(Map<String, Object> config, Builder state) {

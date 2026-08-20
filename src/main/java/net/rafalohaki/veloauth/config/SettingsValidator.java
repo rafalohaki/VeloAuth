@@ -204,6 +204,14 @@ public final class SettingsValidator {
         }
     }
 
+    /**
+     * Upper bound on how long a lookup may wait for upstream budget before failing closed.
+     * Velocity's own {@code connection-timeout} (5s by default) covers the whole PreLogin
+     * phase, and the resolver still has to spend {@code request-timeout-ms} on the HTTP call
+     * afterwards, so the wait may only claim a fraction of that budget.
+     */
+    private static final int MAX_RESOLVER_RATE_LIMIT_WAIT_MS = 2000;
+
     private static final int MIN_BCRYPT_COST = 10;
     private static final int MAX_BCRYPT_COST = 31;
 
@@ -274,6 +282,32 @@ public final class SettingsValidator {
         if (resolver.getMaxConcurrentLookups() <= 0) {
             throw new IllegalArgumentException(
                     "Premium resolver: max-concurrent-lookups must be > 0");
+        }
+        validateResolverRateLimits(resolver.getRateLimit());
+    }
+
+    private static void validateResolverRateLimits(Settings.ResolverRateLimitSettings rateLimit) {
+        requireNonNegativeRequestBudget(
+                "mojang-requests-per-minute", rateLimit.getMojangRequestsPerMinute());
+        requireNonNegativeRequestBudget(
+                "ashcon-requests-per-minute", rateLimit.getAshconRequestsPerMinute());
+        requireNonNegativeRequestBudget(
+                "wpme-requests-per-minute", rateLimit.getWpmeRequestsPerMinute());
+
+        int maxWaitMillis = rateLimit.getMaxWaitMillis();
+        if (maxWaitMillis < 0 || maxWaitMillis > MAX_RESOLVER_RATE_LIMIT_WAIT_MS) {
+            throw new IllegalArgumentException(
+                    "Premium resolver: rate-limit-max-wait-ms must be between 0 and "
+                            + MAX_RESOLVER_RATE_LIMIT_WAIT_MS
+                            + " — a longer wait holds a global lookup slot and risks Velocity's"
+                            + " connection-timeout closing the connection mid-login");
+        }
+    }
+
+    private static void requireNonNegativeRequestBudget(String key, int requestsPerMinute) {
+        if (requestsPerMinute < 0) {
+            throw new IllegalArgumentException(
+                    "Premium resolver: " + key + " must be >= 0 (0 disables the ceiling)");
         }
     }
 

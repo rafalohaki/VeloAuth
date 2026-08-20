@@ -465,9 +465,11 @@ public class Settings {
             boolean caseSensitive,
             int memoryCacheMaxSize,
             int maxLookupsPerIpPerMinute,
-            int maxConcurrentLookups) {
+            int maxConcurrentLookups,
+            ResolverRateLimitSettings rateLimit) {
         public PremiumResolverSettings() {
-            this(true, true, false, 3000, 30, 10, true, 10_000, 30, 32);
+            this(true, true, false, 3000, 30, 10, true, 10_000, 30, 32,
+                    new ResolverRateLimitSettings());
         }
         public boolean isMojangEnabled() { return mojangEnabled; }
         public boolean isAshconEnabled() { return ashconEnabled; }
@@ -479,6 +481,29 @@ public class Settings {
         public int getMemoryCacheMaxSize() { return memoryCacheMaxSize; }
         public int getMaxLookupsPerIpPerMinute() { return maxLookupsPerIpPerMinute; }
         public int getMaxConcurrentLookups() { return maxConcurrentLookups; }
+        public ResolverRateLimitSettings getRateLimit() { return rateLimit; }
+    }
+
+    /**
+     * Ceiling on outbound HTTP requests to each premium API, mapped from premium.resolver.
+     * <p>
+     * Independent of how many players connect: the per-IP admission budget and the
+     * concurrency semaphore bound lookups, while these values bound the request rate a
+     * lookup wave can produce. Retries are charged against the same budget. A value of
+     * {@code 0} disables the ceiling for that upstream.
+     */
+    public record ResolverRateLimitSettings(
+            int mojangRequestsPerMinute,
+            int ashconRequestsPerMinute,
+            int wpmeRequestsPerMinute,
+            int maxWaitMillis) {
+        public ResolverRateLimitSettings() {
+            this(120, 60, 60, 1000);
+        }
+        public int getMojangRequestsPerMinute() { return mojangRequestsPerMinute; }
+        public int getAshconRequestsPerMinute() { return ashconRequestsPerMinute; }
+        public int getWpmeRequestsPerMinute() { return wpmeRequestsPerMinute; }
+        public int getMaxWaitMillis() { return maxWaitMillis; }
     }
 
     /**

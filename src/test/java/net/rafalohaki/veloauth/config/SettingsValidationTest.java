@@ -430,6 +430,74 @@ class SettingsValidationTest {
                 "Generated default config should not send TOTP enrollment secrets externally by default");
         assertTrue(generatedConfig.contains("max-lookups-per-ip-per-minute: 30"));
         assertTrue(generatedConfig.contains("max-concurrent-lookups: 32"));
+        assertTrue(generatedConfig.contains("mojang-requests-per-minute: 120"));
+        assertTrue(generatedConfig.contains("ashcon-requests-per-minute: 60"));
+        assertTrue(generatedConfig.contains("wpme-requests-per-minute: 60"));
+        assertTrue(generatedConfig.contains("rate-limit-max-wait-ms: 1000"));
+    }
+
+    @ParameterizedTest(name = "shouldReject upstream request budget {0}={1}")
+    @CsvSource({
+        "mojang-requests-per-minute, -1",
+        "ashcon-requests-per-minute, -1",
+        "wpme-requests-per-minute, -1",
+        "rate-limit-max-wait-ms, -1",
+        "rate-limit-max-wait-ms, 2001"
+    })
+    void shouldRejectInvalidUpstreamRequestBudgets(String key, int value) {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                premium:
+                  resolver:
+                    mojang-enabled: true
+                    %s: %d
+                """.formatted(key, value));
+
+        assertFalse(settings.load());
+    }
+
+    @Test
+    void changingUpstreamRequestBudgetOnReloadIsRestartRequiredAndNotHotApplied() {
+        Path configFile = tempDir.resolve("config.yml");
+        writeConfigFile(configFile, """
+                premium:
+                  resolver:
+                    mojang-requests-per-minute: 120
+                """);
+        assertTrue(settings.load());
+        assertEquals(120,
+                settings.getPremiumResolverSettings().getRateLimit().getMojangRequestsPerMinute());
+
+        writeConfigFile(configFile, """
+                premium:
+                  resolver:
+                    mojang-requests-per-minute: 60
+                """);
+        assertTrue(settings.load());
+
+        assertEquals(120,
+                settings.getPremiumResolverSettings().getRateLimit().getMojangRequestsPerMinute(),
+                "Resolvers are built once at startup, so the live ceiling must not change on reload");
+        assertTrue(settings.getPendingRestartChanges().contains("premium-resolver"),
+                "A changed ceiling must be reported as restart-required");
+    }
+
+    @Test
+    void shouldLoadUpstreamRequestBudgetsIncludingDisabledCeiling() {
+        writeConfigFile(tempDir.resolve("config.yml"), """
+                premium:
+                  resolver:
+                    mojang-requests-per-minute: 200
+                    ashcon-requests-per-minute: 0
+                    rate-limit-max-wait-ms: 250
+                """);
+
+        assertTrue(settings.load());
+        Settings.ResolverRateLimitSettings rateLimit =
+                settings.getPremiumResolverSettings().getRateLimit();
+        assertEquals(200, rateLimit.getMojangRequestsPerMinute());
+        assertEquals(0, rateLimit.getAshconRequestsPerMinute(), "0 is the documented way to disable a ceiling");
+        assertEquals(60, rateLimit.getWpmeRequestsPerMinute(), "Unset keys keep their default");
+        assertEquals(250, rateLimit.getMaxWaitMillis());
     }
 
     @ParameterizedTest(name = "shouldReject premium resolver limit {0}={1}")

@@ -11,6 +11,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.slf4j.Logger;
+import org.slf4j.Marker;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -27,6 +28,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -78,8 +81,44 @@ class PremiumResolverServiceTest {
         when(resolverSettings.getHitTtlMinutes()).thenReturn(30);
         when(resolverSettings.getMissTtlMinutes()).thenReturn(10);
         when(resolverSettings.isCaseSensitive()).thenReturn(true);
+        when(resolverSettings.getRateLimit()).thenReturn(new Settings.ResolverRateLimitSettings());
 
         service = new PremiumResolverService(logger, settings, dao);
+    }
+
+    @Test
+    void constructor_disabledUpstreamCeiling_warnsOperator() {
+        when(resolverSettings.getRateLimit())
+                .thenReturn(new Settings.ResolverRateLimitSettings(0, 60, 60, 1000));
+        when(logger.isWarnEnabled()).thenReturn(true);
+
+        service = new PremiumResolverService(logger, settings, dao);
+
+        verify(logger).warn(any(Marker.class),
+                contains("request ceiling disabled"), eq("mojang"));
+    }
+
+    @Test
+    void constructor_ceilingAboveProviderLimit_warnsOperator() {
+        when(resolverSettings.getRateLimit())
+                .thenReturn(new Settings.ResolverRateLimitSettings(500, 60, 60, 1000));
+        when(logger.isWarnEnabled()).thenReturn(true);
+
+        service = new PremiumResolverService(logger, settings, dao);
+
+        verify(logger).warn(any(Marker.class),
+                contains("exceeds the commonly reported"), eq("mojang"), eq(500), eq(200));
+    }
+
+    @Test
+    void constructor_ceilingTooLowToPace_warnsOperator() {
+        when(resolverSettings.getRateLimit())
+                .thenReturn(new Settings.ResolverRateLimitSettings(2, 60, 60, 1000));
+        when(logger.isWarnEnabled()).thenReturn(true);
+
+        service = new PremiumResolverService(logger, settings, dao);
+
+        verify(logger).warn(any(Marker.class), contains("very low"), eq("mojang"), eq(2));
     }
 
     @Test

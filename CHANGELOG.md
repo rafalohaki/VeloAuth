@@ -2,6 +2,39 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
+## [1.6.0] - Unreleased
+
+### Added
+
+- Per-upstream ceiling on outbound premium API traffic: `premium.resolver.mojang-requests-per-minute`
+  (default 120), `ashcon-requests-per-minute` (60), `wpme-requests-per-minute` (60) and
+  `rate-limit-max-wait-ms` (1000). The existing limits bound how many *lookups* run;
+  these bound how many *requests* those lookups send. One cold lookup asks every enabled
+  resolver and each retry costs another request, so a join wave previously produced a
+  multiple of itself upstream with nothing capping the rate — enough to cross Mojang's
+  limit, whose 429 responses were then retried, deepening the block until every unverified
+  player was refused. A lookup that finds the budget spent waits up to
+  `rate-limit-max-wait-ms` (max 2000) for a slot and is otherwise refused, which keeps a
+  burst to a slightly slower login for some players instead of a proxy-wide outage. Only
+  the first attempt waits, so the delay lands at most once per lookup and stays clear of
+  Velocity's `connection-timeout`. Set a budget to `0` to disable that upstream's ceiling.
+
+- Startup warnings for request ceilings that are likelier to be a mistake than a choice: a
+  disabled ceiling on an enabled resolver, a ceiling too low to pace ordinary logins, and a
+  Mojang ceiling above the commonly reported per-IP limit.
+
+### Upgrade notes
+
+- No database changes. The new keys are written into freshly generated configs; existing
+  `config.yml` files keep working and take the defaults above.
+- An idle budget banks a quarter of a minute's worth of requests, so a burst can briefly
+  push a rolling minute to 1.25x the configured value (150 at the default 120).
+- Servers that legitimately exceed 120 Mojang lookups per minute — several hundred *new*
+  (unregistered) players joining per minute — should raise `mojang-requests-per-minute`
+  only if their outbound IP has the headroom. Returning players do not consume the budget:
+  a player with an AUTH row never reaches the resolver.
+- Restart-required, like every resolver setting and every VeloAuth upgrade.
+
 ## [1.5.1] - 2026-08-16
 
 ### Fixed
