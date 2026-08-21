@@ -21,6 +21,7 @@ import org.slf4j.MarkerFactory;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -349,6 +350,9 @@ class TwoFactorCommand implements SimpleCommand {
     private boolean saveTotpChange(
             Player player, RegisteredPlayer dbPlayer, String operationName,
             ConnectionLifecycleRegistry.Operation operation) {
+        // Both callers sit behind loadAuthorizedPlayerOrNull's null gate; the requireNonNull
+        // states that contract where the dereferences happen instead of two methods away.
+        Objects.requireNonNull(dbPlayer, "dbPlayer");
         var saveResult = ctx.databaseManager().savePlayer(dbPlayer).join();
         if (!ctx.isConnectionCurrent(operation)) {
             return false;
