@@ -63,6 +63,8 @@ class TwoFactorCommand implements SimpleCommand {
      * secret + otpauth URI for manual entry).
      */
     private static final String QR_LINK_URL = "https://qr.autarch.workers.dev/";
+    private static final String SUBCOMMAND_SETUP = "setup";
+    private static final String SUBCOMMAND_DISABLE = "disable";
 
     private final CommandContext ctx;
 
@@ -106,9 +108,9 @@ class TwoFactorCommand implements SimpleCommand {
 
         String sub = args[0].toLowerCase(java.util.Locale.ROOT);
         switch (sub) {
-            case "setup" -> processSetup(player, operation);
+            case SUBCOMMAND_SETUP -> processSetup(player, operation);
             case "verify" -> processVerify(player, args, operation);
-            case "disable" -> processDisable(player, args, operation);
+            case SUBCOMMAND_DISABLE -> processDisable(player, args, operation);
             case "qr" -> processQr(player, operation);
             case "status" -> processStatus(player, operation);
             default -> sendIfCurrent(operation, () -> player.sendMessage(
@@ -119,7 +121,7 @@ class TwoFactorCommand implements SimpleCommand {
     @Override
     public List<String> suggest(Invocation invocation) {
         if (invocation.arguments().length <= 1) {
-            return List.of("setup", "verify", "disable", "qr", "status");
+            return List.of(SUBCOMMAND_SETUP, "verify", SUBCOMMAND_DISABLE, "qr", "status");
         }
         return List.of();
     }
@@ -240,7 +242,7 @@ class TwoFactorCommand implements SimpleCommand {
         }
         long matchedWindow = ctx.totpService().matchedWindow(pending.newSecret(), code);
         if (!claimTotpWindow(player, dbPlayer.getNickname(), matchedWindow,
-                "setup", ctx.messages().component("2fa.verify.wrong_code", NamedTextColor.RED),
+                SUBCOMMAND_SETUP, ctx.messages().component("2fa.verify.wrong_code", NamedTextColor.RED),
                 operation)) {
             return;
         }
@@ -323,7 +325,7 @@ class TwoFactorCommand implements SimpleCommand {
         }
         long matchedWindow = ctx.totpService().matchedWindow(dbPlayer.getTotpToken(), code);
         if (!claimTotpWindow(player, dbPlayer.getNickname(), matchedWindow,
-                "disable", ctx.messages().component("2fa.disable.wrong_code", NamedTextColor.RED),
+                SUBCOMMAND_DISABLE, ctx.messages().component("2fa.disable.wrong_code", NamedTextColor.RED),
                 operation)) {
             return;
         }

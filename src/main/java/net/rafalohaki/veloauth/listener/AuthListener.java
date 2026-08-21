@@ -78,6 +78,7 @@ public class AuthListener {
     private static final Marker AUTH_MARKER = MarkerFactory.getMarker("AUTH");
     private static final Marker SECURITY_MARKER = MarkerFactory.getMarker("SECURITY");
     private static final Marker PREMIUM_MARKER = MarkerFactory.getMarker("PREMIUM");
+    private static final String MSG_CONNECTION_ERROR_DATABASE = "connection.error.database";
 
     // Guard against duplicate concurrent PreLogin events from the same (username|ip) pair.
     // Each entry retains the owning connection so a reconnect can replace an abandoned attempt.
@@ -437,7 +438,7 @@ public class AuthListener {
                             "[ASYNC] Error during premium detection for {} - denying login for safety",
                             username, throwable);
                     event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                            messages.component("connection.error.database", NamedTextColor.RED)));
+                            messages.component(MSG_CONNECTION_ERROR_DATABASE, NamedTextColor.RED)));
                     return null;
                 });
     }
@@ -491,7 +492,7 @@ public class AuthListener {
             logger.warn("[SECURITY] Denying premium player {} - DB error would corrupt UUID in offline mode",
                     username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    messages.component("connection.error.database", NamedTextColor.RED)));
+                    messages.component(MSG_CONNECTION_ERROR_DATABASE, NamedTextColor.RED)));
         } else {
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
         }
@@ -637,7 +638,7 @@ public class AuthListener {
                     "Denying {} because the Mojang profile could not be safely bound to AUTH.UUID",
                     playerName);
             event.setResult(ComponentResult.denied(
-                    messages.component("connection.error.database", NamedTextColor.RED)));
+                    messages.component(MSG_CONNECTION_ERROR_DATABASE, NamedTextColor.RED)));
             return;
         }
 

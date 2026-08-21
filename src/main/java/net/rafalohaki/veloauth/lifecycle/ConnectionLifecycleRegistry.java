@@ -21,6 +21,7 @@ import java.util.function.Predicate;
 public final class ConnectionLifecycleRegistry {
 
     private static final int LOCK_STRIPES = 256;
+    private static final String PLAYER_PARAM = "player";
 
     private final ConcurrentMap<UUID, ConnectionState> connections = new ConcurrentHashMap<>();
     private final AtomicLong generation = new AtomicLong();
@@ -32,7 +33,7 @@ public final class ConnectionLifecycleRegistry {
      * cleanup while replacement/retirement for the same UUID is excluded.
      */
     public Operation activate(Player player, Consumer<Player> afterPublication) {
-        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(player, PLAYER_PARAM);
         Objects.requireNonNull(afterPublication, "afterPublication");
         UUID playerId = player.getUniqueId();
         ReentrantLock lock = lockFor(playerId);
@@ -69,7 +70,7 @@ public final class ConnectionLifecycleRegistry {
      * cannot enter a still-owned manager generation after logout wins.
      */
     public boolean markRetired(Player player, Runnable cleanup) {
-        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(player, PLAYER_PARAM);
         Objects.requireNonNull(cleanup, "cleanup");
         return withConnectionState(player, current -> {
             if (current == null || current.owner != player) {
@@ -89,7 +90,7 @@ public final class ConnectionLifecycleRegistry {
      * pre-publication disconnects may still run cleanup, but only while no replacement is present.
      */
     public boolean retire(Player player, boolean allowUnowned, Runnable cleanup) {
-        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(player, PLAYER_PARAM);
         Objects.requireNonNull(cleanup, "cleanup");
         UUID playerId = player.getUniqueId();
         return withConnectionState(player, current -> {
@@ -109,7 +110,7 @@ public final class ConnectionLifecycleRegistry {
 
     /** Captures the current concrete generation, or {@code null} after logout/replacement. */
     public Operation capture(Player player) {
-        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(player, PLAYER_PARAM);
         UUID playerId = player.getUniqueId();
         ReentrantLock lock = lockFor(playerId);
         lock.lock();

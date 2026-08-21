@@ -11,6 +11,8 @@ import java.util.Objects;
 /** Downloads exact, independently pinned ViaVersion artifacts from one allowed repository. */
 final class ViaVersionRepositoryClient {
 
+    private static final String HTTPS_SCHEME = "https";
+
     private static final URI OFFICIAL_REPOSITORY = URI.create(
             "https://repo.viaversion.com/com/viaversion/viaversion-common/");
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
@@ -60,7 +62,7 @@ final class ViaVersionRepositoryClient {
     }
 
     void validateArtifactTransport(URI uri) {
-        if (requireHttps && !"https".equalsIgnoreCase(uri.getScheme())) {
+        if (requireHttps && !HTTPS_SCHEME.equalsIgnoreCase(uri.getScheme())) {
             throw new IllegalStateException("ViaVersion runtime transport must use HTTPS");
         }
         if (!Objects.equals(repository.getScheme(), uri.getScheme())
@@ -77,7 +79,7 @@ final class ViaVersionRepositoryClient {
         if (!repository.isAbsolute() || repository.getHost() == null) {
             throw new IllegalArgumentException("ViaVersion repository must be an absolute URI");
         }
-        if (requireHttps && !"https".equalsIgnoreCase(repository.getScheme())) {
+        if (requireHttps && !HTTPS_SCHEME.equalsIgnoreCase(repository.getScheme())) {
             throw new IllegalArgumentException("ViaVersion runtime repository must use HTTPS");
         }
     }
@@ -86,7 +88,7 @@ final class ViaVersionRepositoryClient {
         if (uri.getPort() >= 0) {
             return uri.getPort();
         }
-        return "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+        return HTTPS_SCHEME.equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
     }
 
     private static URI normalizedRepository(URI repository) {

@@ -51,6 +51,8 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
     private static final int MINIMUM_PROTOCOL = 47; // Minecraft 1.8.x
     private static final String MINIMUM_VERSION_NAME = "1.8";
     private static final String MC_PROTOCOL_CODEC = "codec";
+    private static final String CHANNEL_PARAM = "channel";
+    private static final String VIA_VERSION_SYSTEM_PROPERTY = "ViaVersion";
     private static final String ENCODER_NAME = "veloauth-via-encoder";
     private static final String DECODER_NAME = "veloauth-via-decoder";
     private static final String VELOCITY_FORWARDING_CHANNEL = "velocity:player_info";
@@ -117,7 +119,7 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
 
     /** Adds ViaVersion between MCProtocolLib's frame codecs and packet codec. */
     public void inject(Channel channel) {
-        java.util.Objects.requireNonNull(channel, "channel");
+        java.util.Objects.requireNonNull(channel, CHANNEL_PARAM);
         if (closed.get()) {
             throw new IllegalStateException("Embedded protocol translator is closed");
         }
@@ -157,7 +159,7 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
     /** Sends a login query directly in the negotiated client protocol without exposing the secret. */
     public void sendVelocityForwardingRequest(
             Channel channel, int transactionId, Runnable loginContinuation) {
-        java.util.Objects.requireNonNull(channel, "channel");
+        java.util.Objects.requireNonNull(channel, CHANNEL_PARAM);
         java.util.Objects.requireNonNull(loginContinuation, "loginContinuation");
         UserConnection connection = requireConnection(channel);
         if (connection.getProtocolInfo().protocolVersion().olderThan(ProtocolVersion.v1_13)) {
@@ -196,7 +198,7 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
     }
 
     private UserConnection requireConnection(Channel channel) {
-        java.util.Objects.requireNonNull(channel, "channel");
+        java.util.Objects.requireNonNull(channel, CHANNEL_PARAM);
         UserConnection connection = channel.attr(CONNECTION_KEY).get();
         if (connection == null) {
             throw new IllegalStateException("Embedded protocol connection is not registered");
@@ -218,9 +220,9 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
 
     private static void initializeManager(EmbeddedPlatform platform) {
         SYSTEM_PROPERTY_LOCK.lock();
-        String previous = System.getProperty("ViaVersion");
+        String previous = System.getProperty(VIA_VERSION_SYSTEM_PROPERTY);
         try {
-            System.clearProperty("ViaVersion");
+            System.clearProperty(VIA_VERSION_SYSTEM_PROPERTY);
             ViaManagerImpl.initAndLoad(
                     platform,
                     new EmbeddedInjector(),
@@ -228,9 +230,9 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
                     new EmbeddedPlatformLoader());
         } finally {
             if (previous == null) {
-                System.clearProperty("ViaVersion");
+                System.clearProperty(VIA_VERSION_SYSTEM_PROPERTY);
             } else {
-                System.setProperty("ViaVersion", previous);
+                System.setProperty(VIA_VERSION_SYSTEM_PROPERTY, previous);
             }
             SYSTEM_PROPERTY_LOCK.unlock();
         }

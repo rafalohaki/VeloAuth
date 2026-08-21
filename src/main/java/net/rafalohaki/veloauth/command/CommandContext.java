@@ -36,6 +36,8 @@ class CommandContext {
 
     private static final Marker SECURITY_MARKER = MarkerFactory.getMarker("SECURITY");
     private static final Marker DB_MARKER = MarkerFactory.getMarker("DATABASE");
+    private static final String MSG_BRUTE_FORCE_BLOCKED = "security.brute_force.blocked";
+    private static final String MSG_DATABASE_QUERY_ERROR = "error.database.query";
 
     private final VeloAuth plugin;
     private final DatabaseManager databaseManager;
@@ -168,7 +170,7 @@ class CommandContext {
 
         if (playerAddress != null && authCache.isBlocked(playerAddress, player.getUsername())) {
             messageSender.accept(messages.component(
-                    "security.brute_force.blocked", NamedTextColor.RED));
+                    MSG_BRUTE_FORCE_BLOCKED, NamedTextColor.RED));
             if (logger.isWarnEnabled()) {
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} attempted {}", playerAddress.getHostAddress(), commandName);
             }
@@ -181,7 +183,7 @@ class CommandContext {
             dbResult = databaseManager.findPlayerByNickname(username).join();
         } catch (CompletionException e) {
             logger.error(DB_MARKER, "Database error during {} for player {}", commandName, username, e);
-            messageSender.accept(messages.component("error.database.query", NamedTextColor.RED));
+            messageSender.accept(messages.component(MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
             return null;
         }
 
@@ -206,14 +208,14 @@ class CommandContext {
             result = databaseManager.isPremium(player.getUsername()).join();
         } catch (CompletionException e) {
             logger.error(DB_MARKER, "[DATABASE ERROR] {} failed for {}", operation, player.getUsername(), e);
-            player.sendMessage(messages.component("error.database.query", NamedTextColor.RED));
+            player.sendMessage(messages.component(MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
             return DatabaseManager.DbResult.databaseError("CompletionException: " + e.getMessage());
         }
         if (result.isDatabaseError()) {
             if (logger.isErrorEnabled()) {
                 logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}", operation, player.getUsername(), result.getErrorMessage());
             }
-            player.sendMessage(messages.component("error.database.query", NamedTextColor.RED));
+            player.sendMessage(messages.component(MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
         }
         return result;
     }
@@ -228,7 +230,7 @@ class CommandContext {
             logger.error(DB_MARKER, "[DATABASE ERROR] {} failed for {}", operation, username, e);
             runIfConnectionCurrent(connectionOperation,
                     () -> player.sendMessage(messages.component(
-                            "error.database.query", NamedTextColor.RED)));
+                            MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED)));
             return DatabaseManager.DbResult.databaseError(
                     e.getClass().getSimpleName() + ": " + e.getMessage());
         }
@@ -239,7 +241,7 @@ class CommandContext {
             }
             runIfConnectionCurrent(connectionOperation,
                     () -> player.sendMessage(messages.component(
-                            "error.database.query", NamedTextColor.RED)));
+                            MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED)));
         }
         return result;
     }
@@ -279,14 +281,14 @@ class CommandContext {
      * Sends a database error message to the player.
      */
     void sendDatabaseErrorMessage(Player player) {
-        player.sendMessage(messages.component("error.database.query", NamedTextColor.RED));
+        player.sendMessage(messages.component(MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
     }
 
     /**
      * Sends a database error message to any command source.
      */
     void sendDatabaseErrorMessage(CommandSource source) {
-        source.sendMessage(messages.component("error.database.query", NamedTextColor.RED));
+        source.sendMessage(messages.component(MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
     }
 
     /**
@@ -429,7 +431,7 @@ class CommandContext {
             return false;
         }
         runIfConnectionCurrent(operation, () -> player.sendMessage(messages.component(
-                "security.brute_force.blocked", NamedTextColor.RED)));
+                MSG_BRUTE_FORCE_BLOCKED, NamedTextColor.RED)));
         return true;
     }
 
@@ -443,7 +445,7 @@ class CommandContext {
         completeRegistrationWithoutCommit(
                 operation, permit,
                 () -> player.sendMessage(messages.component(
-                        "security.brute_force.blocked", NamedTextColor.RED)));
+                        MSG_BRUTE_FORCE_BLOCKED, NamedTextColor.RED)));
         return true;
     }
 

@@ -22,6 +22,7 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
     private static final String PRIVATE_BOOTSTRAP_PREFIX =
             "net.rafalohaki.veloauth.authserver.runtime.";
     private static final String PRIVATE_VIA_PREFIX = "com.viaversion.";
+    private static final String CHANNEL_PARAM = "channel";
     private static final int MAXIMUM_BOOTSTRAP_CLASS_BYTES = 1024 * 1024;
     private static final ReentrantLock RUNTIME_INITIALIZATION_LOCK = new ReentrantLock();
 
@@ -230,12 +231,12 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
 
     @Override
     public void inject(Channel channel) {
-        invoke(inject, Objects.requireNonNull(channel, "channel"));
+        invoke(inject, Objects.requireNonNull(channel, CHANNEL_PARAM));
     }
 
     @Override
     public int clientProtocol(Channel channel) {
-        return (Integer) invoke(clientProtocol, Objects.requireNonNull(channel, "channel"));
+        return (Integer) invoke(clientProtocol, Objects.requireNonNull(channel, CHANNEL_PARAM));
     }
 
     @Override
@@ -262,7 +263,7 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
     public void sendVelocityForwardingRequest(
             Channel channel, int transactionId, Runnable loginContinuation) {
         invoke(sendVelocityForwardingRequest,
-                Objects.requireNonNull(channel, "channel"),
+                Objects.requireNonNull(channel, CHANNEL_PARAM),
                 transactionId,
                 Objects.requireNonNull(loginContinuation, "loginContinuation"));
     }

@@ -17,6 +17,8 @@ final class ExpectedRedirectRegistry {
     private final Map<String, ExpectedRedirect> redirects = new ConcurrentHashMap<>();
     private final Semaphore capacity;
     private final Duration timeToLive;
+    private static final String UNIQUE_ID_PARAM = "uniqueId";
+
     private final Clock clock;
 
     ExpectedRedirectRegistry(int maximumSize, Duration timeToLive, Clock clock) {
@@ -32,7 +34,7 @@ final class ExpectedRedirectRegistry {
     }
 
     void expect(UUID uniqueId, String username) {
-        Objects.requireNonNull(uniqueId, "uniqueId");
+        Objects.requireNonNull(uniqueId, UNIQUE_ID_PARAM);
         String key = normalizedUsername(username);
         removeExpired();
         ExpectedRedirect replacement = new ExpectedRedirect(
@@ -109,14 +111,14 @@ final class ExpectedRedirectRegistry {
 
     record ExpectedPlayer(UUID uniqueId, String username) {
         ExpectedPlayer {
-            Objects.requireNonNull(uniqueId, "uniqueId");
+            Objects.requireNonNull(uniqueId, UNIQUE_ID_PARAM);
             Objects.requireNonNull(username, "username");
         }
     }
 
     private record ExpectedRedirect(UUID uniqueId, String username, Instant expiresAt) {
         private ExpectedRedirect {
-            Objects.requireNonNull(uniqueId, "uniqueId");
+            Objects.requireNonNull(uniqueId, UNIQUE_ID_PARAM);
             Objects.requireNonNull(username, "username");
             Objects.requireNonNull(expiresAt, "expiresAt");
         }

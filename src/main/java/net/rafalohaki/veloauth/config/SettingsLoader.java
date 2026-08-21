@@ -18,6 +18,9 @@ import java.util.Map;
 final class SettingsLoader {
 
     private static final String YAML_FIELD_ENABLED = "enabled";
+    private static final String CONFIG_KEY_DATABASE = "database";
+    private static final String CONFIG_KEY_AUTH_SERVER = "auth-server";
+    private static final String CONFIG_KEY_PICOLIMBO = "picolimbo";
     private static final String CONFIG_KEY_TIMEOUT_SECONDS = "timeout-seconds";
     private static final String CONFIG_KEY_PING_TIMEOUT_MS = "ping-timeout-ms";
     private static final String CONFIG_KEY_AUTO_TRANSFER_DELAY_MS = "auto-transfer-delay-ms";
@@ -127,7 +130,7 @@ final class SettingsLoader {
     }
 
     private static void loadDatabaseSettings(Map<String, Object> config, Builder state) {
-        Map<String, Object> database = mapSectionOrEmpty(config, "database", "database");
+        Map<String, Object> database = mapSectionOrEmpty(config, CONFIG_KEY_DATABASE, CONFIG_KEY_DATABASE);
         if (database.isEmpty()) {
             return;
         }
@@ -135,7 +138,7 @@ final class SettingsLoader {
         state.databaseStorageType = YamlParserUtils.getString(database, "storage-type", state.databaseStorageType);
         state.databaseHostname = YamlParserUtils.getString(database, "hostname", state.databaseHostname);
         state.databasePort = YamlParserUtils.getInt(database, "port", state.databasePort);
-        state.databaseName = YamlParserUtils.getString(database, "database", state.databaseName);
+        state.databaseName = YamlParserUtils.getString(database, CONFIG_KEY_DATABASE, state.databaseName);
         state.databaseUser = YamlParserUtils.getString(database, "user", state.databaseUser);
         state.databasePassword = YamlParserUtils.getString(database, CONFIG_KEY_DB_CREDENTIAL, state.databasePassword);
         state.databaseConnectionUrl = YamlParserUtils.getString(database, "connection-url", state.databaseConnectionUrl);
@@ -208,11 +211,11 @@ final class SettingsLoader {
         state.authServerMode = Settings.AuthServerMode.EXTERNAL.getConfigValue();
         state.embeddedAuthServerSettings = new Settings.EmbeddedAuthServerSettings();
 
-        boolean authServerConfigured = config.containsKey("auth-server");
-        boolean picoLimboConfigured = config.containsKey("picolimbo");
+        boolean authServerConfigured = config.containsKey(CONFIG_KEY_AUTH_SERVER);
+        boolean picoLimboConfigured = config.containsKey(CONFIG_KEY_PICOLIMBO);
         Map<String, Object> authServer = mapSectionOrEmpty(
-                config, "auth-server", "auth-server");
-        Map<String, Object> picolimbo = mapSectionOrEmpty(config, "picolimbo", "picolimbo");
+                config, CONFIG_KEY_AUTH_SERVER, CONFIG_KEY_AUTH_SERVER);
+        Map<String, Object> picolimbo = mapSectionOrEmpty(config, CONFIG_KEY_PICOLIMBO, CONFIG_KEY_PICOLIMBO);
         if (authServerConfigured) {
             state.authServerMode = explicitStringOrDefault(authServer, "mode", state.authServerMode);
             state.authServerName = YamlParserUtils.getString(authServer, "server-name", state.authServerName);
