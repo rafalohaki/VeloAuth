@@ -274,9 +274,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.assets.outputs.version }}
           SHA256: ${{ steps.assets.outputs.sha256 }}
+          # Deliberately the commit-push timestamp from the event payload, not wall-clock:
+          # the reproducibility fixtures forbid clock reads in this workflow, and the push
+          # instant is the honest "how fresh is this build" signal anyway.
+          PUSHED_AT: ${{ github.event.head_commit.timestamp }}
         run: |
           set -euo pipefail
           notes="${RUNNER_TEMP}/rolling-notes.md"
+          # GitHub keeps showing the release's original creation date after in-place edits,
+          # which reads as "no rollout happened". The title and notes therefore carry the
+          # version, commit and push time of the build actually served right now.
+          title="Rolling Latest Build — ${VERSION} @ ${GITHUB_SHA:0:7}"
           # Every line goes through a '%s\n' format string: a literal leading '-' would
           # otherwise be parsed as a printf option and abort the step.
           {
@@ -284,20 +292,23 @@ jobs:
             printf '%s\n' ''
             printf '%s\n' "- Version: \`${VERSION}\`"
             printf '%s\n' "- Commit: ${GITHUB_SHA}"
+            printf '%s\n' "- Source pushed at: ${PUSHED_AT}"
             printf '%s\n' "- SHA-256: \`${SHA256}\`"
             printf '%s\n' ''
             printf '%s\n' "Permanent download: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/veloauth-latest.jar"
             printf '%s\n' ''
-            printf '%s\n' 'This release is updated in place; see CHANGELOG.md for released changes.'
+            printf '%s\n' 'This release is updated in place; the date GitHub shows next to it is when the'
+            printf '%s\n' 'release object was first created, not when these assets were last replaced.'
+            printf '%s\n' 'See CHANGELOG.md for released changes.'
           } >"${notes}"
           if gh release view latest >/dev/null 2>&1; then
-            gh release edit latest --title "Rolling Latest Build" --notes-file "${notes}" \
+            gh release edit latest --title "${title}" --notes-file "${notes}" \
               --prerelease=false --latest
             gh release upload latest \
               rolling-assets/veloauth-latest.jar \
               rolling-assets/veloauth-latest.jar.sha256 --clobber
           else
-            gh release create latest --title "Rolling Latest Build" --notes-file "${notes}" \
+            gh release create latest --title "${title}" --notes-file "${notes}" \
               --prerelease=false --latest \
               rolling-assets/veloauth-latest.jar \
               rolling-assets/veloauth-latest.jar.sha256
