@@ -2,7 +2,7 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
-## [1.6.0] - Unreleased
+## [1.6.0] - 2026-08-21
 
 ### Added
 
