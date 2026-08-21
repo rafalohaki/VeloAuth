@@ -1081,36 +1081,42 @@ public class AuthListener {
         }
 
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
-        UUID playerUuid = player.getUniqueId();
-        String username = player.getUsername();
 
         // WERYFIKUJ UUID z bazą danych dla maksymalnego bezpieczeństwa - async, no IO thread blocking
         return uuidVerificationHandler.verifyPlayerUuid(player,
                         effect -> connectionLifecycleRegistry.runIfCurrent(operation, effect))
                 .thenAccept(uuidMatches -> {
-                    boolean decided = connectionLifecycleRegistry.runIfCurrent(operation, () -> {
-                        if (!player.isActive()) {
-                            event.setResult(ServerPreConnectEvent.ServerResult.denied());
-                            return;
-                        }
-                        boolean isAuthorized = authCache.isPlayerAuthorized(playerUuid, playerIp);
-                        boolean hasActiveSession =
-                                authCache.hasActiveSession(playerUuid, username, playerIp);
-                        if (!isAuthorized || !hasActiveSession || !uuidMatches) {
-                            handleUnauthorizedConnection(event, player, targetServerName,
-                                    isAuthorized, hasActiveSession, uuidMatches, playerIp, operation);
-                        } else {
-                            // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
-                            logger.debug("Authorized player {} heading to {} (session: OK, UUID: OK)",
-                                    player.getUsername(), targetServerName);
-                            event.setResult(ServerPreConnectEvent.ServerResult.allowed(
-                                    event.getOriginalServer()));
-                        }
-                    });
+                    boolean decided = connectionLifecycleRegistry.runIfCurrent(operation, () ->
+                            decideOfflineBackendConnection(
+                                    event, player, targetServerName, playerIp, uuidMatches, operation));
                     if (!decided) {
                         event.setResult(ServerPreConnectEvent.ServerResult.denied());
                     }
                 });
+    }
+
+    /** Runs inside the lifecycle guard; applies the authorization verdict to the event. */
+    private void decideOfflineBackendConnection(
+            ServerPreConnectEvent event, Player player, String targetServerName,
+            String playerIp, boolean uuidMatches, Operation operation) {
+        if (!player.isActive()) {
+            event.setResult(ServerPreConnectEvent.ServerResult.denied());
+            return;
+        }
+        UUID playerUuid = player.getUniqueId();
+        boolean isAuthorized = authCache.isPlayerAuthorized(playerUuid, playerIp);
+        boolean hasActiveSession =
+                authCache.hasActiveSession(playerUuid, player.getUsername(), playerIp);
+        if (!isAuthorized || !hasActiveSession || !uuidMatches) {
+            handleUnauthorizedConnection(event, player, targetServerName,
+                    isAuthorized, hasActiveSession, uuidMatches, playerIp, operation);
+        } else {
+            // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
+            logger.debug("Authorized player {} heading to {} (session: OK, UUID: OK)",
+                    player.getUsername(), targetServerName);
+            event.setResult(ServerPreConnectEvent.ServerResult.allowed(
+                    event.getOriginalServer()));
+        }
     }
 
     private void handleUnauthorizedConnection(

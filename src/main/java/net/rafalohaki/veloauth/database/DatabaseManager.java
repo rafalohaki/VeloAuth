@@ -463,41 +463,54 @@ public class DatabaseManager {
                 return genericDatabaseErrorResult();
             }
 
-            boolean requiresSave = false;
-            if (storedPremiumUuid == null || (pendingLegacyBinding
-                    && !storedPremiumUuid.equals(verifiedPremiumUuid))) {
-                player.setPremiumUuid(verifiedPremiumUuid.toString());
-                requiresSave = true;
-            }
-            boolean preserveBackendUuid = (player.isPreserveUuid() || pendingLegacyBinding)
-                    && !backendUuid.equals(verifiedPremiumUuid);
-            if (player.isPreserveUuid() != preserveBackendUuid) {
-                player.setPreserveUuid(preserveBackendUuid);
-                requiresSave = true;
-            }
-
-            if (requiresSave) {
-                DbResult<Boolean> saveResult = executePlayerSave(player);
-                if (saveResult.isDatabaseError() || !Boolean.TRUE.equals(saveResult.getValue())) {
-                    return genericDatabaseErrorResult();
-                }
-            }
-
-            synchronizePremiumUuidCacheBestEffort(username, verifiedPremiumUuid);
-            UUID exposedUuid = preserveBackendUuid ? backendUuid : verifiedPremiumUuid;
-
-            if (preserveBackendUuid) {
-                logger.warn(PREMIUM_MARKER,
-                        "Preserving legacy LimboAuth backend UUID for {} after Mojang verification; "
-                                + "AUTH.UUID remains authoritative for backend data",
-                        username);
-            }
-            return DbResult.success(new PremiumProfileBinding(
-                    exposedUuid, verifiedPremiumUuid, preserveBackendUuid));
+            return persistVerifiedBinding(player, username, verifiedPremiumUuid,
+                    backendUuid, storedPremiumUuid, pendingLegacyBinding);
         } catch (SQLException | RuntimeException e) {
             logDatabaseOperationFailure("verified premium profile reconciliation", username, e);
             return genericDatabaseErrorResult();
         }
+    }
+
+    /**
+     * Persists the verified premium identity onto an existing AUTH row and builds the binding.
+     * Decision order is exactly the extracted tail of the reconciliation: stamp the premium
+     * UUID, recompute preserve-uuid, save only when something changed, then expose either the
+     * legacy backend UUID or the verified one.
+     */
+    private DbResult<PremiumProfileBinding> persistVerifiedBinding(
+            RegisteredPlayer player, String username, UUID verifiedPremiumUuid,
+            UUID backendUuid, UUID storedPremiumUuid, boolean pendingLegacyBinding) {
+        boolean requiresSave = false;
+        if (storedPremiumUuid == null || (pendingLegacyBinding
+                && !storedPremiumUuid.equals(verifiedPremiumUuid))) {
+            player.setPremiumUuid(verifiedPremiumUuid.toString());
+            requiresSave = true;
+        }
+        boolean preserveBackendUuid = (player.isPreserveUuid() || pendingLegacyBinding)
+                && !backendUuid.equals(verifiedPremiumUuid);
+        if (player.isPreserveUuid() != preserveBackendUuid) {
+            player.setPreserveUuid(preserveBackendUuid);
+            requiresSave = true;
+        }
+
+        if (requiresSave) {
+            DbResult<Boolean> saveResult = executePlayerSave(player);
+            if (saveResult.isDatabaseError() || !Boolean.TRUE.equals(saveResult.getValue())) {
+                return genericDatabaseErrorResult();
+            }
+        }
+
+        synchronizePremiumUuidCacheBestEffort(username, verifiedPremiumUuid);
+        UUID exposedUuid = preserveBackendUuid ? backendUuid : verifiedPremiumUuid;
+
+        if (preserveBackendUuid) {
+            logger.warn(PREMIUM_MARKER,
+                    "Preserving legacy LimboAuth backend UUID for {} after Mojang verification; "
+                            + "AUTH.UUID remains authoritative for backend data",
+                    username);
+        }
+        return DbResult.success(new PremiumProfileBinding(
+                exposedUuid, verifiedPremiumUuid, preserveBackendUuid));
     }
 
     private boolean isPendingLegacyPremiumBinding(RegisteredPlayer player, UUID backendUuid,

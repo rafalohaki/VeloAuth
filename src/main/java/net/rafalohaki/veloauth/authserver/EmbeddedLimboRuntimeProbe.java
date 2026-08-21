@@ -120,13 +120,7 @@ final class EmbeddedLimboRuntimeProbe {
                 signals.countDown();
             } else if (packet instanceof ClientboundRegistryDataPacket registry
                     && DIMENSION_REGISTRY.equals(registry.getRegistry())) {
-                for (int index = 0; index < registry.getEntries().size(); index++) {
-                    if (END_WORLD.equals(registry.getEntries().get(index).getId())
-                            && endDimensionId.compareAndSet(-1, index)) {
-                        signals.countDown();
-                        break;
-                    }
-                }
+                recordEndDimension(registry);
             } else if (packet instanceof ClientboundLoginPacket joined
                     && login.compareAndSet(null, joined)) {
                 signals.countDown();
@@ -140,6 +134,16 @@ final class EmbeddedLimboRuntimeProbe {
             } else if (packet instanceof ClientboundKeepAlivePacket
                     && keepAliveReceived.compareAndSet(false, true)) {
                 signals.countDown();
+            }
+        }
+
+        private void recordEndDimension(ClientboundRegistryDataPacket registry) {
+            for (int index = 0; index < registry.getEntries().size(); index++) {
+                if (END_WORLD.equals(registry.getEntries().get(index).getId())
+                        && endDimensionId.compareAndSet(-1, index)) {
+                    signals.countDown();
+                    return;
+                }
             }
         }
 

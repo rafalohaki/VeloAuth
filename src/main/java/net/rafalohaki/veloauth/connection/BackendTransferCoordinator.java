@@ -683,35 +683,39 @@ final class BackendTransferCoordinator {
         }
 
         scheduleOwnedTask(state, state.pendingTransfer(),
-                settings.getAutoTransferDelayMillis(), TimeUnit.MILLISECONDS, () -> {
-            if (isStale(state)) {
-                return;
-            }
-            if (!player.isActive()) {
-                logger.debug("Auto-transfer: player {} is no longer active", player.getUsername());
-                return;
-            }
-            if (!isPlayerOnAuthServer(player)) {
-                logger.debug("Auto-transfer: player {} is no longer on auth server", player.getUsername());
-                return;
-            }
+                settings.getAutoTransferDelayMillis(), TimeUnit.MILLISECONDS,
+                () -> runDelayedAutoTransfer(player, state));
+    }
 
-            VirtualThreadExecutorProvider.submitTask(() -> {
-                if (isStale(state)) {
-                    return;
-                }
-                BackendTransferOutcome outcome = transfer(player, state);
-                if (isStale(state) && !outcome.accepted()) {
-                    return;
-                }
-                if (outcome.accepted()) {
-                    logger.debug("Auto-transfer: gracz {} przeniesiony na backend", player.getUsername());
-                } else {
-                    logger.warn("Auto-transfer: failed to transfer player {} to backend",
-                            player.getUsername());
-                }
-            });
-        });
+    private void runDelayedAutoTransfer(Player player, PlayerTransferState state) {
+        if (isStale(state)) {
+            return;
+        }
+        if (!player.isActive()) {
+            logger.debug("Auto-transfer: player {} is no longer active", player.getUsername());
+            return;
+        }
+        if (!isPlayerOnAuthServer(player)) {
+            logger.debug("Auto-transfer: player {} is no longer on auth server", player.getUsername());
+            return;
+        }
+        VirtualThreadExecutorProvider.submitTask(() -> executeAutoTransfer(player, state));
+    }
+
+    private void executeAutoTransfer(Player player, PlayerTransferState state) {
+        if (isStale(state)) {
+            return;
+        }
+        BackendTransferOutcome outcome = transfer(player, state);
+        if (isStale(state) && !outcome.accepted()) {
+            return;
+        }
+        if (outcome.accepted()) {
+            logger.debug("Auto-transfer: gracz {} przeniesiony na backend", player.getUsername());
+        } else {
+            logger.warn("Auto-transfer: failed to transfer player {} to backend",
+                    player.getUsername());
+        }
     }
 
     private String getPlayerIp(Player player) {

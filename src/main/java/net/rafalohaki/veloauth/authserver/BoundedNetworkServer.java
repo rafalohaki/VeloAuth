@@ -241,22 +241,27 @@ final class BoundedNetworkServer extends NetworkServer {
                 lengthBytes[index] = input.readByte();
                 if ((header.isLengthVariable() && lengthBytes[index] >= 0)
                         || index == maximumLengthBytes - 1) {
-                    int length = header.readLength(Unpooled.wrappedBuffer(lengthBytes), input.readableBytes());
-                    if (length < 0) {
-                        throw new CorruptedFrameException("Negative Minecraft frame length");
-                    }
-                    if (length > maximumFrameBytes) {
-                        throw new TooLongFrameException("Minecraft frame exceeds configured limit");
-                    }
-                    if (input.readableBytes() < length) {
-                        input.resetReaderIndex();
-                        return;
-                    }
-                    output.add(input.readRetainedSlice(length));
+                    emitFrameIfComplete(input, output, lengthBytes);
                     return;
                 }
             }
             throw new CorruptedFrameException("Minecraft frame length VarInt is too long");
+        }
+
+        /** Validates the decoded length and either emits one frame or resets for more bytes. */
+        private void emitFrameIfComplete(ByteBuf input, List<Object> output, byte[] lengthBytes) {
+            int length = header.readLength(Unpooled.wrappedBuffer(lengthBytes), input.readableBytes());
+            if (length < 0) {
+                throw new CorruptedFrameException("Negative Minecraft frame length");
+            }
+            if (length > maximumFrameBytes) {
+                throw new TooLongFrameException("Minecraft frame exceeds configured limit");
+            }
+            if (input.readableBytes() < length) {
+                input.resetReaderIndex();
+                return;
+            }
+            output.add(input.readRetainedSlice(length));
         }
     }
 }

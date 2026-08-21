@@ -716,47 +716,7 @@ public class VeloAuth {
             // 3. Wait for pending operations (2 second timeout)
             waitForPendingOperations();
 
-            // 4. Shut down components in reverse order
-            if (authTimeoutScheduler != null) {
-                authTimeoutScheduler.shutdown();
-                logger.debug("AuthTimeoutScheduler shut down");
-            }
-
-            if (connectionManager != null) {
-                connectionManager.shutdown();
-                logger.debug("ConnectionManager shut down");
-            }
-            if (authServerProvider != null) {
-                closeAuthServerProviderSafely();
-            }
-
-            shutdownCleanupScheduler(premiumDbCleanupScheduler, "Premium DB cleanup scheduler");
-            shutdownCleanupScheduler(auditLogCleanupScheduler, "Audit log cleanup scheduler");
-
-            if (premiumResolverService != null) {
-                premiumResolverService.shutdown();
-                logger.debug("PremiumResolverService shut down");
-            }
-
-            if (premiumResolverAlertService != null) {
-                premiumResolverAlertService.close();
-                logger.debug("PremiumResolverAlertService shut down");
-            }
-
-            if (authCache != null) {
-                authCache.shutdown();
-                logger.debug("AuthCache shut down");
-            }
-
-            // 6. Close DB connection last
-            if (databaseManager != null) {
-                databaseManager.shutdown();
-                logger.debug("DatabaseManager shut down");
-            }
-
-            // 7. Shut down Virtual Thread executor
-            VirtualThreadExecutorProvider.shutdown();
-            logger.debug("VirtualThreadExecutorProvider shut down");
+            shutdownComponentsInReverseOrder();
 
             logger.info("VeloAuth shutdown completed successfully");
 
@@ -775,6 +735,48 @@ public class VeloAuth {
             }
             VirtualThreadExecutorProvider.shutdown();
         }
+    }
+
+    /** Components shut down in reverse initialization order; the DB pool and VT executor go last. */
+    private void shutdownComponentsInReverseOrder() {
+        if (authTimeoutScheduler != null) {
+            authTimeoutScheduler.shutdown();
+            logger.debug("AuthTimeoutScheduler shut down");
+        }
+
+        if (connectionManager != null) {
+            connectionManager.shutdown();
+            logger.debug("ConnectionManager shut down");
+        }
+        if (authServerProvider != null) {
+            closeAuthServerProviderSafely();
+        }
+
+        shutdownCleanupScheduler(premiumDbCleanupScheduler, "Premium DB cleanup scheduler");
+        shutdownCleanupScheduler(auditLogCleanupScheduler, "Audit log cleanup scheduler");
+
+        if (premiumResolverService != null) {
+            premiumResolverService.shutdown();
+            logger.debug("PremiumResolverService shut down");
+        }
+
+        if (premiumResolverAlertService != null) {
+            premiumResolverAlertService.close();
+            logger.debug("PremiumResolverAlertService shut down");
+        }
+
+        if (authCache != null) {
+            authCache.shutdown();
+            logger.debug("AuthCache shut down");
+        }
+
+        if (databaseManager != null) {
+            databaseManager.shutdown();
+            logger.debug("DatabaseManager shut down");
+        }
+
+        VirtualThreadExecutorProvider.shutdown();
+        logger.debug("VirtualThreadExecutorProvider shut down");
     }
 
     /** Clears only state owned by a concrete connection; it performs no database or backend I/O. */
