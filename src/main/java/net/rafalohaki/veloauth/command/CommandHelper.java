@@ -94,9 +94,9 @@ public final class CommandHelper {
             if (this == o) {
                 return true;
             }
-            return o instanceof CommandInputs other
-                    && Objects.equals(player, other.player)
-                    && Arrays.equals(args, other.args);
+            return o instanceof CommandInputs(Player otherPlayer, String[] otherArgs)
+                    && Objects.equals(player, otherPlayer)
+                    && Arrays.equals(args, otherArgs);
         }
 
         @Override
@@ -218,9 +218,9 @@ public final class CommandHelper {
             if (this == o) {
                 return true;
             }
-            return o instanceof AdminCommandInputs other
-                    && Objects.equals(source, other.source)
-                    && Arrays.equals(args, other.args);
+            return o instanceof AdminCommandInputs(CommandSource otherSource, String[] otherArgs)
+                    && Objects.equals(source, otherSource)
+                    && Arrays.equals(args, otherArgs);
         }
 
         @Override

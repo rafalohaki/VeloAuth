@@ -234,13 +234,6 @@ final class EmbeddedLimboServer implements AutoCloseable {
         return protocol;
     }
 
-    private LegacyProtocolCodec.StatusResponse statusInfo() {
-        return new LegacyProtocolCodec.StatusResponse(
-                "VeloAuth " + protocolRuntime.minimumVersionName() + '-'
-                        + protocolRuntime.maximumVersionName(),
-                playerMessages.statusMotd(), config.maxConnections(), playersInGame.get());
-    }
-
     private final class LimboServerListener extends ServerAdapter {
         @Override
         public void sessionAdded(SessionAddedEvent event) {
@@ -278,6 +271,13 @@ final class EmbeddedLimboServer implements AutoCloseable {
         private int keepAliveChallenge;
         private ScheduledFuture<?> phaseTimeoutTask;
         private ScheduledFuture<?> keepAliveTask;
+
+        private LegacyProtocolCodec.StatusResponse statusInfo() {
+            return new LegacyProtocolCodec.StatusResponse(
+                    "VeloAuth " + protocolRuntime.minimumVersionName() + '-'
+                            + protocolRuntime.maximumVersionName(),
+                    playerMessages.statusMotd(), config.maxConnections(), playersInGame.get());
+        }
 
         void start(Session session) {
             phaseTimeoutTask = session.getChannel().eventLoop().schedule(
@@ -322,19 +322,19 @@ final class EmbeddedLimboServer implements AutoCloseable {
         private void handleStatus(Session session, Packet packet) {
             if (packet instanceof LegacyProtocolCodec.StatusRequest) {
                 session.send(statusInfo());
-            } else if (packet instanceof LegacyProtocolCodec.Ping ping) {
-                session.send(new LegacyProtocolCodec.Pong(ping.value()));
+            } else if (packet instanceof LegacyProtocolCodec.Ping(long value)) {
+                session.send(new LegacyProtocolCodec.Pong(value));
             }
         }
 
         private void handleLogin(Session session, Packet packet) {
-            if (!(packet instanceof LegacyProtocolCodec.LoginStart loginStart) || loginReceived) {
+            if (!(packet instanceof LegacyProtocolCodec.LoginStart(String username)) || loginReceived) {
                 reject(session);
                 return;
             }
             loginReceived = true;
             ExpectedRedirectRegistry.ExpectedPlayer expected = expectedRedirects
-                    .consume(loginStart.username())
+                    .consume(username)
                     .orElse(null);
             if (expected == null) {
                 invalidRedirects.increment();
@@ -391,10 +391,10 @@ final class EmbeddedLimboServer implements AutoCloseable {
         }
 
         private void handleGame(Session session, Packet packet) {
-            if (!(packet instanceof LegacyProtocolCodec.KeepAlive keepAlive)) {
+            if (!(packet instanceof LegacyProtocolCodec.KeepAlive(int challenge))) {
                 return;
             }
-            if (!keepAlivePending || keepAlive.challenge() != keepAliveChallenge) {
+            if (!keepAlivePending || challenge != keepAliveChallenge) {
                 reject(session);
                 return;
             }
