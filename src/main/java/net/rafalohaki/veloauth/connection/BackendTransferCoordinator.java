@@ -13,6 +13,7 @@ import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import org.slf4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -395,8 +396,12 @@ final class BackendTransferCoordinator {
             }
 
             backendSelector.findAvailableBackendServerForRetryAsync(player, state)
+                    // whenComplete hands a null result not only on failure but also when the
+                    // stage completed normally with null, so the Optional is normalized here
+                    // and the handler never has to null-check an Optional.
                     .whenComplete((server, failure) ->
-                            handleBackendWaitSelection(player, state, attempt, server, failure));
+                            handleBackendWaitSelection(player, state, attempt,
+                                    Objects.requireNonNullElse(server, Optional.empty()), failure));
         });
     }
 
@@ -413,7 +418,7 @@ final class BackendTransferCoordinator {
             logger.warn("Backend selection failed while {} was waiting; retrying",
                     player.getUsername(), failure);
         }
-        if (failure == null && server != null && server.isPresent()) {
+        if (failure == null && server.isPresent()) {
             RegisteredServer target = server.get();
             String targetName = target.getServerInfo().getName();
             logger.info("Backend server available for {} after waiting - transferring to {}",

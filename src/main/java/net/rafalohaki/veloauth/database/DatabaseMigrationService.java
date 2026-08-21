@@ -147,6 +147,9 @@ class DatabaseMigrationService {
         return legacyUuidMigration;
     }
 
+    // Safe: every interpolated fragment is a compile-time constant identifier passed through
+    // quoteIdentifier for the active dialect; all row values are bound via '?' placeholders.
+    @SuppressWarnings("java:S2077")
     private MigrationResult markLegacyPremiumRowsForUuidPreservation(java.sql.Connection connection,
                                                                       String quote) throws SQLException {
         String authTable = quoteIdentifier(quote, AUTH_TABLE);
@@ -167,6 +170,10 @@ class DatabaseMigrationService {
         }
     }
 
+    // Safe: authTable and predicate are built by the caller exclusively from quoted
+    // compile-time constants (S2077), and the predicate carries the two '?' placeholders the
+    // setters below bind — the analyzer cannot see them across the method boundary (S2695).
+    @SuppressWarnings({"java:S2077", "java:S2695"})
     private int countLegacyPremiumUuidCandidates(java.sql.Connection connection, String authTable,
                                                    String predicate) throws SQLException {
         String sql = "SELECT COUNT(*) FROM " + authTable + " WHERE " + predicate;

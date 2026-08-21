@@ -353,6 +353,11 @@ class TwoFactorCommand implements SimpleCommand {
         if (!ctx.isConnectionCurrent(operation)) {
             return false;
         }
+        if (saveResult == null) {
+            // Fail secure: a save whose outcome cannot be read must be treated as a failed save.
+            sendIfCurrent(operation, () -> ctx.sendDatabaseErrorMessage(player));
+            return false;
+        }
         if (ctx.handleDatabaseError(
                 saveResult, dbPlayer.getNickname(), player, operationName, operation)) {
             return false;

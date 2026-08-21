@@ -150,6 +150,9 @@ public final class TotpService {
     static int generateCode(byte[] key, long window) {
         byte[] msg = ByteBuffer.allocate(Long.BYTES).putLong(window).array();
         try {
+            // HMAC-SHA1 is the RFC 6238/4226 baseline and what authenticator apps implement;
+            // it is used here as a keyed MAC over a 30s counter, not as a collision-resistant
+            // hash, so SHA-1's collision weakness does not apply to this construction.
             Mac mac = Mac.getInstance("HmacSHA1");
             mac.init(new SecretKeySpec(key, "HmacSHA1"));
             byte[] hash = mac.doFinal(msg);

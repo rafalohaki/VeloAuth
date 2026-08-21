@@ -7,6 +7,7 @@ import org.slf4j.Marker;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MarkerFactory;
 
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -147,6 +148,9 @@ public final class ConflictModeService {
     }
 
     private void restoreConflictState(RegisteredPlayer dbPlayer, long previousTimestamp) {
+        // Both call sites sit behind clearIfPresent's null gate; the explicit requireNonNull
+        // states that contract where the dereference happens instead of one method away.
+        Objects.requireNonNull(dbPlayer, "dbPlayer");
         dbPlayer.setConflictMode(true);
         dbPlayer.setConflictTimestamp(previousTimestamp);
     }
