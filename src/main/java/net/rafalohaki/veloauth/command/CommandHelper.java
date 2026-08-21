@@ -369,6 +369,10 @@ public final class CommandHelper {
      * @param errorKey   Message key for database errors
      * @param timeoutKey Message key for timeout errors
      */
+    // The delegation drops `source` from the middle of the signature and re-adds it as the
+    // trailing message consumer; errorKey and timeoutKey keep their relative order, which is
+    // what the analyzer's positional-name heuristic misreads as swapped parameters.
+    @SuppressWarnings("java:S2234")
     public static void runAsyncCommandWithTimeout(Runnable task, Messages messages,
                                                   CommandSource source, String errorKey, String timeoutKey) {
         runAsyncCommandWithTimeout(

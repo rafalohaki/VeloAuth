@@ -23,7 +23,7 @@ record RuntimeArtifactDescriptor(String version, URI uri, String sha256) {
         Objects.requireNonNull(version, "version");
         Objects.requireNonNull(uri, "uri");
         Objects.requireNonNull(sha256, "sha256");
-        if (!version.matches("[0-9][0-9A-Za-z._-]{0,127}")) {
+        if (!version.matches("\\d[0-9A-Za-z._-]{0,127}")) {
             throw new IllegalArgumentException("Unsafe ViaVersion runtime version");
         }
         if (!uri.isAbsolute() || uri.getHost() == null || uri.getHost().isBlank()) {

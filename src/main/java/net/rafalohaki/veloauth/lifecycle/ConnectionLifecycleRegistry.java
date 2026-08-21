@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
-import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Owns the concrete-player generation allowed to mutate UUID-keyed authentication state.
@@ -180,12 +180,12 @@ public final class ConnectionLifecycleRegistry {
     }
 
     private boolean withConnectionState(
-            Player player, Function<ConnectionState, Boolean> operation) {
+            Player player, Predicate<ConnectionState> operation) {
         UUID playerId = player.getUniqueId();
         ReentrantLock lock = lockFor(playerId);
         lock.lock();
         try {
-            return !closed.get() && operation.apply(connections.get(playerId));
+            return !closed.get() && operation.test(connections.get(playerId));
         } finally {
             lock.unlock();
         }

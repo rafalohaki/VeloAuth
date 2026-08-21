@@ -515,8 +515,8 @@ final class SettingsLoader {
         // IPv6 literals in connection URLs are bracketed, e.g. [::1]:25565 or
         // [fe80::1%25eth0]:5432. Strip the brackets and take the port after the ']'.
         // Plain hostnames and IPv4 keep the legacy indexOf(':') path.
-        if (hostAndPort.startsWith("[") && hostAndPort.indexOf(']') > 0) {
-            int closeBracket = hostAndPort.indexOf(']');
+        int closeBracket = hostAndPort.indexOf(']');
+        if (hostAndPort.startsWith("[") && closeBracket >= 0) {
             state.databaseHostname = hostAndPort.substring(1, closeBracket);
             if (closeBracket + 1 < hostAndPort.length() && hostAndPort.charAt(closeBracket + 1) == ':') {
                 state.databasePort = Integer.parseInt(hostAndPort.substring(closeBracket + 2));

@@ -368,6 +368,10 @@ final class LegacyProtocolCodec {
     }
 
     private record UnusedClientboundPacket() implements MinecraftPacket {
+        // Not unused: MCProtocolLib's PacketFactory takes a ByteBuf, so every
+        // UnusedClientboundPacket::new registration above binds to THIS constructor,
+        // not the canonical one. Deleting it breaks packet deserialization.
+        @SuppressWarnings("java:S1144")
         private UnusedClientboundPacket(ByteBuf input) {
             this();
             input.skipBytes(input.readableBytes());

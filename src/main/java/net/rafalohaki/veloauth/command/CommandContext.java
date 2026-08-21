@@ -331,6 +331,7 @@ class CommandContext {
                 () -> handleRegistrationTimeout(player, operation, permit));
     }
 
+    @SuppressWarnings("java:S6916") // See the COMMIT_UNKNOWN comment: the suggested guard cannot compile here.
     DatabaseManager.RegistrationTimeoutDisposition handleRegistrationTimeout(
             Player player, ConnectionLifecycleRegistry.Operation operation,
             DatabaseManager.RegistrationCommitPermit permit) {
@@ -340,6 +341,9 @@ class CommandContext {
                     player, operation, "auth.registration.timeout", NamedTextColor.RED);
             case COMMIT_IN_PROGRESS, COMMIT_COMPLETED -> sendRegistrationDeadlineMessage(
                     player, operation, "auth.registration.commit_pending", NamedTextColor.YELLOW);
+            // S6916 suggests a `when` guard here, but guards are only legal on pattern case
+            // labels (JLS 14.11.1) and this switch selects over enum constants — the rule's
+            // suggested rewrite does not compile.
             case COMMIT_UNKNOWN -> {
                 if (permit.claimCommitUnknownMessage()) {
                     sendRegistrationDeadlineMessage(

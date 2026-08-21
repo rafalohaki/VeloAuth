@@ -119,7 +119,7 @@ public final class ConflictModeService {
 
         return saveFuture.handle(this::isSuccessful)
                 .thenCompose(success -> {
-                    if (success) {
+                    if (Boolean.TRUE.equals(success)) {
                         logger.info(SECURITY_MARKER,
                                 "[CONFLICT_MODE CLEARED] Player {} conflict state persisted after successful {}",
                                 dbPlayer.getNickname(), operationName);

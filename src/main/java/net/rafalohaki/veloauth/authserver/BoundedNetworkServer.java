@@ -93,7 +93,7 @@ final class BoundedNetworkServer extends NetworkServer {
 
     @Override
     protected EventLoopGroup createWorkerEventLoopGroup() {
-        int workerThreads = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors()));
+        int workerThreads = Math.clamp(Runtime.getRuntime().availableProcessors(), 2, 4);
         EventLoopGroup group = new MultiThreadIoEventLoopGroup(
                 workerThreads, threadFactory("worker"), NioIoHandler.newFactory());
         workerGroup = group;
