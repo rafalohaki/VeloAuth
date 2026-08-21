@@ -50,7 +50,7 @@ class MessagesSourceScanTest {
                     + "\\s*\\.\\s*get\\s*\\(",
             Pattern.DOTALL);
     private static final Pattern RESOLVED_LOCALIZED_COMPONENT = Pattern.compile(
-            "(?:String|var)\\s+([a-zA-Z][a-zA-Z0-9_]*)\\s*=\\s*[^;]*"
+            "(?:String|var)\\s+([a-zA-Z][a-zA-Z0-9_]*)\\s*=\\s*[^;]*?"
                     + "(?:messages|ctx\\s*\\.\\s*messages\\s*\\(\\s*\\))"
                     + "\\s*\\.\\s*get\\s*\\([^;]+;.{0,500}?"
                     + "(?:Component\\s*\\.\\s*text|ValidationUtils\\s*\\.\\s*create"

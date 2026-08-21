@@ -43,8 +43,9 @@ final class ReportRedactor {
      * from the captured opening quote, so an unterminated quoted secret is still redacted (and
      * even normalised to a closed quote) — it never leaks.
      */
+    @SuppressWarnings("java:S5843") // Complexity is the enumerated union of secret key names; splitting it would multiply patterns, not risk.
     private static final Pattern SECRET_KEY_VALUE = Pattern.compile(
-            "(?im)^\\s*(" + SECRET_KEY + ")" +
+            "(?im)^[ \\t]*(" + SECRET_KEY + ")" +
             "(\\s*[:=]\\s*)([\"']?).*$"
     );
 
@@ -57,6 +58,7 @@ final class ReportRedactor {
     );
 
     /** Secret assignments inside JDBC/URI query strings and connection-parameters values. */
+    @SuppressWarnings("java:S5843") // Complexity is the enumerated union of secret key names; splitting it would multiply patterns, not risk.
     private static final Pattern SECRET_PARAMETER = Pattern.compile(
             "(?i)((?:[?&;]|\\b)(?:" + SECRET_KEY + ")=)([^&#;\\s\"']*)"
     );
@@ -66,9 +68,10 @@ final class ReportRedactor {
     );
 
     private static final Pattern BEARER_TOKEN = Pattern.compile(
-            "(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/=-]+"
+            "(?i)(\\bBearer\\s+)[a-z0-9._~+/=-]+"
     );
 
+    @SuppressWarnings("java:S5843") // Complexity is the enumerated union of secret key names; splitting it would multiply patterns, not risk.
     private static final Pattern LOG_SECRET_KEY_VALUE = Pattern.compile(
             "(?i)(\\b(?:" + SECRET_KEY + ")\\b\\s*[:=]\\s*)"
                     + "(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;&#]+)"
