@@ -23,6 +23,20 @@ All notable user-visible changes to VeloAuth are documented in this file.
   disabled ceiling on an enabled resolver, a ceiling too low to pace ordinary logins, and a
   Mojang ceiling above the commonly reported per-IP limit.
 
+### Fixed
+
+- **Security:** premium players connecting during the startup window — after Velocity binds
+  its port but before VeloAuth finishes asynchronous initialization — were released from the
+  startup queue without any premium check and, on proxies with `online-mode = false`, were
+  assigned an offline UUID. Velocity snapshots an event's handler list at fire time, so the
+  auth listener registered at the end of initialization never saw an event that was already
+  suspended in the queue. The startup queue now runs each released event through the full
+  PreLogin auth pipeline itself, so a queued premium nickname resumes with forced Mojang
+  verification exactly as if it had arrived after startup. If the pipeline is unavailable
+  when the queue drains, the connection is denied instead of released unchecked. The window
+  recurred on every proxy restart and could be timed deliberately, so treat this as a
+  name-sniping vector, not a cosmetic race.
+
 ### Upgrade notes
 
 - No database changes. The new keys are written into freshly generated configs; existing

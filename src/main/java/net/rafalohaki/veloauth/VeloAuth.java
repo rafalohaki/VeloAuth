@@ -82,7 +82,12 @@ public class VeloAuth {
     private ConnectionManager connectionManager;
     private AuthServerProvider authServerProvider;
     private AuthTimeoutScheduler authTimeoutScheduler;
-    private AuthListener authListener;
+    /**
+     * Volatile: read by EarlyLoginBlocker from the initialization future's dependent stage.
+     * The future's happens-before already covers the phase-8 assignment, but the field is
+     * published safely on its own so no future call site has to re-derive that reasoning.
+     */
+    private volatile AuthListener authListener;
     private PremiumResolverService premiumResolverService;
     private PremiumResolverAlertService premiumResolverAlertService;
     private AuditLogService auditLogService;
@@ -1048,6 +1053,16 @@ public class VeloAuth {
      */
     public boolean isInitialized() {
         return initialized;
+    }
+
+    /**
+     * Returns the fully wired auth listener, or {@code null} until phase 8 of initialization
+     * has registered it. EarlyLoginBlocker delegates queued PreLogin events here, because a
+     * listener registered while an event dispatch is suspended never receives that event —
+     * Velocity snapshots the handler list at fire time.
+     */
+    public AuthListener getAuthListener() {
+        return authListener;
     }
 
     /**
