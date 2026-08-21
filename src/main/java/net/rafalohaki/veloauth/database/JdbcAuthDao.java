@@ -363,24 +363,36 @@ final class JdbcAuthDao {
             if (updated > 1) {
                 throw new SQLException("AUTH upsert updated multiple rows for " + player.getLowercaseNickname());
             }
-            if (updated == 0) {
-                try {
-                    executeInsert(connection, player);
-                } catch (SQLException e) {
-                    if (!isDuplicateKeyViolation(e)) {
-                        throw e;
-                    }
-                    // PostgreSQL marks the whole transaction as failed after a unique violation.
-                    // Roll it back and recover on a fresh connection instead of issuing UPDATE here.
-                    connection.rollback();
-                    return true;
-                }
+            if (updated == 0 && insertLostDuplicateRace(connection, player)) {
+                return true;
             }
             connection.commit();
             return false;
         } catch (SQLException e) {
             connection.rollback();
             throw e;
+        }
+    }
+
+    /**
+     * Attempts the insert half of the upsert.
+     *
+     * @return {@code true} when a concurrent writer inserted the same key first; the
+     *         transaction has already been rolled back and recovery must run on a fresh
+     *         connection, exactly as before this method was extracted
+     */
+    private boolean insertLostDuplicateRace(Connection connection, RegisteredPlayer player) throws SQLException {
+        try {
+            executeInsert(connection, player);
+            return false;
+        } catch (SQLException e) {
+            if (!isDuplicateKeyViolation(e)) {
+                throw e;
+            }
+            // PostgreSQL marks the whole transaction as failed after a unique violation.
+            // Roll it back and recover on a fresh connection instead of issuing UPDATE here.
+            connection.rollback();
+            return true;
         }
     }
 

@@ -137,23 +137,33 @@ final class ManagedProtocolRuntime implements ProtocolRuntime {
                         candidate.artifact().version(),
                         snapshots,
                         candidate);
-                try {
-                    validator.validate(runtime);
-                    return runtime;
-                } catch (RuntimeException | LinkageError validationFailure) {
-                    try {
-                        runtime.close();
-                    } catch (RuntimeException | LinkageError closeFailure) {
-                        validationFailure.addSuppressed(closeFailure);
-                    }
-                    throw validationFailure;
-                }
+                return validated(runtime, validator);
             } catch (RuntimeException | LinkageError e) {
                 snapshots.recordFailed(candidate, e);
                 aggregate.addSuppressed(e);
             }
         }
         throw aggregate;
+    }
+
+    /** Returns the runtime once the validator accepts it; closes and rethrows otherwise. */
+    private static ManagedProtocolRuntime validated(
+            ManagedProtocolRuntime runtime, RuntimeValidator validator) {
+        try {
+            validator.validate(runtime);
+            return runtime;
+        } catch (RuntimeException | LinkageError validationFailure) {
+            closeSuppressing(runtime, validationFailure);
+            throw validationFailure;
+        }
+    }
+
+    private static void closeSuppressing(ManagedProtocolRuntime runtime, Throwable primary) {
+        try {
+            runtime.close();
+        } catch (RuntimeException | LinkageError closeFailure) {
+            primary.addSuppressed(closeFailure);
+        }
     }
 
     static ManagedProtocolRuntime open(

@@ -143,13 +143,13 @@ final class BackendSelector {
                 CompletableFuture<ServerPing> ping =
                         lifecycle.startPingIfAllowed(state, candidates.get(index));
                 if (ping == null) {
-                    selection.record(candidateIndex, false);
+                    selection.recordCandidateResult(candidateIndex, false);
                 } else {
                     ping.whenComplete((ignored, failure) ->
-                            selection.record(candidateIndex, failure == null));
+                            selection.recordCandidateResult(candidateIndex, failure == null));
                 }
             } catch (RuntimeException failure) {
-                selection.record(candidateIndex, false);
+                selection.recordCandidateResult(candidateIndex, false);
             }
         }
         return selection.future();
@@ -276,7 +276,7 @@ final class BackendSelector {
             results = new AtomicReferenceArray<>(candidates.size());
         }
 
-        private void record(int index, boolean available) {
+        private void recordCandidateResult(int index, boolean available) {
             RegisteredServer selected = null;
             boolean shouldComplete = false;
             lock.lock();

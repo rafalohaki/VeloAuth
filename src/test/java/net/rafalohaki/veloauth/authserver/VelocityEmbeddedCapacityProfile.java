@@ -302,15 +302,15 @@ final class VelocityEmbeddedCapacityProfile {
         private final AtomicReference<String> firstFailure = new AtomicReference<>();
 
         private void recordJoined() {
-            record(joined);
+            recordEvent(joined);
         }
 
         private void recordKeepAlive() {
-            record(keepAlives);
+            recordEvent(keepAlives);
         }
 
         private void recordChatMessage() {
-            record(chatMessages);
+            recordEvent(chatMessages);
         }
 
         private void recordDisconnect(String reason) {
@@ -328,7 +328,7 @@ final class VelocityEmbeddedCapacityProfile {
             signalChanged();
         }
 
-        private void record(AtomicInteger counter) {
+        private void recordEvent(AtomicInteger counter) {
             counter.incrementAndGet();
             signalChanged();
         }

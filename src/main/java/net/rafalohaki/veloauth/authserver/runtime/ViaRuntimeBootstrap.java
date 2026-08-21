@@ -424,17 +424,17 @@ public final class ViaRuntimeBootstrap implements AutoCloseable {
         }
 
         @Override
-        public void publish(LogRecord record) {
-            if (record == null || !isLoggable(record)) {
+        public void publish(LogRecord logRecord) {
+            if (logRecord == null || !isLoggable(logRecord)) {
                 return;
             }
-            String message = record.getMessage();
-            Throwable thrown = record.getThrown();
-            if (record.getLevel().intValue() >= Level.SEVERE.intValue()) {
+            String message = logRecord.getMessage();
+            Throwable thrown = logRecord.getThrown();
+            if (logRecord.getLevel().intValue() >= Level.SEVERE.intValue()) {
                 delegate.error(message, thrown);
-            } else if (record.getLevel().intValue() >= Level.WARNING.intValue()) {
+            } else if (logRecord.getLevel().intValue() >= Level.WARNING.intValue()) {
                 delegate.warn(message, thrown);
-            } else if (record.getLevel().intValue() >= Level.INFO.intValue()) {
+            } else if (logRecord.getLevel().intValue() >= Level.INFO.intValue()) {
                 delegate.info(message, thrown);
             } else {
                 delegate.debug(message, thrown);
