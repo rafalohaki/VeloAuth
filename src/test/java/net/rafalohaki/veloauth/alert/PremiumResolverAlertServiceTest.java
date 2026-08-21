@@ -33,12 +33,30 @@ class PremiumResolverAlertServiceTest {
             assertEquals(0L, service.getMetrics().lastAlertTime(),
                     "A failed delivery must not start the cooldown");
 
-            service.recordResolution("mojang", false);
-            discordClient.secondAttempt().get(2, TimeUnit.SECONDS);
+            // The failed delivery is still unwinding on the scheduler thread, which holds the
+            // in-flight guard until its finally block runs, so the very next failure can be
+            // dropped. Keep failing until the retry is actually scheduled.
+            assertTrue(awaitRetriedDelivery(service, discordClient, 5, TimeUnit.SECONDS),
+                    "The next failure should retry after a delivery failed");
 
             assertTrue(awaitCooldownPublication(service, 2, TimeUnit.SECONDS),
-                    "The next failure should retry and a successful delivery should start cooldown");
+                    "A successful delivery should start the cooldown");
         }
+    }
+
+    @SuppressWarnings("java:S2925") // Deadline-bounded poll; the service exposes no in-flight signal.
+    private static boolean awaitRetriedDelivery(
+            PremiumResolverAlertService service, SequencedDiscordClient discordClient,
+            long timeout, TimeUnit unit) throws InterruptedException {
+        long deadline = System.nanoTime() + unit.toNanos(timeout);
+        while (System.nanoTime() < deadline) {
+            if (discordClient.secondAttempt().isDone()) {
+                return true;
+            }
+            service.recordResolution("mojang", false);
+            TimeUnit.MILLISECONDS.sleep(5);
+        }
+        return discordClient.secondAttempt().isDone();
     }
 
     @SuppressWarnings("java:S2925") // Deadline-bounded poll; the service exposes no publication signal.
