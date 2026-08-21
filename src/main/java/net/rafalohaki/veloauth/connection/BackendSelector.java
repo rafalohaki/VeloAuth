@@ -285,17 +285,14 @@ final class BackendSelector {
                     return;
                 }
                 results.set(index, available);
-                while (nextResult < candidates.size()) {
-                    Boolean result = results.get(nextResult);
-                    if (result == null) {
-                        break;
-                    }
-                    if (result) {
-                        selected = candidates.get(nextResult);
-                        shouldComplete = true;
-                        break;
-                    }
+                while (nextResult < candidates.size()
+                        && Boolean.FALSE.equals(results.get(nextResult))) {
                     nextResult++;
+                }
+                if (nextResult < candidates.size()
+                        && Boolean.TRUE.equals(results.get(nextResult))) {
+                    selected = candidates.get(nextResult);
+                    shouldComplete = true;
                 }
                 if (nextResult == candidates.size()) {
                     shouldComplete = true;

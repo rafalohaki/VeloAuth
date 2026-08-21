@@ -220,15 +220,14 @@ class ChangePasswordCommand implements SimpleCommand {
                 continue;
             }
             try {
-                if (!connected.getUsername().equalsIgnoreCase(username)) {
-                    continue;
-                }
-                connected.disconnect(ctx.messages().component(
-                        "general.kick.message", NamedTextColor.YELLOW));
-                if (ctx.logger().isWarnEnabled()) {
-                    ctx.logger().warn(
-                            "Disconnected duplicate player {} — password changed from IP {}",
-                            username, playerIp);
+                if (connected.getUsername().equalsIgnoreCase(username)) {
+                    connected.disconnect(ctx.messages().component(
+                            "general.kick.message", NamedTextColor.YELLOW));
+                    if (ctx.logger().isWarnEnabled()) {
+                        ctx.logger().warn(
+                                "Disconnected duplicate player {} — password changed from IP {}",
+                                username, playerIp);
+                    }
                 }
             } catch (RuntimeException disconnectFailure) {
                 ctx.logger().error(AUTH_MARKER,

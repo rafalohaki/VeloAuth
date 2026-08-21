@@ -198,14 +198,13 @@ final class LanguageFileUpdater {
 
                 int lineIndex = matchingLines.getFirst();
                 LogicalLine existing = lines.get(lineIndex);
-                if (!existing.isCanonical(migration.key(), migration.oldValue())) {
-                    continue;
+                if (existing.isCanonical(migration.key(), migration.oldValue())) {
+                    String replacement = LanguageFileManager.escapePropertyKey(migration.key()) + "="
+                            + LanguageFileManager.escapePropertyValue(migration.newValue())
+                            + existing.terminator();
+                    lines.set(lineIndex, existing.withRaw(replacement));
+                    migratedKeys.add(migration.key());
                 }
-                String replacement = LanguageFileManager.escapePropertyKey(migration.key()) + "="
-                        + LanguageFileManager.escapePropertyValue(migration.newValue())
-                        + existing.terminator();
-                lines.set(lineIndex, existing.withRaw(replacement));
-                migratedKeys.add(migration.key());
             }
             return migratedKeys;
         }

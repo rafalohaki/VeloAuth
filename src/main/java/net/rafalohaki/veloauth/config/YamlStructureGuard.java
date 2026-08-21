@@ -28,19 +28,17 @@ final class YamlStructureGuard {
         List<String> lines = Files.readAllLines(configFile, StandardCharsets.UTF_8);
         for (int index = 0; index < lines.size(); index++) {
             Matcher candidate = NULL_OR_CONTAINER.matcher(lines.get(index));
-            if (!candidate.matches()) {
-                continue;
-            }
-            String key = candidate.group(2);
-            if (!MAP_KEYS.contains(key) && !REQUIRED_SCALAR_KEYS.contains(key)) {
-                continue;
-            }
-            int indentation = candidate.group(1).length();
-            if (!hasNestedValue(lines, index + 1, indentation)) {
+            if (candidate.matches()
+                    && isGuardedKey(candidate.group(2))
+                    && !hasNestedValue(lines, index + 1, candidate.group(1).length())) {
                 throw new IllegalArgumentException(
-                        "Config key '" + key + "' must not be an explicit YAML null");
+                        "Config key '" + candidate.group(2) + "' must not be an explicit YAML null");
             }
         }
+    }
+
+    private static boolean isGuardedKey(String key) {
+        return MAP_KEYS.contains(key) || REQUIRED_SCALAR_KEYS.contains(key);
     }
 
     private static boolean hasNestedValue(
