@@ -601,7 +601,9 @@ public class DatabaseManager {
             return cacheResult;
         }
 
-        logCacheMiss(normalizedNickname, runtimeDetection);
+        if (runtimeDetection && logger.isDebugEnabled()) {
+            logger.debug(CACHE_MARKER, "Runtime detection - cache MISS: {}", normalizedNickname);
+        }
 
         DbResult<Void> connectionResult = validateDatabaseConnection();
         if (connectionResult.isDatabaseError()) {
@@ -619,12 +621,6 @@ public class DatabaseManager {
             return true;
         }
         return false;
-    }
-
-    private void logCacheMiss(String normalizedNickname, boolean runtimeDetection) {
-        if (runtimeDetection && logger.isDebugEnabled()) {
-            logger.debug(CACHE_MARKER, "Runtime detection - cache MISS: {}", normalizedNickname);
-        }
     }
 
     private DbResult<RegisteredPlayer> queryAndCachePlayer(String normalizedNickname, String originalNickname, boolean runtimeDetection) {
