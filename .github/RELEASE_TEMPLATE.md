@@ -1,18 +1,18 @@
 # VeloAuth {{VERSION}}
 
-This immutable release publishes exactly three files produced by one canonical build:
+This attested release publishes exactly three files produced by one canonical build:
 `veloauth-{{VERSION}}.jar`, `veloauth-{{VERSION}}.jar.sha256`, and
 `veloauth-{{VERSION}}.jar.manifest.json`. The JAR name and bytes are unchanged between build,
-both real-proxy smoke tests, attestation, the protected approval gate, and publication.
+both real-proxy smoke tests, attestation, the protected approval gate, and publication. It is
+published once and never mutated: the workflow refuses to touch an existing release, and the
+rolling `latest` release keeps the latest marker, so this release's download URLs are the
+per-tag ones below.
 
 ## Provenance and publication gate
 
-Before the tag is created, GitHub's immutable-releases repository setting and a protected tag
-ruleset that blocks update/deletion of `v*` tags must already be enabled, and the
-`production-release` environment must require a maintainer's manual approval. Store
-`RELEASE_POLICY_TOKEN` in that environment as a fine-grained token with repository
-`Administration (read)` permission so the workflow can verify the immutable-release policy before
-and after publication. Tagging is forbidden if any protection is absent. Approve the release job
+Before the tag is created, a protected tag ruleset that blocks update/deletion of `v*` tags
+must already be enabled, and the `production-release` environment must require a maintainer's
+manual approval. Tagging is forbidden if any protection is absent. Approve the release job
 only after the exact workflow candidate passed the external-limbo canary and the protected
 environment contains:
 
@@ -70,7 +70,7 @@ wget https://github.com/rafalohaki/VeloAuth/releases/download/v{{VERSION}}/veloa
 
 ## Upgrade checklist
 
-1. Confirm the release identity is Maven `{{VERSION}}`, immutable tag `v{{VERSION}}`, and unchanged
+1. Confirm the release identity is Maven `{{VERSION}}`, protected tag `v{{VERSION}}`, and unchanged
    artifact `veloauth-{{VERSION}}.jar`. Confirm separately that no private build already used this
    version; if it did, choose a new version before tagging.
 2. Back up the VeloAuth database, backend player data, `config.yml`, external language files and

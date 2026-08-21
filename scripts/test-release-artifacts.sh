@@ -757,16 +757,14 @@ required = [
     "./scripts/test-verify-reproducible-jar.sh",
     "gh attestation verify",
     "gh release download",
-    "--json isImmutable --jq .isImmutable",
     "--signer-workflow",
     "--source-ref",
     "--source-digest",
-    "--latest=true",
+    "--latest=false",
+    "Refuse to mutate an existing GitHub release",
     "EXTERNAL_CANARY_GREEN",
     "java-version: '25.0.4+7.0.LTS'",
     "VELOAUTH_CTD_JAVA25_HOME",
-    "RELEASE_POLICY_TOKEN",
-    "repos/${GITHUB_REPOSITORY}/immutable-releases",
     "X-GitHub-Api-Version: 2026-03-10",
     "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}",
     "repos/${GITHUB_REPOSITORY}/git/tags/",
@@ -812,7 +810,8 @@ if "--clobber" not in rolling_section:
 for rolling_token in (
     "needs: verify",
     "github.ref == 'refs/heads/main'",
-    "Expected exactly one release",
+    "Expected exactly one release with the rolling tag",
+    "Unexpected release tag in inventory",
 ):
     if rolling_token not in rolling_section:
         raise SystemExit(f"TEST FAILURE: rolling contract is missing: {rolling_token}")
@@ -891,23 +890,21 @@ end
 
 release_steps = release.fetch("steps")
 gate_index = release_steps.index { |step| step["name"] == "Enforce canary and operator approval evidence" }
-publish_index = release_steps.index { |step| step["name"] == "Publish one immutable release with exactly three assets" }
+publish_index = release_steps.index { |step| step["name"] == "Publish one versioned release with exactly three assets" }
 release_attest_index = release_steps.index { |step| step["name"] == "Verify the exact attestation before publication" }
 release_rehash_index = release_steps.index { |step| step["name"] == "Re-hash the attested candidate before publication" }
-published_verify_index = release_steps.index { |step| step["name"] == "Verify immutable published assets byte for byte" }
-policy_index = release_steps.index { |step| step["name"] == "Require immutable-release policy" }
+published_verify_index = release_steps.index { |step| step["name"] == "Verify published assets byte for byte" }
+refuse_index = release_steps.index { |step| step["name"] == "Refuse to mutate an existing GitHub release" }
 raise "TEST FAILURE: protected release gate is missing" unless gate_index
-raise "TEST FAILURE: immutable publication step is missing" unless publish_index
-raise "TEST FAILURE: immutable-release policy gate is missing" unless policy_index
+raise "TEST FAILURE: versioned publication step is missing" unless publish_index
+raise "TEST FAILURE: refuse-to-mutate gate is missing" unless refuse_index
 raise "TEST FAILURE: protected release gate must precede publication" unless gate_index < publish_index
-unless release_attest_index < release_rehash_index && release_rehash_index < policy_index && policy_index < publish_index && publish_index < published_verify_index
-  raise "TEST FAILURE: release order must be attest, re-hash, publish, immutable byte verification"
+unless release_attest_index < release_rehash_index && release_rehash_index < refuse_index && refuse_index < publish_index && publish_index < published_verify_index
+  raise "TEST FAILURE: release order must be attest, re-hash, refuse-mutation, publish, byte verification"
 end
-policy = release_steps.fetch(policy_index)
-unless policy.fetch("env").fetch("GH_TOKEN") == "${{ secrets.RELEASE_POLICY_TOKEN }}" &&
-       policy.fetch("run").include?("immutable-releases") &&
-       policy.fetch("run").include?(".enabled")
-  raise "TEST FAILURE: immutable-release policy must use the protected Administration(read) token"
+publish_flags = release_steps.fetch(publish_index).fetch("run")
+unless publish_flags.include?("--latest=false")
+  raise "TEST FAILURE: versioned releases must not take the latest marker away from the rolling release"
 end
 publish_script = release_steps.fetch(publish_index).fetch("run")
 unless publish_script.include?("git/ref/tags/${GITHUB_REF_NAME}") &&
@@ -916,15 +913,11 @@ unless publish_script.include?("git/ref/tags/${GITHUB_REF_NAME}") &&
   raise "TEST FAILURE: remote lightweight/annotated tag must be peeled immediately before publication"
 end
 published_script = release_steps.fetch(published_verify_index).fetch("run")
-unless published_script.include?("--json isImmutable --jq .isImmutable") &&
-       published_script.include?("gh release download") &&
+unless published_script.include?("gh release download") &&
        published_script.include?("cmp --") &&
        published_script.include?("verify-release-candidate.sh --existing") &&
-       published_script.include?("git/ref/tags/${GITHUB_REF_NAME}") &&
-       published_script.include?("immutable-releases") &&
-       release_steps.fetch(published_verify_index).fetch("env").fetch("RELEASE_POLICY_TOKEN") ==
-         "${{ secrets.RELEASE_POLICY_TOKEN }}"
-  raise "TEST FAILURE: published release must be immutable and byte-identical with exactly three assets"
+       published_script.include?("git/ref/tags/${GITHUB_REF_NAME}")
+  raise "TEST FAILURE: published release must be byte-identical with exactly three assets"
 end
 gate = release_steps.fetch(gate_index)
 gate_env = gate.fetch("env")
@@ -943,10 +936,10 @@ grep -Fq 'production-release' "${PROJECT_DIR}/README.md" \
   || fail "README must document the protected release environment precondition"
 grep -Fq 'verify-release-candidate.sh --existing' "${PROJECT_DIR}/README.md" \
   || fail "README must document offline verification of an existing candidate"
-grep -Fq 'RELEASE_POLICY_TOKEN' "${PROJECT_DIR}/README.md" \
-  || fail "README must document the protected immutable-release policy token"
-grep -Fq 'Administration (read)' "${PROJECT_DIR}/README.md" \
-  || fail "README must document least-privilege policy-token permission"
+grep -Fq 'releases/latest/download/veloauth-latest.jar' "${PROJECT_DIR}/README.md" \
+  || fail "README must document the permanent rolling download URL owned by the latest release"
+grep -Fq -- '--latest=false' "${PROJECT_DIR}/README.md" \
+  || fail "README must document that versioned releases never take the latest marker"
 grep -Fq 'protected tag ruleset' "${PROJECT_DIR}/README.md" \
   || fail "README must require a protected tag ruleset before tag creation"
 

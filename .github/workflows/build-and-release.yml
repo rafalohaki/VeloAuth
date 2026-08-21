@@ -303,23 +303,39 @@ jobs:
               rolling-assets/veloauth-latest.jar.sha256
           fi
 
-      - name: Prove exactly one release exists
+      - name: Prove the release inventory is coherent
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          count="$(gh release list --limit 100 --json tagName --jq 'length')"
-          if [[ "${count}" != 1 ]]; then
-            echo "Expected exactly one release, found ${count}" >&2
+          # Exactly one rolling release, and every other release is a versioned v* release.
+          # The previous "Expected exactly one release" assertion predates the versioned
+          # path coexisting with rolling and would fail every main push after the first tag.
+          tags="$(gh release list --limit 100 --json tagName --jq '.[].tagName')"
+          rolling_count=0
+          while IFS= read -r tag; do
+            [[ -z "${tag}" ]] && continue
+            if [[ "${tag}" == latest ]]; then
+              rolling_count=$((rolling_count + 1))
+            elif [[ ! "${tag}" =~ ^v[0-9] ]]; then
+              echo "Unexpected release tag in inventory: ${tag}" >&2
+              gh release list --limit 100 >&2
+              exit 1
+            fi
+          done <<<"${tags}"
+          if [[ "${rolling_count}" != 1 ]]; then
+            echo "Expected exactly one release with the rolling tag, found ${rolling_count}" >&2
             gh release list --limit 100 >&2
             exit 1
           fi
 
-  # Dormant. The versioned, attested release path is retained but is only reachable by pushing a
-  # `v*` tag, which the rolling model above does not do. Note that its "Require immutable-release
-  # policy" step will fail while the repository setting is disabled — immutability had to be turned
-  # off so the rolling release can reuse the `latest` tag name. Re-enabling the versioned path means
-  # turning immutable releases back on and retiring the rolling job first.
+  # Versioned, attested release path, reachable only by pushing a `v*` tag. Coexists with the
+  # rolling job above: the rolling release owns the `latest` tag and the /releases/latest
+  # download URL, so versioned releases publish with --latest=false and never touch the
+  # `latest` tag. GitHub's immutable-releases repository setting stays OFF (rolling must
+  # replace its assets in place); versioned releases are immutable in practice instead:
+  # the release job refuses to mutate an existing release, this path never uses --clobber,
+  # and the protected `v*` tag ruleset blocks tag rewrites.
   candidate:
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
@@ -599,20 +615,7 @@ jobs:
             exit 1
           fi
 
-      - name: Require immutable-release policy
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
-        run: |
-          enabled="$(gh api \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled')"
-          if [[ "${enabled}" != true ]]; then
-            echo "GitHub immutable releases must be enabled before publication" >&2
-            exit 1
-          fi
-
-      - name: Publish one immutable release with exactly three assets
+      - name: Publish one versioned release with exactly three assets
         env:
           GH_TOKEN: ${{ github.token }}
           JAR_NAME: ${{ needs.candidate.outputs.jar-name }}
@@ -656,13 +659,12 @@ jobs:
             --verify-tag \
             --title "VeloAuth ${VERSION}" \
             --notes-file "${RUNNER_TEMP}/veloauth-release-notes.md" \
-            --latest=true
+            --latest=false
 
-      - name: Verify immutable published assets byte for byte
+      - name: Verify published assets byte for byte
         env:
           GH_TOKEN: ${{ github.token }}
           JAR_NAME: ${{ needs.candidate.outputs.jar-name }}
-          RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
         run: |
           verify_remote_tag_commit() {
             local tag_object tag_type tag_sha depth
@@ -694,18 +696,10 @@ jobs:
             fi
           }
           verify_remote_tag_commit
-          enabled="$(GH_TOKEN="${RELEASE_POLICY_TOKEN}" gh api \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled')"
-          if [[ "${enabled}" != true ]]; then
-            echo "GitHub immutable releases became disabled during publication" >&2
-            exit 1
-          fi
-          if [[ "$(gh release view "${GITHUB_REF_NAME}" --json isImmutable --jq .isImmutable)" != true ]]; then
-            echo "Published release is not immutable" >&2
-            exit 1
-          fi
+          # Repository-level immutable releases stay disabled (the rolling job must replace
+          # its own assets in place), so practical immutability for this release rests on the
+          # refuse-to-mutate gate above, this path never overwriting published assets, and the
+          # protected v* tag ruleset — plus the byte-for-byte comparison below.
           actual_assets="$(gh release view "${GITHUB_REF_NAME}" --json assets \
             --jq '.assets | map(.name) | sort | .[]')"
           expected_assets="$(printf '%s\n' \

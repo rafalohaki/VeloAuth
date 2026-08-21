@@ -132,14 +132,22 @@ so only that proxy process runs on exact Temurin 25.0.4+7 during its smoke; the 
 Maven integration client, ordinary Velocity smoke and manifest identity remain on exact Temurin
 21.0.12+8.
 
+Two release channels coexist. The rolling channel republishes the single `latest` release from
+every `main` push that passed the full verify matrix; it owns the permanent download URL
+`https://github.com/rafalohaki/VeloAuth/releases/latest/download/veloauth-latest.jar` and is the
+only job allowed to move the `latest` tag or replace release assets. The versioned channel is
+triggered only by `v*` tags and publishes attested, once-only releases with `--latest=false`, so
+they never take the latest marker (and that permanent URL) away from the rolling release.
+GitHub's immutable-releases repository setting stays disabled because the rolling channel must
+replace its own assets in place; versioned releases are immutable in practice instead: the job
+refuses to create or modify an already existing release and never uses `--clobber`, and a
+protected tag ruleset that blocks update/deletion of `v*` tags must be enabled before anyone
+creates a version tag.
+
 The GitHub `production-release` environment is a mandatory protected environment with manual
-maintainer approval. Before anyone creates a version tag, GitHub's immutable-releases repository
-setting, a protected tag ruleset that blocks update/deletion of `v*` tags, and that environment
-protection must already be enabled. Store `RELEASE_POLICY_TOKEN` as an environment secret backed by
-a fine-grained token with repository `Administration (read)` permission; the job uses it only to
-fail closed on the immutable-releases policy before and after publication. The release job can be
-approved only after the exact workflow candidate passes the external-limbo canary; protected
-environment variables must set `EXTERNAL_CANARY_GREEN=true` and
+maintainer approval. The release job can be approved only after the exact workflow candidate
+passes the external-limbo canary; protected environment variables must set
+`EXTERNAL_CANARY_GREEN=true` and
 `OPERATOR_RELEASE_SIGNOFF=v1.5.0:<40-character-source-commit>`. The job downloads the same workflow
 artifact, verifies its provenance, and refuses to create or modify an already existing release. It
 remotely peels either a lightweight or annotated version tag to the workflow commit immediately

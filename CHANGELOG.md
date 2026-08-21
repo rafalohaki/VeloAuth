@@ -37,6 +37,18 @@ All notable user-visible changes to VeloAuth are documented in this file.
   recurred on every proxy restart and could be timed deliberately, so treat this as a
   name-sniping vector, not a cosmetic race.
 
+### Changed
+
+- The versioned release channel works again alongside the rolling `latest` build. Rolling keeps
+  the `latest` tag and the permanent `/releases/latest/download/veloauth-latest.jar` URL;
+  releases cut from `v*` tags are published once, attested, and no longer claim the latest
+  marker. The release job no longer requires GitHub's immutable-releases repository setting
+  (it must stay off for the rolling channel); a versioned release is protected instead by the
+  refuse-to-mutate gate, the protected `v*` tag ruleset, and byte-for-byte published-asset
+  verification. Previously the two channels conflicted: any versioned release would fail the
+  rolling job's release-count check on the next `main` push, and the versioned path could not
+  pass its own immutability gate at all.
+
 ### Upgrade notes
 
 - No database changes. The new keys are written into freshly generated configs; existing
