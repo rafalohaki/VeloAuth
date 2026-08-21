@@ -39,23 +39,27 @@ public final class AuthServerProvider implements AutoCloseable {
     private volatile EmbeddedLimboServer embeddedServer;
     private volatile ProtocolRuntime protocolRuntime;
 
+    /** Embedded-mode wiring; external mode passes {@code null} for every component. */
+    private record EmbeddedWiring(
+            EmbeddedConfig config, Path dataDirectory, RuntimeFactory runtimeFactory) {
+        static final EmbeddedWiring NONE = new EmbeddedWiring(null, null, null);
+    }
+
     private AuthServerProvider(
             ProxyServer proxyServer,
             Logger logger,
             Messages messages,
             Settings.AuthServerMode mode,
             String serverName,
-            EmbeddedConfig embeddedConfig,
-            Path dataDirectory,
-            RuntimeFactory runtimeFactory) {
+            EmbeddedWiring embedded) {
         this.proxyServer = Objects.requireNonNull(proxyServer, "proxyServer");
         this.logger = Objects.requireNonNull(logger, "logger");
         this.messages = messages;
         this.mode = Objects.requireNonNull(mode, "mode");
         this.serverName = Objects.requireNonNull(serverName, "serverName");
-        this.embeddedConfig = embeddedConfig;
-        this.dataDirectory = dataDirectory;
-        this.runtimeFactory = runtimeFactory;
+        this.embeddedConfig = embedded.config();
+        this.dataDirectory = embedded.dataDirectory();
+        this.runtimeFactory = embedded.runtimeFactory();
     }
 
     /** Creates a provider from the validated restart-scoped configuration. */
@@ -96,9 +100,10 @@ public final class AuthServerProvider implements AutoCloseable {
                 Objects.requireNonNull(messages, "messages"),
                 configuredMode,
                 EMBEDDED_SERVER_NAME,
-                snapshot,
-                Objects.requireNonNull(dataDirectory, "dataDirectory").toAbsolutePath().normalize(),
-                Objects.requireNonNull(runtimeFactory, "runtimeFactory"));
+                new EmbeddedWiring(
+                        snapshot,
+                        Objects.requireNonNull(dataDirectory, "dataDirectory").toAbsolutePath().normalize(),
+                        Objects.requireNonNull(runtimeFactory, "runtimeFactory")));
     }
 
     /** Compatibility factory used by existing external-mode integrations and tests. */
@@ -111,7 +116,7 @@ public final class AuthServerProvider implements AutoCloseable {
         }
         return new AuthServerProvider(
                 proxyServer, logger, null, Settings.AuthServerMode.EXTERNAL, serverName,
-                null, null, null);
+                EmbeddedWiring.NONE);
     }
 
     /** Starts and atomically publishes the selected topology. */

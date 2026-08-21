@@ -138,6 +138,7 @@ class EmbeddedLimboLoadTest {
         return ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
     }
 
+    @SuppressWarnings("java:S2925") // The JVM exposes no GC-completion signal to await instead.
     private static void forceGc() throws InterruptedException {
         System.gc();
         TimeUnit.MILLISECONDS.sleep(250);

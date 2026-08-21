@@ -1109,7 +1109,8 @@ public class AuthListener {
                 authCache.hasActiveSession(playerUuid, player.getUsername(), playerIp);
         if (!isAuthorized || !hasActiveSession || !uuidMatches) {
             handleUnauthorizedConnection(event, player, targetServerName,
-                    isAuthorized, hasActiveSession, uuidMatches, playerIp, operation);
+                    new AuthorizationChecks(isAuthorized, hasActiveSession, uuidMatches),
+                    playerIp, operation);
         } else {
             // ✅ WSZYSTKIE WERYFIKACJE PRZESZŁY - POZWÓL
             logger.debug("Authorized player {} heading to {} (session: OK, UUID: OK)",
@@ -1119,12 +1120,17 @@ public class AuthListener {
         }
     }
 
+    /** The three independent verdicts a backend connection must pass. */
+    private record AuthorizationChecks(
+            boolean authorized, boolean activeSession, boolean uuidMatches) {
+    }
+
     private void handleUnauthorizedConnection(
             ServerPreConnectEvent event, Player player, String targetServerName,
-            boolean isAuthorized, boolean hasActiveSession, boolean uuidMatches, String playerIp,
+            AuthorizationChecks checks, String playerIp,
             Operation operation) {
         // ❌ NIE AUTORYZOWANY LUB BRAK SESJI LUB UUID MISMATCH
-        String reason = resolveBlockReason(isAuthorized, hasActiveSession);
+        String reason = resolveBlockReason(checks.authorized(), checks.activeSession());
 
         if (logger.isDebugEnabled()) {
             logger.debug("Blocked unauthorized backend access for {} -> {} (reason: {}, ip: {})",
@@ -1140,7 +1146,7 @@ public class AuthListener {
                     .build());
 
             // Jeśli UUID mismatch - usuń z cache dla bezpieczeństwa
-            if (!uuidMatches) {
+            if (!checks.uuidMatches()) {
                 authCache.removeAuthorizedPlayer(player.getUniqueId());
                 authCache.endSession(player.getUniqueId());
             }

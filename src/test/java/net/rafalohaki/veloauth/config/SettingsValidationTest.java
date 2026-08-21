@@ -436,25 +436,6 @@ class SettingsValidationTest {
         assertTrue(generatedConfig.contains("rate-limit-max-wait-ms: 1000"));
     }
 
-    @ParameterizedTest(name = "shouldReject upstream request budget {0}={1}")
-    @CsvSource({
-        "mojang-requests-per-minute, -1",
-        "ashcon-requests-per-minute, -1",
-        "wpme-requests-per-minute, -1",
-        "rate-limit-max-wait-ms, -1",
-        "rate-limit-max-wait-ms, 2001"
-    })
-    void shouldRejectInvalidUpstreamRequestBudgets(String key, int value) {
-        writeConfigFile(tempDir.resolve("config.yml"), """
-                premium:
-                  resolver:
-                    mojang-enabled: true
-                    %s: %d
-                """.formatted(key, value));
-
-        assertFalse(settings.load());
-    }
-
     @Test
     void changingUpstreamRequestBudgetOnReloadIsRestartRequiredAndNotHotApplied() {
         Path configFile = tempDir.resolve("config.yml");
@@ -500,14 +481,19 @@ class SettingsValidationTest {
         assertEquals(250, rateLimit.getMaxWaitMillis());
     }
 
-    @ParameterizedTest(name = "shouldReject premium resolver limit {0}={1}")
+    @ParameterizedTest(name = "shouldReject premium resolver setting {0}={1}")
     @CsvSource({
         "max-lookups-per-ip-per-minute, 0",
         "max-lookups-per-ip-per-minute, -1",
         "max-concurrent-lookups, 0",
-        "max-concurrent-lookups, -1"
+        "max-concurrent-lookups, -1",
+        "mojang-requests-per-minute, -1",
+        "ashcon-requests-per-minute, -1",
+        "wpme-requests-per-minute, -1",
+        "rate-limit-max-wait-ms, -1",
+        "rate-limit-max-wait-ms, 2001"
     })
-    void shouldRejectNonPositivePremiumResolverLimits(String key, int value) {
+    void shouldRejectInvalidPremiumResolverSettings(String key, int value) {
         writeConfigFile(tempDir.resolve("config.yml"), """
                 premium:
                   resolver:

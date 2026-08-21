@@ -41,6 +41,7 @@ class PremiumResolverAlertServiceTest {
         }
     }
 
+    @SuppressWarnings("java:S2925") // Deadline-bounded poll; the service exposes no publication signal.
     private static boolean awaitCooldownPublication(
             PremiumResolverAlertService service, long timeout, TimeUnit unit) throws InterruptedException {
         long deadline = System.nanoTime() + unit.toNanos(timeout);
