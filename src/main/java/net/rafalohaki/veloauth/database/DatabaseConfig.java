@@ -141,6 +141,33 @@ public final class DatabaseConfig {
                 dbType.getName(), null, 0, database, null, null, 1, null, jdbcUrl, Path.of("data")));
     }
 
+    /**
+     * Creates a local (H2/SQLite) configuration rooted in the plugin data directory,
+     * transparently migrating legacy {@code ./data} files from the proxy working directory.
+     *
+     * @param storageType         database type name (H2 or SQLITE)
+     * @param database            database name
+     * @param pluginDataDirectory the plugin data directory (e.g. {@code plugins/veloauth})
+     * @param logger              operator-facing logger for migration outcomes
+     * @return DatabaseConfig pointing at the migrated (or legacy fallback) location
+     */
+    public static DatabaseConfig forLocalDatabaseWithMigration(
+            String storageType, String database, Path pluginDataDirectory, Logger logger) {
+        DatabaseType dbType = DatabaseType.fromName(storageType);
+        if (dbType == null || !dbType.isLocalDatabase()) {
+            throw new IllegalArgumentException("Invalid local database type: " + storageType);
+        }
+        Objects.requireNonNull(pluginDataDirectory, "pluginDataDirectory must not be null");
+        Objects.requireNonNull(logger, "logger must not be null");
+        Path directory = LocalDatabaseMigrator.resolveDataDirectory(
+                dbType, database,
+                Path.of("data"),
+                pluginDataDirectory.resolve("data"),
+                Files::move,
+                logger);
+        return forLocalDatabase(storageType, database, directory);
+    }
+
     /** Test seam for verifying fresh local installations without changing the legacy path. */
     static DatabaseConfig forLocalDatabase(String storageType, String database, Path localDataDirectory) {
         DatabaseType dbType = DatabaseType.fromName(storageType);

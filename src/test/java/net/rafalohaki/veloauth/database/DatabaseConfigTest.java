@@ -36,6 +36,20 @@ class DatabaseConfigTest {
     }
 
     @Test
+    void forLocalDatabaseWithMigration_freshInstall_resolvesPluginDataDirectory() {
+        Path pluginDataDirectory = tempDir.resolve("plugins").resolve("veloauth");
+        String database = "fresh_install_" + System.nanoTime();
+
+        DatabaseConfig config = DatabaseConfig.forLocalDatabaseWithMigration(
+                "H2", database, pluginDataDirectory, org.slf4j.helpers.NOPLogger.NOP_LOGGER);
+
+        String expectedPath = pluginDataDirectory.toAbsolutePath().normalize()
+                .resolve("data").resolve(database).toString();
+        assertEquals("jdbc:h2:file:" + expectedPath + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE",
+                config.getJdbcUrl());
+    }
+
+    @Test
     void initialize_freshSqliteInstallation_shouldCreateParentDirectoryAndDatabase() {
         Path databaseDirectory = tempDir.resolve("fresh-data");
         DatabaseConfig config = DatabaseConfig.forLocalDatabase(

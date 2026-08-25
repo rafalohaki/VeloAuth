@@ -633,9 +633,13 @@ Prefer the structured fields above. If `connection-url` is used, put query param
 back up the database before changing storage type, importing LimboAuth data or upgrading a release
 that contains schema changes.
 
-H2 and SQLite retain their historical paths under `./data` relative to the proxy working directory.
-VeloAuth creates the missing parent directory on a fresh installation; it does not relocate or
-rename an existing local database during an upgrade. Registration uses an insert-only database
+H2 and SQLite live under `plugins/veloauth/data/` inside the plugin data directory. Installations
+upgraded from releases that used `./data` relative to the proxy working directory are migrated
+automatically on startup: the database files are moved once, and if the move fails (or an H2 lock
+file suggests another process still owns the database) VeloAuth keeps using the legacy location
+unchanged, so an upgrade can never lose an existing database. When downgrading below 1.6.1, stop
+the proxy and move the files from `plugins/veloauth/data/` back to `data/` in the proxy working
+directory first — older versions only look there. Registration uses an insert-only database
 operation, so two concurrent proxies/clients cannot replace the first account owner. Normal
 authenticated account updates still use UPSERT, with duplicate-race recovery in a fresh transaction
 for PostgreSQL compatibility and a bounded retry for standard transaction deadlocks/serialization
@@ -786,6 +790,23 @@ Run the normal Java/H2/SQLite gates and the explicit duplication gate together w
 ./scripts/test-postgresql.sh
 ./scripts/test-mysql.sh
 ```
+
+End-to-end auth-flow verification drives real Mineflayer bots through a real Velocity proxy with
+the plugin installed, against both auth-server topologies (`embedded` limbo and external
+PicoLimbo). The first bot connects while VeloAuth is still initializing, exercising the startup
+queue and asserting that the register/login instructions, the repeating reminder, `/register`
+and a reconnect `/login` all work end to end. Offline mode only — premium Mojang session auth
+cannot be simulated by a bot. Requires Node.js 22+, Java 21+ and network access on first run
+(downloads Velocity, PicoLimbo and the embedded ViaVersion runtime, all checksum-pinned):
+
+```bash
+./scripts/test-e2e-mineflayer.sh            # both topologies
+./scripts/test-e2e-mineflayer.sh embedded   # embedded limbo only
+./scripts/test-e2e-mineflayer.sh picolimbo  # external PicoLimbo only
+```
+
+`VELOAUTH_E2E_JAR=/path/to/veloauth.jar` overrides the plugin jar under test (useful for
+verifying a released artifact).
 
 Dependency declarations are a release gate, not documentation-only metadata. The build pins
 [Maven Dependency Plugin 3.11.0](https://maven.apache.org/plugins/maven-dependency-plugin/analyze-only-mojo.html)

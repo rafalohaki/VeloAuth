@@ -1,0 +1,12 @@
+{
+  "name": "veloauth-e2e",
+  "private": true,
+  "description": "End-to-end Mineflayer bot tests for VeloAuth (offline-mode auth flow only)",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "mineflayer": "4.37.1"
+  }
+}

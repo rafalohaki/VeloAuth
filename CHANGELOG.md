@@ -2,6 +2,28 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
+## [1.6.1] - 2026-08-25
+
+### Fixed
+
+- A player could sit on the auth server without ever seeing the register/login instructions
+  when the one-shot prompt was lost — reported for the first join after proxy startup (#48).
+  The prompt now has two safety nets: a failed database lookup falls back to the generic
+  instructions instead of logging silently, and a repeating reminder re-sends the
+  instructions every 10 seconds until the player authenticates, leaves the auth server or
+  disconnects.
+
+- Local H2/SQLite database files were created under `data/` in the proxy working directory
+  instead of the plugin data directory (#48). New installations now store them under
+  `plugins/veloauth/data/`. Existing installations are migrated automatically on startup by
+  moving the files once; the migration is fail-safe — if the files cannot be moved, if the
+  target already holds a database, or if an H2 lock file suggests the legacy copy is still
+  in use, VeloAuth keeps using the previous location unchanged, so no upgrade can lose an
+  existing database. When downgrading below 1.6.1, stop the proxy and move the database
+  files from `plugins/veloauth/data/` back to `data/` in the proxy working directory first —
+  older versions only look in the old location and would otherwise start with an empty
+  database (the migrated file itself is never deleted).
+
 ## [1.6.0] - 2026-08-21
 
 ### Added

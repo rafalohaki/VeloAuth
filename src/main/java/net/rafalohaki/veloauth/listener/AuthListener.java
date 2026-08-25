@@ -1242,6 +1242,10 @@ public class AuthListener {
                         () -> sendAuthPrompt(player, dbResult)))
                 .exceptionally(e -> {
                     logger.error("Error sending auth prompt for {}", username.get(), e);
+                    // The player must never sit on the auth server without instructions -
+                    // fall back to the generic prompt when the lookup itself failed.
+                    connectionLifecycleRegistry.runIfCurrent(operation, () -> player.sendMessage(
+                            messages.component("auth.prompt.generic", NamedTextColor.YELLOW)));
                     return null;
                 });
     }

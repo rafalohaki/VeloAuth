@@ -135,3 +135,8 @@ AGENTS.md
 skrypt.sh
 roadmap.md
 ARCHITECTURE.md
+
+# E2E (Mineflayer) local artifacts
+e2e/node_modules/
+e2e/.cache/
+e2e/package-lock.json

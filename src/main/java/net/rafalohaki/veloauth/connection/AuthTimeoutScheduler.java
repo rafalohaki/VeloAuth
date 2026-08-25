@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 
 /**
  * Disconnects players who linger on the auth server without authenticating within
@@ -38,6 +39,14 @@ public final class AuthTimeoutScheduler {
 
     private static final Marker AUTH_MARKER = MarkerFactory.getMarker("AUTH");
 
+    /**
+     * How often the login/register reminder repeats. The one-shot prompt from
+     * {@code AuthListener.sendAuthInstructions} can be lost on the initial join
+     * (see issue #48); this cadence keeps the player informed without spamming
+     * within the default 300s auth timeout window.
+     */
+    private static final int REMINDER_INTERVAL_SECONDS = 10;
+
     private final VeloAuth plugin;
     private final Settings settings;
     private final Messages messages;
@@ -45,6 +54,7 @@ public final class AuthTimeoutScheduler {
     private final ConnectionManager connectionManager;
     private final Logger logger;
     private final ConcurrentMap<UUID, ScheduledTask> pending = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, ScheduledTask> reminders = new ConcurrentHashMap<>();
     private final ReentrantLock lifecycleLock = new ReentrantLock();
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -59,15 +69,14 @@ public final class AuthTimeoutScheduler {
     }
 
     /**
-     * Schedules a kick for the given player after {@code auth-server.timeout-seconds}.
-     * No-op when timeout is configured to zero or negative.
-     * Any previously scheduled timeout for the same UUID is cancelled first.
+     * Schedules the repeating login/register reminder and (when enabled) a kick for the given
+     * player after {@code auth-server.timeout-seconds}. The reminder is the safety net for a
+     * lost one-shot auth prompt: it repeats until the player authenticates, leaves the auth
+     * server, or disconnects. Any previously scheduled tasks for the same UUID are cancelled
+     * first.
      */
     public void schedule(Player player) {
         int seconds = settings.getAuthServerTimeoutSeconds();
-        if (seconds <= 0) {
-            return;
-        }
         UUID uuid = player.getUniqueId();
 
         lifecycleLock.lock();
@@ -75,29 +84,10 @@ public final class AuthTimeoutScheduler {
             if (closed.get()) {
                 return;
             }
-            ScheduledTaskRegistry.replace(pending, uuid, callback ->
-                    plugin.getServer().getScheduler().buildTask(plugin, callback)
-                            .delay(seconds, TimeUnit.SECONDS)
-                            .schedule(), () -> {
-                if (closed.get() || !player.isActive()) {
-                    return;
-                }
-                // Re-check: maybe player authenticated in the meantime but cancel() didn't fire
-                // (e.g. external session restore). Verify against cache + current server.
-                if (isAuthorizedAndStillOnAuthServer(player)) {
-                    return;
-                }
-                if (!connectionManager.isPlayerOnAuthServer(player)) {
-                    return; // already moved on, nothing to do
-                }
-
-                player.disconnect(messages.component("auth.timeout.kick", NamedTextColor.RED, seconds));
-                if (logger.isInfoEnabled()) {
-                    logger.info(AUTH_MARKER,
-                            "Kicked player {} after {}s auth timeout (no login/register)",
-                            player.getUsername(), seconds);
-                }
-            });
+            scheduleReminderLocked(player, uuid);
+            if (seconds > 0) {
+                scheduleKickLocked(player, uuid, seconds);
+            }
         } finally {
             lifecycleLock.unlock();
         }
@@ -105,6 +95,55 @@ public final class AuthTimeoutScheduler {
             logger.debug(AUTH_MARKER, "Auth timeout scheduled for {} ({}s)",
                     player.getUsername(), seconds);
         }
+    }
+
+    private void scheduleKickLocked(Player player, UUID uuid, int seconds) {
+        ScheduledTaskRegistry.replace(pending, uuid, callback ->
+                plugin.getServer().getScheduler().buildTask(plugin, callback)
+                        .delay(seconds, TimeUnit.SECONDS)
+                        .schedule(), () -> {
+            if (closed.get() || !player.isActive()) {
+                return;
+            }
+            // Re-check: maybe player authenticated in the meantime but cancel() didn't fire
+            // (e.g. external session restore). Verify against cache + current server.
+            if (isAuthorizedAndStillOnAuthServer(player)) {
+                return;
+            }
+            if (!connectionManager.isPlayerOnAuthServer(player)) {
+                return; // already moved on, nothing to do
+            }
+
+            player.disconnect(messages.component("auth.timeout.kick", NamedTextColor.RED, seconds));
+            if (logger.isInfoEnabled()) {
+                logger.info(AUTH_MARKER,
+                        "Kicked player {} after {}s auth timeout (no login/register)",
+                        player.getUsername(), seconds);
+            }
+        });
+    }
+
+    private void scheduleReminderLocked(Player player, UUID uuid) {
+        ScheduledTask task = plugin.getServer().getScheduler()
+                .buildTask(plugin, (Consumer<ScheduledTask>) self -> runReminder(player, self))
+                .delay(REMINDER_INTERVAL_SECONDS, TimeUnit.SECONDS)
+                .repeat(REMINDER_INTERVAL_SECONDS, TimeUnit.SECONDS)
+                .schedule();
+        ScheduledTask previous = reminders.put(uuid, task);
+        if (previous != null) {
+            previous.cancel();
+        }
+    }
+
+    private void runReminder(Player player, ScheduledTask self) {
+        if (closed.get() || !player.isActive()
+                || isAuthorizedAndStillOnAuthServer(player)
+                || !connectionManager.isPlayerOnAuthServer(player)) {
+            reminders.remove(player.getUniqueId(), self);
+            self.cancel();
+            return;
+        }
+        player.sendMessage(messages.component("auth.prompt.generic", NamedTextColor.YELLOW));
     }
 
     private boolean isAuthorizedAndStillOnAuthServer(Player player) {
@@ -118,6 +157,7 @@ public final class AuthTimeoutScheduler {
      */
     public void cancel(UUID uuid) {
         ScheduledTaskRegistry.cancel(pending, uuid);
+        ScheduledTaskRegistry.cancel(reminders, uuid);
     }
 
     /**
@@ -128,6 +168,7 @@ public final class AuthTimeoutScheduler {
         try {
             if (closed.compareAndSet(false, true)) {
                 ScheduledTaskRegistry.cancelAll(pending);
+                ScheduledTaskRegistry.cancelAll(reminders);
             }
         } finally {
             lifecycleLock.unlock();

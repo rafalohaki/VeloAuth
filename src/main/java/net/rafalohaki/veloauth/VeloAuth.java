@@ -651,8 +651,10 @@ public class VeloAuth {
         DatabaseType dbType = DatabaseType.fromName(storageType);
 
         if (dbType != null && dbType.isLocalDatabase()) {
-            // Local databases - standard JDBC
-            return DatabaseConfig.forLocalDatabase(storageType, settings.getDatabaseName());
+            // Local databases - standard JDBC in the plugin data directory; legacy files
+            // from the proxy working directory are migrated (or kept as fallback) once.
+            return DatabaseConfig.forLocalDatabaseWithMigration(
+                    storageType, settings.getDatabaseName(), settings.getDataDirectory(), logger);
         } else {
             // Remote databases - use HikariCP for better performance
             return DatabaseConfig.forRemoteWithHikari(

@@ -1102,6 +1102,36 @@ class AuthListenerTest {
     }
 
     @Test
+    void onServerConnected_databaseLookupFails_sendsGenericPromptFallback() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("FallbackPlayer");
+        when(player.getRemoteAddress()).thenReturn(new InetSocketAddress("192.0.2.81", 25565));
+        when(player.isOnlineMode()).thenReturn(false);
+        when(authCache.isPlayerAuthorized(playerUuid, "192.0.2.81")).thenReturn(false);
+        when(databaseManager.findPlayerByNickname("FallbackPlayer"))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("db down")));
+
+        RegisteredServer authServer = org.mockito.Mockito.mock(RegisteredServer.class);
+        ServerInfo serverInfo = org.mockito.Mockito.mock(ServerInfo.class);
+        when(authServer.getServerInfo()).thenReturn(serverInfo);
+        when(serverInfo.getName()).thenReturn("auth");
+        AuthTimeoutScheduler timeoutScheduler = org.mockito.Mockito.mock(AuthTimeoutScheduler.class);
+        setPluginField("authTimeoutScheduler", timeoutScheduler);
+
+        activateConnection(player);
+        authListener.onServerConnected(new ServerConnectedEvent(player, authServer, null));
+
+        ArgumentCaptor<Component> componentCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player, org.mockito.Mockito.times(2)).sendMessage(componentCaptor.capture());
+        String fallback = PLAIN_TEXT.serialize(componentCaptor.getAllValues().get(1));
+        assertTrue(fallback.contains("/login") && fallback.contains("/register"),
+                "A failed DB lookup must still leave the player with usable instructions, got: "
+                        + fallback);
+    }
+
+    @Test
     void onServerConnected_authHeaderWithHexFormatting_parsesColors() throws Exception {
         messages = new Messages() {
             @Override
