@@ -8,7 +8,6 @@
 [![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/e2RkPbc3ZR)
 [![License](https://img.shields.io/github/license/rafalohaki/veloauth?style=for-the-badge)](LICENSE)
 [![bStats](https://img.shields.io/badge/bStats-Tracked-blue?style=for-the-badge)](https://bstats.org/plugin/velocity/VeloAuth)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rafalohaki/VeloAuth)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/rafalo)
 
 **Complete Velocity authentication plugin** with intelligent nickname protection, premium auto-login, and secure offline player management.
@@ -951,6 +950,10 @@ Need help? Found a bug? Open an issue on GitHub or join our Discord server. Neve
 passwords, forwarding secrets, webhook URLs, TOTP secrets, current TOTP codes or complete
 `otpauth://` URIs. Use `/vauth report` with logs disabled unless trusted support explicitly needs
 sanitized logs.
+
+For questions about how VeloAuth works internally, DeepWiki answers against this repository:
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rafalohaki/VeloAuth)
 
 ## License
 
