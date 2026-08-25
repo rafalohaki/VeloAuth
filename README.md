@@ -9,6 +9,7 @@
 [![License](https://img.shields.io/github/license/rafalohaki/veloauth?style=for-the-badge)](LICENSE)
 [![bStats](https://img.shields.io/badge/bStats-Tracked-blue?style=for-the-badge)](https://bstats.org/plugin/velocity/VeloAuth)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rafalohaki/VeloAuth)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/rafalo)
 
 **Complete Velocity authentication plugin** with intelligent nickname protection, premium auto-login, and secure offline player management.
 
