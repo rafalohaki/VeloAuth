@@ -4,6 +4,9 @@ import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.api.scheduler.Scheduler;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
@@ -19,6 +22,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -75,12 +79,52 @@ class AuthTimeoutSchedulerTest {
         when(fixture.authCache.isPlayerAuthorized(
                 org.mockito.ArgumentMatchers.eq(fixture.playerUuid),
                 org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        when(fixture.authCache.hasActiveSession(
+                org.mockito.ArgumentMatchers.eq(fixture.playerUuid),
+                any(), any())).thenReturn(true);
 
         fixture.reminderCallback().accept(fixture.reminderTask);
 
         verify(fixture.player, never()).sendMessage(org.mockito.ArgumentMatchers
                 .<net.kyori.adventure.text.Component>any());
         verify(fixture.reminderTask).cancel();
+    }
+
+    @Test
+    void reminderCallback_ExistingAccount_UsesLoginSpecificPrompt() {
+        // Issue #54: the repeating reminder must match the account status resolved by the
+        // one-shot prompt instead of always showing the generic login-or-register text.
+        ReminderFixture fixture = new ReminderFixture(30);
+        fixture.scheduler.schedule(fixture.player);
+        fixture.scheduler.useReminderPrompt(
+                fixture.playerUuid, "auth.account_exists", NamedTextColor.GREEN);
+
+        fixture.reminderCallback().accept(fixture.reminderTask);
+
+        org.mockito.ArgumentCaptor<Component> sent =
+                org.mockito.ArgumentCaptor.forClass(Component.class);
+        verify(fixture.player).sendMessage(sent.capture());
+        assertEquals("Your account already exists! Use /login <password>",
+                PlainTextComponentSerializer.plainText().serialize(sent.getValue()));
+        verify(fixture.reminderTask, never()).cancel();
+    }
+
+    @Test
+    void useReminderPrompt_WithoutArmedTimeout_IsIgnored() {
+        // A nickname lookup finishing after disconnect must not leak a stale prompt that a
+        // later schedule() for the same UUID would pick up.
+        ReminderFixture fixture = new ReminderFixture(30);
+        fixture.scheduler.useReminderPrompt(
+                fixture.playerUuid, "auth.account_exists", NamedTextColor.GREEN);
+        fixture.scheduler.schedule(fixture.player);
+
+        fixture.reminderCallback().accept(fixture.reminderTask);
+
+        org.mockito.ArgumentCaptor<Component> sent =
+                org.mockito.ArgumentCaptor.forClass(Component.class);
+        verify(fixture.player).sendMessage(sent.capture());
+        assertEquals("You must log in! Use /login <password> or /register <password> <confirm>",
+                PlainTextComponentSerializer.plainText().serialize(sent.getValue()));
     }
 
     @Test

@@ -53,6 +53,8 @@ public class Messages {
     private ResourceBundle bundle;
     // English fallback bundle (used when a key is missing in `bundle`)
     private ResourceBundle englishBundle;
+    // Per-language external bundles for per-player (client-locale) messages; cleared on reload
+    private final Map<String, ResourceBundle> playerBundles = new ConcurrentHashMap<>();
 
     private final boolean useExternalFiles;
 
@@ -140,6 +142,7 @@ public class Messages {
         // Force re-initialization of language files (copies new keys if any)
         languageFileManager.initializeLanguageFiles();
         
+        playerBundles.clear();
         this.bundle = languageFileManager.loadLanguageBundle(currentLanguage);
         // Pre-load English bundle so getFromBundle can fall back per-key when a
         // user-supplied translation is partial / broken / missing the requested key.
@@ -212,6 +215,78 @@ public class Messages {
     public Component component(String key, NamedTextColor fallbackColor, Object... args) {
         String text = get(key, protectFormattingArguments(args));
         return restoreFormattingArguments(parseWithColors(text, fallbackColor));
+    }
+
+    /**
+     * Maps a Minecraft client locale to a supported language code (issues #50/#52).
+     * Tries the full {@code lang_country} form first (e.g. {@code pt_br}, {@code zh_hk}),
+     * then the bare language, then falls back to the configured default language.
+     * Missing keys inside a resolved language still fall back to English per key.
+     *
+     * @param clientLocale locale reported by the client, may be {@code null}
+     * @return supported language code, never {@code null}
+     */
+    public String resolvePlayerLanguage(@javax.annotation.Nullable Locale clientLocale) {
+        if (clientLocale == null) {
+            return currentLanguage;
+        }
+        String lang = clientLocale.getLanguage().toLowerCase(Locale.ROOT);
+        String country = clientLocale.getCountry().toLowerCase(Locale.ROOT);
+        if (!lang.isEmpty() && !country.isEmpty()) {
+            String full = lang + "_" + country;
+            if (isLanguageSupported(full)) {
+                return full;
+            }
+        }
+        if (!lang.isEmpty() && isLanguageSupported(lang)) {
+            return lang;
+        }
+        return currentLanguage;
+    }
+
+    /**
+     * Resolves a player-facing message for the given client locale — the per-player entry
+     * point for client-language detection. A {@code null} locale (or an unsupported one)
+     * falls back to the configured default language; missing keys fall back to English.
+     */
+    public Component componentForLocale(@javax.annotation.Nullable Locale clientLocale,
+                                        String key, NamedTextColor fallbackColor, Object... args) {
+        String language = resolvePlayerLanguage(clientLocale);
+        if (language.equals(currentLanguage)) {
+            return component(key, fallbackColor, args);
+        }
+        String text = getForPlayerLanguage(language, resolveMessageKey(key), protectFormattingArguments(args));
+        return restoreFormattingArguments(parseWithColors(text, fallbackColor));
+    }
+
+    private String getForPlayerLanguage(String language, String resolvedKey, Object... args) {
+        if (!useExternalFiles) {
+            return getForLanguage(language, resolvedKey, args);
+        }
+        ResourceBundle playerBundle = playerBundles.computeIfAbsent(language, this::loadPlayerBundleSafely);
+        try {
+            return formatMessageSafely(playerBundle.getString(resolvedKey), resolvedKey, args);
+        } catch (MissingResourceException missing) {
+            if (englishBundle != null && !"en".equals(language)) {
+                try {
+                    return formatMessageSafely(englishBundle.getString(resolvedKey), resolvedKey, args);
+                } catch (MissingResourceException ignoredEn) {
+                    logger.debug("English fallback also missing key '{}'", resolvedKey);
+                }
+            }
+            logger.warn("Missing translation key '{}' in language '{}'", resolvedKey, language);
+            return "Missing: " + resolvedKey;
+        }
+    }
+
+    private ResourceBundle loadPlayerBundleSafely(String language) {
+        try {
+            return languageFileManager.loadLanguageBundle(language);
+        } catch (IOException | IllegalArgumentException e) {
+            logger.warn("Cannot load language '{}' for client-locale messages, using default: {}",
+                    language, e.getMessage());
+            return bundle;
+        }
     }
 
     /**

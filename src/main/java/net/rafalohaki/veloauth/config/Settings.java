@@ -354,6 +354,14 @@ public class Settings {
         return activeSnapshot().hot().language();
     }
 
+    /**
+     * Whether player-facing messages follow each client's Minecraft locale (falling back to
+     * {@link #getLanguage()}, then English per missing key).
+     */
+    public boolean isDetectClientLanguage() {
+        return activeSnapshot().hot().detectClientLanguage();
+    }
+
     public AlertSettings getAlertSettings() {
         return activeSnapshot().alerts();
     }
@@ -732,7 +740,8 @@ public class Settings {
             boolean debugEnabled,
             boolean reportEnabled,
             boolean reportIncludeLogs,
-            String language) {
+            String language,
+            boolean detectClientLanguage) {
     }
 
     record Snapshot(
@@ -767,7 +776,7 @@ public class Settings {
                     new AlertSettings(),
                     new AuditLogSettings(),
                     new TwoFactorSettings(),
-                    new HotSettings(false, true, false, "en"));
+                    new HotSettings(false, true, false, "en", true));
         }
 
         Snapshot withHotValuesFrom(Snapshot configured) {
@@ -806,7 +815,8 @@ public class Settings {
                             hot.debugEnabled,
                             hot.reportEnabled,
                             hot.reportIncludeLogs,
-                            language));
+                            language,
+                            hot.detectClientLanguage));
         }
     }
 

@@ -7,6 +7,10 @@
 
 # Language configuration (built-in languages listed below; custom languages supported)
 language: en
+# Per-player language detection from the Minecraft client's locale (issues #50/#52).
+# When true, players see messages in their client language when a translation exists;
+# unsupported or missing translations fall back to `language` above, then English per key.
+detect-client-language: true
 # Available built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
 # Examples: en=English, pl=Polski, zh_cn=Chinese Simplified, zh_hk=Chinese Traditional (Hong Kong), ja=Japanese, ko=Korean, th=Thai, id=Indonesian, pt_br=Brazilian Portuguese
 # To add custom language: create messages_XX.properties in plugins/veloauth/lang/

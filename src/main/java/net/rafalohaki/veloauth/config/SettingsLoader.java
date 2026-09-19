@@ -186,6 +186,8 @@ final class SettingsLoader {
 
     private static void loadLanguageSettings(Map<String, Object> config, Builder state) {
         state.language = YamlParserUtils.getString(config, "language", state.language);
+        state.detectClientLanguage =
+                YamlParserUtils.getBoolean(config, "detect-client-language", state.detectClientLanguage);
     }
 
     private static void loadCacheSettings(Map<String, Object> config, Builder state) {
@@ -569,6 +571,7 @@ final class SettingsLoader {
         boolean reportEnabled;
         boolean reportIncludeLogs;
         String language;
+        boolean detectClientLanguage;
         Settings.PostgreSQLSettings postgreSQLSettings;
         Settings.PremiumSettings premiumSettings;
         Settings.FloodgateSettings floodgateSettings;
@@ -634,6 +637,7 @@ final class SettingsLoader {
             reportEnabled = hot.reportEnabled();
             reportIncludeLogs = hot.reportIncludeLogs();
             language = hot.language();
+            detectClientLanguage = hot.detectClientLanguage();
         }
 
         Settings.Snapshot build() {
@@ -685,7 +689,8 @@ final class SettingsLoader {
                             debugEnabled,
                             reportEnabled,
                             reportIncludeLogs,
-                            language));
+                            language,
+                            detectClientLanguage));
         }
     }
 }
