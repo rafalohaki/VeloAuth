@@ -19,6 +19,10 @@ OFFICIAL_MVNW_SHA256="cae96cef89ebea3531221f4ae17c23cf8edf67d00eae8306d4186ae1bb
 # Git stores the generated Windows launcher with LF; it is byte-for-byte identical to the
 # Wrapper 3.3.4 output after normalizing the generator's CRLF line endings.
 OFFICIAL_MVNW_CMD_SHA256="4a361e1374a3e5ad6d03e18e9adc0cf181ac5058ac6203b76f0ba3b456b56481"
+# Official Adoptium binary of the pinned JDK, fetched only when no local candidate matches
+# (e.g. the CI toolcache drifted to a different build). Same trust root as setup-java.
+PINNED_JDK_DOWNLOAD_URL="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12_8.tar.gz"
+PINNED_JDK_DOWNLOAD_SHA256="e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370"
 
 fail() {
   echo "$1" >&2
@@ -363,16 +367,19 @@ java_home_is_pinned() {
       && "${java_vendor_version}" == "${PINNED_JAVA_VENDOR_VERSION}" ]]
 }
 
+initialize_work_dir
 PINNED_JAVA_HOME=""
 if [[ -n "${VELOAUTH_JAVA21_HOME:-}" ]]; then
-  if ! java_home_is_pinned "${VELOAUTH_JAVA21_HOME}"; then
-    echo "Pinned JDK metadata mismatch; actual properties:" >&2
+  if java_home_is_pinned "${VELOAUTH_JAVA21_HOME}"; then
+    PINNED_JAVA_HOME="$(cd -- "${VELOAUTH_JAVA21_HOME}" && pwd -P)"
+  else
+    echo "VELOAUTH_JAVA21_HOME is not exact Temurin ${PINNED_JAVA_VERSION}+8; actual properties:" >&2
     "${VELOAUTH_JAVA21_HOME}/bin/java" -XshowSettings:properties -version 2>&1 \
       | grep -E 'java\.(version|runtime\.version|vendor|vendor\.version) =' >&2 || true
-    fail "VELOAUTH_JAVA21_HOME is not exact Temurin ${PINNED_JAVA_VERSION}+8"
+    echo "Falling back to other candidates / the pinned download." >&2
   fi
-  PINNED_JAVA_HOME="$(cd -- "${VELOAUTH_JAVA21_HOME}" && pwd -P)"
-else
+fi
+if [[ -z "${PINNED_JAVA_HOME}" ]]; then
   JAVA_CANDIDATES=()
   if [[ -x /usr/libexec/java_home ]]; then
     MAC_JAVA_HOME="$(/usr/libexec/java_home -v 21 2>/dev/null || true)"
@@ -392,10 +399,33 @@ else
     fi
   done
 fi
+if [[ -z "${PINNED_JAVA_HOME}" && "${VELOAUTH_REPRO_ALLOW_JDK_DOWNLOAD:-true}" != "false" \
+    && "${TEST_MODE}" != "true" ]]; then
+  # The GitHub toolcache may carry a different 21.0.12 build than the pinned one (observed
+  # 2026-09: +1 instead of +8). Fetch the exact official Adoptium binary rather than weaken
+  # the reproducibility contract — same trust root as setup-java.
+  if [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]] && command -v curl >/dev/null; then
+    JDK_DIR="${WORK_DIR}/pinned-jdk"
+    mkdir -p "${JDK_DIR}"
+    echo "Downloading pinned Temurin ${PINNED_JAVA_VERSION}+8 from Adoptium..." >&2
+    if curl -fsSL --retry 3 -o "${WORK_DIR}/pinned-jdk.tar.gz" "${PINNED_JDK_DOWNLOAD_URL}" \
+        && echo "${PINNED_JDK_DOWNLOAD_SHA256}  ${WORK_DIR}/pinned-jdk.tar.gz" \
+            | sha256sum -c --quiet - \
+        && tar -xzf "${WORK_DIR}/pinned-jdk.tar.gz" -C "${JDK_DIR}" --strip-components=1; then
+      rm -f "${WORK_DIR}/pinned-jdk.tar.gz"
+      if java_home_is_pinned "${JDK_DIR}"; then
+        PINNED_JAVA_HOME="${JDK_DIR}"
+      else
+        echo "Downloaded JDK failed the pinned-metadata check" >&2
+      fi
+    else
+      echo "Pinned JDK download or checksum verification failed" >&2
+    fi
+  fi
+fi
 [[ -n "${PINNED_JAVA_HOME}" ]] \
   || fail "Exact Temurin ${PINNED_JAVA_VERSION}+8 was not found; set VELOAUTH_JAVA21_HOME"
 
-initialize_work_dir
 CLONE_A="${WORK_DIR}/source-a"
 CLONE_B="${WORK_DIR}/source-b"
 REPO_A="${WORK_DIR}/repository-a"
