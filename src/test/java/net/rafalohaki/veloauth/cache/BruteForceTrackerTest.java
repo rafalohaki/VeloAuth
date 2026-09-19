@@ -60,9 +60,9 @@ class BruteForceTrackerTest {
 
     /*
      * NOTE: The pre-Caffeine companion test "testCleanupExpired_ConcurrentCheck_WaitsForCheckLock"
-     * pinned the legacy global ReentrantLock contract — `isBlocked` and `cleanupExpired` were
+     * pinned the legacy global ReentrantLock contract — isBlocked and cleanupExpired were
      * forced to serialize. That contract is gone in the Caffeine refactor: reads
-     * ({@code getIfPresent}) are lock-free, and {@code cleanUp()} runs the internal maintenance
+     * (Caffeine getIfPresent) are lock-free, and cleanUp() runs the internal maintenance
      * buffer rather than iterating user-visible state. The new design is still correct (an
      * isBlocked caller that already obtained an entry reference is unaffected by a concurrent
      * eviction — it operates on the local reference), so the assertion no longer applies.

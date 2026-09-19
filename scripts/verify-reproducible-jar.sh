@@ -365,8 +365,12 @@ java_home_is_pinned() {
 
 PINNED_JAVA_HOME=""
 if [[ -n "${VELOAUTH_JAVA21_HOME:-}" ]]; then
-  java_home_is_pinned "${VELOAUTH_JAVA21_HOME}" \
-    || fail "VELOAUTH_JAVA21_HOME is not exact Temurin ${PINNED_JAVA_VERSION}+8"
+  if ! java_home_is_pinned "${VELOAUTH_JAVA21_HOME}"; then
+    echo "Pinned JDK metadata mismatch; actual properties:" >&2
+    "${VELOAUTH_JAVA21_HOME}/bin/java" -XshowSettings:properties -version 2>&1 \
+      | grep -E 'java\.(version|runtime\.version|vendor|vendor\.version) =' >&2 || true
+    fail "VELOAUTH_JAVA21_HOME is not exact Temurin ${PINNED_JAVA_VERSION}+8"
+  fi
   PINNED_JAVA_HOME="$(cd -- "${VELOAUTH_JAVA21_HOME}" && pwd -P)"
 else
   JAVA_CANDIDATES=()
