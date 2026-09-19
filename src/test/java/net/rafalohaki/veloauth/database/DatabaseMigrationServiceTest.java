@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -86,6 +87,37 @@ class DatabaseMigrationServiceTest {
         }
         manager = new DatabaseManager(config, new Messages());
         assertTrue(manager.initialize().join(), "Third init should also succeed");
+    }
+
+    @Test
+    void initialize_afterShutdown_refusesToReopen() {
+        assertTrue(manager.initialize().join(), "Database should initialize");
+        manager.shutdown();
+
+        assertFalse(manager.initialize().join(),
+                "initialize() after shutdown() must refuse to reopen the database");
+        assertFalse(manager.isConnected(),
+                "A shut-down manager must not report a live connection after a refused init");
+    }
+
+    @Test
+    void initialize_concurrentManagersOnSameDatabase_bothSucceed() {
+        // Two proxies sharing one database start together: both pass the schema-version
+        // idExists check and race on the insert — the loser must still initialize.
+        DatabaseManager first = new DatabaseManager(config, new Messages());
+        DatabaseManager second = new DatabaseManager(config, new Messages());
+        try {
+            CompletableFuture<Boolean> firstInit = first.initialize();
+            CompletableFuture<Boolean> secondInit = second.initialize();
+
+            assertTrue(firstInit.join(), "First concurrent init must succeed");
+            assertTrue(secondInit.join(),
+                    "Second concurrent init must tolerate the schema-version insert race");
+            assertTrue(second.getSchemaVersionDao().hasVersion(2));
+        } finally {
+            first.shutdown();
+            second.shutdown();
+        }
     }
 
     @Test
