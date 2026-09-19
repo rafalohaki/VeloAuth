@@ -47,6 +47,30 @@ class MessagesClientLocaleTest {
     }
 
     @Test
+    void resolvePlayerLanguage_singleVariantFamilyFallsBackToThatVariant() {
+        Messages messages = new Messages();
+        messages.setLanguage("en");
+
+        assertEquals("pt_br", messages.resolvePlayerLanguage(Locale.forLanguageTag("pt-PT")),
+                "pt_PT has exactly one bundled Portuguese variant — use pt_br, not English");
+        assertEquals("en", messages.resolvePlayerLanguage(Locale.forLanguageTag("zh-TW")),
+                "zh has two bundled variants (zh_cn/zh_hk) — ambiguous, keep the default");
+        assertEquals("en", messages.resolvePlayerLanguage(Locale.forLanguageTag("uk-UA")),
+                "No bundled Ukrainian at all — keep the configured default");
+    }
+
+    @Test
+    void componentForLocale_portugalPortugueseGetsBrazilianFile() {
+        Messages messages = new Messages();
+        messages.setLanguage("en");
+
+        String rendered = PLAIN.serialize(messages.componentForLocale(
+                Locale.forLanguageTag("pt-PT"), "auth.account_exists", NamedTextColor.GREEN));
+
+        assertEquals("Sua conta ja existe! Use /login <senha>", rendered);
+    }
+
+    @Test
     void componentForLocale_polishClientGetsPolishMessage() {
         Messages messages = new Messages();
         messages.setLanguage("en");

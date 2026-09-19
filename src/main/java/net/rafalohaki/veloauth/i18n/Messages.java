@@ -241,7 +241,30 @@ public class Messages {
         if (!lang.isEmpty() && isLanguageSupported(lang)) {
             return lang;
         }
+        // Language-family fallback: a client reporting e.g. pt_PT should land on pt_br
+        // rather than the default when Portuguese has exactly one bundled variant.
+        // Ambiguous families (zh_cn + zh_hk) keep the configured default — no guessing.
+        if (!lang.isEmpty()) {
+            String familyVariant = singleBuiltInVariantOf(lang);
+            if (familyVariant != null) {
+                return familyVariant;
+            }
+        }
         return currentLanguage;
+    }
+
+    @javax.annotation.Nullable
+    private String singleBuiltInVariantOf(String lang) {
+        String match = null;
+        for (String code : BuiltInLanguages.codes()) {
+            if (code.startsWith(lang + "_") && isLanguageSupported(code)) {
+                if (match != null) {
+                    return null;
+                }
+                match = code;
+            }
+        }
+        return match;
     }
 
     /**
