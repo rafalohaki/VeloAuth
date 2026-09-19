@@ -259,7 +259,9 @@ Minimal auth server configuration in `plugins/veloauth/config.yml`:
 
 ```yaml
 language: en
-# Built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
+# Set to false to use this language for every player instead of the Minecraft client locale.
+detect-client-language: true
+# Built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "nl", "es", "it", "cs", "ro", "sk", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
 
 auth-server:
   # Fresh configs and files without this key use external. Embedded is an explicit canary opt-in.
@@ -562,6 +564,12 @@ Built-in language codes you can copy directly into config:
 | `fr` | French |
 | `de` | German |
 | `fi` | Finnish |
+| `nl` | Dutch |
+| `es` | Spanish |
+| `it` | Italian |
+| `cs` | Czech |
+| `ro` | Romanian |
+| `sk` | Slovak |
 | `zh_cn` | Chinese Simplified |
 | `zh_hk` | Chinese Traditional (Hong Kong) |
 | `ja` | Japanese |

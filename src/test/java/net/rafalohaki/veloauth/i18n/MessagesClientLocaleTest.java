@@ -37,6 +37,19 @@ class MessagesClientLocaleTest {
     }
 
     @Test
+    void resolvePlayerLanguage_mapsAdditionalBStatsCountryLocales() {
+        Messages messages = new Messages();
+        messages.setLanguage("en");
+
+        assertEquals("nl", messages.resolvePlayerLanguage(Locale.forLanguageTag("nl-NL")));
+        assertEquals("es", messages.resolvePlayerLanguage(Locale.forLanguageTag("es-ES")));
+        assertEquals("it", messages.resolvePlayerLanguage(Locale.forLanguageTag("it-IT")));
+        assertEquals("cs", messages.resolvePlayerLanguage(Locale.forLanguageTag("cs-CZ")));
+        assertEquals("ro", messages.resolvePlayerLanguage(Locale.forLanguageTag("ro-RO")));
+        assertEquals("sk", messages.resolvePlayerLanguage(Locale.forLanguageTag("sk-SK")));
+    }
+
+    @Test
     void resolvePlayerLanguage_unsupportedOrNullFallsBackToConfiguredDefault() {
         Messages messages = new Messages();
         messages.setLanguage("pl");

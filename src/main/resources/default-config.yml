@@ -11,8 +11,8 @@ language: en
 # When true, players see messages in their client language when a translation exists;
 # unsupported or missing translations fall back to `language` above, then English per key.
 detect-client-language: true
-# Available built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
-# Examples: en=English, pl=Polski, zh_cn=Chinese Simplified, zh_hk=Chinese Traditional (Hong Kong), ja=Japanese, ko=Korean, th=Thai, id=Indonesian, pt_br=Brazilian Portuguese
+# Available built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "nl", "es", "it", "cs", "ro", "sk", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
+# Examples: en=English, pl=Polski, nl=Nederlands, es=Español, it=Italiano, cs=Čeština, ro=Română, sk=Slovenčina, zh_cn=Chinese Simplified, zh_hk=Chinese Traditional (Hong Kong), ja=Japanese, ko=Korean, th=Thai, id=Indonesian, pt_br=Brazilian Portuguese
 # To add custom language: create messages_XX.properties in plugins/veloauth/lang/
 
 # Debug settings
