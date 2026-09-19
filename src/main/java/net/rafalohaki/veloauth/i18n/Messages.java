@@ -232,25 +232,33 @@ public class Messages {
         }
         String lang = clientLocale.getLanguage().toLowerCase(Locale.ROOT);
         String country = clientLocale.getCountry().toLowerCase(Locale.ROOT);
-        if (!lang.isEmpty() && !country.isEmpty()) {
-            String full = lang + "_" + country;
-            if (isLanguageSupported(full)) {
-                return full;
-            }
+        String exactVariant = exactSupportedVariant(lang, country);
+        if (exactVariant != null) {
+            return exactVariant;
         }
-        if (!lang.isEmpty() && isLanguageSupported(lang)) {
-            return lang;
+        String baseLanguage = supportedBaseLanguage(lang);
+        if (baseLanguage != null) {
+            return baseLanguage;
         }
         // Language-family fallback: a client reporting e.g. pt_PT should land on pt_br
         // rather than the default when Portuguese has exactly one bundled variant.
         // Ambiguous families (zh_cn + zh_hk) keep the configured default — no guessing.
-        if (!lang.isEmpty()) {
-            String familyVariant = singleBuiltInVariantOf(lang);
-            if (familyVariant != null) {
-                return familyVariant;
-            }
+        String familyVariant = singleBuiltInVariantOf(lang);
+        return familyVariant == null ? currentLanguage : familyVariant;
+    }
+
+    @javax.annotation.Nullable
+    private String exactSupportedVariant(String lang, String country) {
+        if (lang.isEmpty() || country.isEmpty()) {
+            return null;
         }
-        return currentLanguage;
+        String full = lang + "_" + country;
+        return isLanguageSupported(full) ? full : null;
+    }
+
+    @javax.annotation.Nullable
+    private String supportedBaseLanguage(String lang) {
+        return !lang.isEmpty() && isLanguageSupported(lang) ? lang : null;
     }
 
     @javax.annotation.Nullable
