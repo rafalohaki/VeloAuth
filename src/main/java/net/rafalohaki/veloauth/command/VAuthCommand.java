@@ -333,7 +333,6 @@ class VAuthCommand implements SimpleCommand {
         int total = totalF.join();
         int premium = premiumF.join();
         int nonPremium = nonPremiumF.join();
-        double pct = total > 0 ? (premium * 100.0 / total) : 0.0;
 
         var cacheStats = ctx.authCache().getStats();
         int dbCacheSize = ctx.databaseManager().getCacheSize();
@@ -346,6 +345,7 @@ class VAuthCommand implements SimpleCommand {
         statsMessage.append(ctx.messages().get("admin.stats.premium_accounts", premium)).append("\n");
         statsMessage.append(ctx.messages().get("admin.stats.nonpremium_accounts", nonPremium)).append("\n");
         statsMessage.append(ctx.messages().get("admin.stats.total_accounts", total)).append("\n");
+        double pct = total > 0 ? (premium * 100.0 / total) : 0.0;
         statsMessage.append(ctx.messages().get("admin.stats.premium_percentage", pct)).append("\n");
         statsMessage.append(ctx.messages().get("admin.stats.authorized_players", cacheStats.authorizedPlayersCount())).append("\n");
         statsMessage.append(ctx.messages().get("admin.stats.premium_cache", cacheStats.premiumCacheCount())).append("\n");

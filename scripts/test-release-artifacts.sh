@@ -746,7 +746,7 @@ import sys
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 required = [
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-    "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961",
+    "actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6",
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",

@@ -85,7 +85,7 @@ required_dependencies = {
     "org.junit.jupiter:junit-jupiter-api": ("5.12.0", "test"),
     "org.junit.jupiter:junit-jupiter-params": ("5.12.0", "test"),
     "org.junit.jupiter:junit-jupiter-engine": ("5.12.0", "test"),
-    "org.slf4j:slf4j-simple": ("2.0.17", "test"),
+    "org.slf4j:slf4j-simple": ("2.0.18", "test"),
 }
 for coordinate, expected in required_dependencies.items():
     if dependencies.get(coordinate) != expected:
@@ -159,7 +159,7 @@ workflow_fragments = (
     "dependency-inventory:\n    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}",
     "name: veloauth-osv-input-${{ github.sha }}",
     "osv-scan:\n    needs: dependency-inventory\n    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}",
-    "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0",
+    "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0",
     "download-artifact: veloauth-osv-input-${{ github.sha }}",
     "--no-resolve\n        --lockfile=pom.xml\n"
     "        --lockfile=veloauth-${{ needs.dependency-inventory.outputs.version }}.cdx.json",
@@ -178,7 +178,7 @@ for evidence in (
     "Maven Dependency Plugin 3.11.0",
     "CycloneDX Maven Plugin 2.9.3",
     "Dependency Review v5.0.0",
-    "OSV-Scanner v2.5.0",
+    "OSV-Scanner v2.6.0",
     "advisory ID, reason, owner and expiry date",
     "There are no vulnerability allowlists",
 ):
@@ -294,7 +294,7 @@ if sbom_path:
         ("net.kyori", "adventure-text-serializer-legacy", "4.26.1"),
         ("net.kyori", "adventure-text-serializer-plain", "4.26.1"),
         ("com.google.code.gson", "gson", "2.13.2"),
-        ("io.netty", "netty-codec-base", "4.2.15.Final"),
+        ("io.netty", "netty-codec-base", "4.2.17.Final"),
         ("com.mysql", "mysql-connector-j", "9.5.0"),
         ("org.postgresql", "postgresql", "42.7.13"),
         ("com.h2database", "h2", "2.4.240"),
