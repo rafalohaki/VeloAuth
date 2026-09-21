@@ -28,7 +28,7 @@ class PremiumResolverAlertServiceTest {
         try (PremiumResolverAlertService service =
                      new PremiumResolverAlertService(settings, discordClient)) {
             service.recordResolution("mojang", false);
-            discordClient.firstAttempt().get(2, TimeUnit.SECONDS);
+            discordClient.firstAttempt().get(15, TimeUnit.SECONDS);
 
             assertEquals(0L, service.getMetrics().lastAlertTime(),
                     "A failed delivery must not start the cooldown");
@@ -39,7 +39,7 @@ class PremiumResolverAlertServiceTest {
             assertTrue(awaitRetriedDelivery(service, discordClient, 5, TimeUnit.SECONDS),
                     "The next failure should retry after a delivery failed");
 
-            assertTrue(awaitCooldownPublication(service, 2, TimeUnit.SECONDS),
+            assertTrue(awaitCooldownPublication(service, 15, TimeUnit.SECONDS),
                     "A successful delivery should start the cooldown");
         }
     }

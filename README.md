@@ -839,8 +839,8 @@ SLF4J, Jakarta Inject, Adventure, Gson, Configurate, SnakeYAML and Netty classes
 
 CI pins [Dependency Review v5.0.0](https://github.com/actions/dependency-review-action/releases/tag/v5.0.0)
 to `a1d282b36b6f3519aa1f3fc636f609c47dddb294` for pull requests and pins
-[OSV-Scanner v2.5.0](https://github.com/google/osv-scanner-action/releases/tag/v2.5.0) to
-`8deb546fdb875b9996d27d4950be7312dac076a1` for full `pom.xml` scans on pushes, tags and the weekly
+[OSV-Scanner v2.6.0](https://github.com/google/osv-scanner-action/releases/tag/v2.6.0) to
+`a345acffa64b0eaede81a3d9aae6141214d9c8fc` for full `pom.xml` scans on pushes, tags and the weekly
 schedule. OSV cannot resolve the immutable timestamped MCProtocolLib build by itself, so the same
 workflow first resolves Maven's complete production graph into the tested CycloneDX SBOM. OSV scans
 both the direct POM inventory and that same-run transitive inventory with external
