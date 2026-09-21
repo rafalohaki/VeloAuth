@@ -13,8 +13,8 @@ public final class BuiltInLanguages {
     private static final String PROPERTIES_SUFFIX = ".properties";
     private static final String ENGLISH_CODE = "en";
     private static final String[] CODES = {
-            "en", "pl", "si", "ru", "tr", "fr", "de", "fi",
-            "zh_cn", "zh_hk", "ja", "hi", "vi",
+            "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "nl", "es", "it",
+            "cs", "ro", "sk", "zh_cn", "zh_hk", "ja", "hi", "vi",
             "ko", "th", "id", "pt_br"
     };
 

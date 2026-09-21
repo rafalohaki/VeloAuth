@@ -676,6 +676,16 @@ final class BackendTransferCoordinator {
             }
             return;
         }
+        // Defense in depth: the delayed transfer runs after the listener's gate, so the
+        // session may have expired in between. An authorization entry without an active
+        // session must never reach a backend on its own.
+        if (!authCache.hasActiveSession(playerUuid, player.getUsername(), playerIp)) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Auto-transfer: gracz {} nie ma aktywnej sesji - wymagane ponowne logowanie",
+                        player.getUsername());
+            }
+            return;
+        }
 
         if (logger.isDebugEnabled()) {
             logger.debug("Auto-transfer: gracz {} jest zweryfikowany - planowanie transferu na backend",

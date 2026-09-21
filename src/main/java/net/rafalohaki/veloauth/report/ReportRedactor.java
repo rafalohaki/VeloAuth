@@ -1,5 +1,7 @@
 package net.rafalohaki.veloauth.report;
 
+import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -24,9 +26,21 @@ import java.util.regex.Pattern;
 final class ReportRedactor {
 
     private static final String REDACTED = "<redacted>";
-    private static final String SECRET_KEY =
-            "password|passwd|ssl[-_]?password|webhook-url|forwarding-secret|"
-                    + "api[-_]?key|access[-_]?token|client[-_]?secret|token|secret";
+
+    /**
+     * Secret-bearing key names, normalized (lowercase, '-'/'_' stripped). Matching the
+     * alternation inline in each regex made the union super-linear (Sonar S8786) and pushed
+     * its complexity past the S5843 threshold, so keys are now captured generically and
+     * filtered here — same key set, linear regexes.
+     */
+    private static final Set<String> SECRET_KEYS = Set.of(
+            "password", "passwd", "sslpassword", "webhookurl", "forwardingsecret",
+            "apikey", "accesstoken", "clientsecret", "token", "secret");
+
+    private static boolean isSecretKey(String key) {
+        return SECRET_KEYS.contains(
+                key.toLowerCase(Locale.ROOT).replace("-", "").replace("_", ""));
+    }
 
     /**
      * YAML / TOML keys whose value is a secret and must be replaced.
@@ -43,10 +57,8 @@ final class ReportRedactor {
      * from the captured opening quote, so an unterminated quoted secret is still redacted (and
      * even normalised to a closed quote) — it never leaks.
      */
-    @SuppressWarnings("java:S5843") // Complexity is the enumerated union of secret key names; splitting it would multiply patterns, not risk.
-    private static final Pattern SECRET_KEY_VALUE = Pattern.compile(
-            "(?im)^[ \\t]*(" + SECRET_KEY + ")" +
-            "(\\s*[:=]\\s*)([\"']?).*$"
+    private static final Pattern YAML_KEY_VALUE = Pattern.compile(
+            "(?m)^[ \\t]*([A-Za-z0-9._-]+)([ \\t]*[:=][ \\t]*)([\"']?).*$"
     );
 
     /**
@@ -58,9 +70,8 @@ final class ReportRedactor {
     );
 
     /** Secret assignments inside JDBC/URI query strings and connection-parameters values. */
-    @SuppressWarnings("java:S5843") // Complexity is the enumerated union of secret key names; splitting it would multiply patterns, not risk.
     private static final Pattern SECRET_PARAMETER = Pattern.compile(
-            "(?i)((?:[?&;]|\\b)(?:" + SECRET_KEY + ")=)([^&#;\\s\"']*)"
+            "((?:[?&;]|\\b)([A-Za-z0-9._-]+)=)([^&#;\\s\"']*)"
     );
 
     private static final Pattern DISCORD_WEBHOOK = Pattern.compile(
@@ -71,9 +82,8 @@ final class ReportRedactor {
             "(?i)(\\bBearer\\s+)[a-z0-9._~+/=-]+"
     );
 
-    @SuppressWarnings("java:S5843") // Complexity is the enumerated union of secret key names; splitting it would multiply patterns, not risk.
-    private static final Pattern LOG_SECRET_KEY_VALUE = Pattern.compile(
-            "(?i)(\\b(?:" + SECRET_KEY + ")\\b\\s*[:=]\\s*)"
+    private static final Pattern LOG_KEY_VALUE = Pattern.compile(
+            "(\\b([A-Za-z0-9._-]+)\\b\\s*[:=]\\s*)"
                     + "(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;&#]+)"
     );
 
@@ -90,8 +100,10 @@ final class ReportRedactor {
         if (input == null || input.isEmpty()) {
             return input;
         }
-        return SECRET_KEY_VALUE.matcher(input).replaceAll(m ->
-                m.group(1) + m.group(2) + m.group(3) + REDACTED + m.group(3));
+        return YAML_KEY_VALUE.matcher(input).replaceAll(m ->
+                isSecretKey(m.group(1))
+                        ? m.group(1) + m.group(2) + m.group(3) + REDACTED + m.group(3)
+                        : m.group());
     }
 
     /**
@@ -112,7 +124,7 @@ final class ReportRedactor {
 
     private static String redactSecretParameters(String input) {
         return SECRET_PARAMETER.matcher(input)
-                .replaceAll(m -> m.group(1) + REDACTED);
+                .replaceAll(m -> isSecretKey(m.group(2)) ? m.group(1) + REDACTED : m.group());
     }
 
     /**
@@ -145,8 +157,8 @@ final class ReportRedactor {
         String redacted = DISCORD_WEBHOOK.matcher(input).replaceAll(REDACTED);
         redacted = BEARER_TOKEN.matcher(redacted)
                 .replaceAll(m -> m.group(1) + REDACTED);
-        redacted = LOG_SECRET_KEY_VALUE.matcher(redacted)
-                .replaceAll(m -> m.group(1) + REDACTED);
+        redacted = LOG_KEY_VALUE.matcher(redacted)
+                .replaceAll(m -> isSecretKey(m.group(2)) ? m.group(1) + REDACTED : m.group());
         redacted = redactYaml(redacted);
         return redactConnectionUrl(redacted);
     }

@@ -18,6 +18,9 @@ import java.util.List;
  * <ul>
  *   <li>Target already holds the database → target wins, legacy files stay untouched.</li>
  *   <li>H2 lock file present in legacy → another process may own it; keep using legacy.</li>
+ *   <li>SQLite journal/WAL/SHM artifacts present in legacy → the database may be open in
+ *       another process or was not closed cleanly; renaming the main file out from under an
+ *       active writer would split its data across two inodes, so keep using legacy.</li>
  *   <li>Any move fails → already-moved companion files are rolled back and legacy stays
  *       the active directory.</li>
  * </ul>
@@ -68,7 +71,21 @@ final class LocalDatabaseMigrator {
                     legacy);
             return legacy;
         }
+        if (dbType == DatabaseType.SQLITE && hasSqliteActivityArtifacts(legacy, database)) {
+            logger.warn(DB_MARKER,
+                    "SQLite journal/WAL files found in {} - skipping migration because another "
+                            + "process may be using the database or it was not closed cleanly; "
+                            + "keeping the legacy location",
+                    legacy);
+            return legacy;
+        }
         return migrate(dbType, database, legacy, target, mover, logger) ? target : legacy;
+    }
+
+    private static boolean hasSqliteActivityArtifacts(Path legacy, String database) {
+        return Files.exists(legacy.resolve(database + ".db-journal"))
+                || Files.exists(legacy.resolve(database + ".db-wal"))
+                || Files.exists(legacy.resolve(database + ".db-shm"));
     }
 
     private static boolean migrate(

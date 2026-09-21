@@ -29,6 +29,7 @@ import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry.Operation;
 import net.rafalohaki.veloauth.util.FloodgateDetector;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
+import static net.rafalohaki.veloauth.util.PlayerMessages.playerMessage;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
@@ -1024,8 +1025,7 @@ public class AuthListener {
         // DODATKOWA WERYFIKACJA - sprawdź czy gracz nie jest już autoryzowany
         // Jeśli jest autoryzowany, nie powinien iść na auth server
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
-        boolean isAuthorized = authCache.isPlayerAuthorized(player.getUniqueId(), playerIp);
-        if (isAuthorized) {
+        if (isOfflineSessionValid(player, playerIp)) {
             // AUTORYZOWANY GRACZ NA AUTH SERVER - przekieruj na backend
             logger.debug("Authorized player {} tried to go to auth server - redirecting to backend",
                     player.getUsername());
@@ -1047,6 +1047,16 @@ public class AuthListener {
             logger.debug("Auth server - allowing unauthenticated player");
         }
         return true;
+    }
+
+    /**
+     * Full offline authentication state: an authorization cache entry alone is not enough —
+     * the session TTL is the re-authentication boundary, so an expired session must send the
+     * player back through the normal auth-server flow instead of auto-transferring them.
+     */
+    private boolean isOfflineSessionValid(Player player, String playerIp) {
+        return authCache.isPlayerAuthorized(player.getUniqueId(), playerIp)
+                && authCache.hasActiveSession(player.getUniqueId(), player.getUsername(), playerIp);
     }
 
     private CompletableFuture<Void> verifyBackendConnectionAsync(
@@ -1142,7 +1152,7 @@ public class AuthListener {
             player.sendMessage(Component.text()
                     .content("❌ ")
                     .color(NamedTextColor.RED)
-                    .append(messages.component("auth.must_login", NamedTextColor.RED))
+                    .append(playerMessage(player, settings, messages, "auth.must_login", NamedTextColor.RED))
                     .build());
 
             // Jeśli UUID mismatch - usuń z cache dla bezpieczeństwa
@@ -1200,7 +1210,7 @@ public class AuthListener {
         }
 
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
-        if (authCache.isPlayerAuthorized(player.getUniqueId(), playerIp)) {
+        if (isOfflineSessionValid(player, playerIp)) {
             triggerAutoTransfer(player, operation);
             return;
         }
@@ -1232,7 +1242,7 @@ public class AuthListener {
         AtomicReference<String> username = new AtomicReference<>();
         if (!connectionLifecycleRegistry.runIfCurrent(operation, () -> {
             username.set(player.getUsername());
-            player.sendMessage(messages.component("auth.header", NamedTextColor.GOLD));
+            player.sendMessage(playerMessage(player, settings, messages, "auth.header", NamedTextColor.GOLD));
         })) {
             return;
         }
@@ -1245,24 +1255,29 @@ public class AuthListener {
                     // The player must never sit on the auth server without instructions -
                     // fall back to the generic prompt when the lookup itself failed.
                     connectionLifecycleRegistry.runIfCurrent(operation, () -> player.sendMessage(
-                            messages.component("auth.prompt.generic", NamedTextColor.YELLOW)));
+                            playerMessage(player, settings, messages, "auth.prompt.generic", NamedTextColor.YELLOW)));
                     return null;
                 });
     }
 
     private void sendAuthPrompt(Player player, DbResult<RegisteredPlayer> dbResult) {
         if (dbResult.isDatabaseError()) {
-            player.sendMessage(messages.component("auth.prompt.generic", NamedTextColor.YELLOW));
+            player.sendMessage(playerMessage(player, settings, messages, "auth.prompt.generic", NamedTextColor.YELLOW));
             return;
         }
 
         RegisteredPlayer registeredPlayer = dbResult.getValue();
         if (registeredPlayer != null) {
-            player.sendMessage(messages.component("auth.account_exists", NamedTextColor.GREEN));
+            player.sendMessage(playerMessage(player, settings, messages, "auth.account_exists", NamedTextColor.GREEN));
+            plugin.getAuthTimeoutScheduler().useReminderPrompt(
+                    player.getUniqueId(), "auth.account_exists", NamedTextColor.GREEN);
         } else {
-            player.sendMessage(messages.component("auth.first_time", NamedTextColor.AQUA));
+            player.sendMessage(playerMessage(player, settings, messages, "auth.first_time", NamedTextColor.AQUA));
+            plugin.getAuthTimeoutScheduler().useReminderPrompt(
+                    player.getUniqueId(), "auth.first_time", NamedTextColor.AQUA);
         }
     }
+
 
     private Component localizedOrFallback(String key, String fallback, NamedTextColor fallbackColor) {
         if (messages == null) {
