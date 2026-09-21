@@ -75,7 +75,24 @@ public class SchemaVersionDao {
             }
             return true;
         } catch (SQLException e) {
+            // Two proxies initializing the same database concurrently can both pass the
+            // idExists check; the loser hits a primary-key violation even though the
+            // version marker now exists. Treat that committed marker as success.
+            if (isAlreadyRecordedByConcurrentWriter(version, e)) {
+                return true;
+            }
             logger.error(DB_MARKER, "Failed to record schema version {}", version, e);
+            return false;
+        }
+    }
+
+    private boolean isAlreadyRecordedByConcurrentWriter(int version, SQLException cause) {
+        try {
+            return dao.idExists(version);
+        } catch (SQLException recheckFailure) {
+            recheckFailure.addSuppressed(cause);
+            logger.error(DB_MARKER, "Failed to re-check schema version {} after insert failure",
+                    version, recheckFailure);
             return false;
         }
     }

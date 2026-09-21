@@ -66,7 +66,19 @@ class LocalDatabaseMigratorTest {
     }
 
     @Test
-    void resolveDataDirectory_SqliteWalFamily_MovesEveryCompanionFile() throws IOException {
+    void resolveDataDirectory_SqliteCleanFile_MovesToTargetDirectory() throws IOException {
+        initDirs();
+        Files.writeString(legacyDir.resolve(DB_NAME + ".db"), "main");
+
+        Path resolved = resolve(DatabaseType.SQLITE);
+
+        assertEquals(targetDir.toAbsolutePath().normalize(), resolved);
+        assertEquals("main", Files.readString(targetDir.resolve(DB_NAME + ".db")));
+        assertFalse(Files.exists(legacyDir.resolve(DB_NAME + ".db")));
+    }
+
+    @Test
+    void resolveDataDirectory_SqliteWalFamily_KeepsLegacyDirectory() throws IOException {
         initDirs();
         Files.writeString(legacyDir.resolve(DB_NAME + ".db"), "main");
         Files.writeString(legacyDir.resolve(DB_NAME + ".db-wal"), "wal");
@@ -74,11 +86,25 @@ class LocalDatabaseMigratorTest {
 
         Path resolved = resolve(DatabaseType.SQLITE);
 
-        assertEquals(targetDir.toAbsolutePath().normalize(), resolved);
-        assertEquals("main", Files.readString(targetDir.resolve(DB_NAME + ".db")));
-        assertEquals("wal", Files.readString(targetDir.resolve(DB_NAME + ".db-wal")));
-        assertEquals("shm", Files.readString(targetDir.resolve(DB_NAME + ".db-shm")));
-        assertFalse(Files.exists(legacyDir.resolve(DB_NAME + ".db")));
+        assertEquals(legacyDir.toAbsolutePath().normalize(), resolved,
+                "WAL/SHM artifacts mean an active or uncleanly closed writer - do not move the db");
+        assertTrue(Files.exists(legacyDir.resolve(DB_NAME + ".db")));
+        assertTrue(Files.exists(legacyDir.resolve(DB_NAME + ".db-wal")));
+        assertFalse(Files.exists(targetDir.resolve(DB_NAME + ".db")));
+    }
+
+    @Test
+    void resolveDataDirectory_SqliteHotJournal_KeepsLegacyDirectory() throws IOException {
+        initDirs();
+        Files.writeString(legacyDir.resolve(DB_NAME + ".db"), "main");
+        Files.writeString(legacyDir.resolve(DB_NAME + ".db-journal"), "journal");
+
+        Path resolved = resolve(DatabaseType.SQLITE);
+
+        assertEquals(legacyDir.toAbsolutePath().normalize(), resolved,
+                "A hot rollback journal means a transaction was in flight - do not move the db");
+        assertTrue(Files.exists(legacyDir.resolve(DB_NAME + ".db")));
+        assertFalse(Files.exists(targetDir.resolve(DB_NAME + ".db")));
     }
 
     @Test

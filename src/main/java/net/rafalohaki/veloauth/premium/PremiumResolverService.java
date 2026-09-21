@@ -662,6 +662,10 @@ public class PremiumResolverService {
      * Entries without a positive verification timestamp are stale. LimboAuth premium
      * accounts are recovered from the authoritative AUTH table by PreLoginHandler;
      * PREMIUM_UUIDS is only a cache and must never manufacture migration authority.
+     * <p>
+     * A non-positive hit-ttl disables caching entirely (every login queries the API —
+     * the same contract {@link #cacheResult} applies to the memory tier), so no DB row
+     * is fresh in that mode.
      */
     private boolean isDbCacheEntryFresh(PremiumUuid entry) {
         long lastSeen = entry.getLastSeen();
@@ -669,7 +673,7 @@ public class PremiumResolverService {
             return false;
         }
         if (premiumTtlMillis <= 0L) {
-            return true;
+            return false;
         }
         long age = System.currentTimeMillis() - lastSeen;
         return age >= 0 && age <= premiumTtlMillis;

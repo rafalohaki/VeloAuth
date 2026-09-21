@@ -8,9 +8,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -49,13 +51,17 @@ class MessagesSourceScanTest {
                     + "\\s*\\(\\s*(?:messages|ctx\\s*\\.\\s*messages\\s*\\(\\s*\\))"
                     + "\\s*\\.\\s*get\\s*\\(",
             Pattern.DOTALL);
-    private static final Pattern RESOLVED_LOCALIZED_COMPONENT = Pattern.compile(
-            "(?:String|var)\\s+([a-zA-Z][a-zA-Z0-9_]*)\\s*=\\s*[^;]*?"
-                    + "(?:messages|ctx\\s*\\.\\s*messages\\s*\\(\\s*\\))"
-                    + "\\s*\\.\\s*get\\s*\\([^;]+;.{0,500}?"
-                    + "(?:Component\\s*\\.\\s*text|ValidationUtils\\s*\\.\\s*create"
-                    + "(?:Error|Warning|Success)Component)\\s*\\(\\s*\\1\\b",
-            Pattern.DOTALL);
+    // Two-pass replacement for the old lazy `.{0,500}?` + backreference pattern, which was
+    // super-linear (Sonar S8786). Pass 1 finds `String/var name = ...messages.get(...);`
+    // assignments, pass 2 finds component calls with a bare identifier argument; a bypass is
+    // a call whose argument was assigned within 500 chars before it.
+    private static final Pattern RESOLVED_GET_ASSIGNMENT = Pattern.compile(
+            "(?:String|var)\\s+([a-zA-Z][a-zA-Z0-9_]*)\\s*=[^;]*"
+                    + "(?:\\bmessages|ctx\\s*\\.\\s*messages\\s*\\(\\s*\\))\\s*\\.\\s*get\\s*\\([^;]+;");
+    private static final Pattern COMPONENT_CALL_WITH_VARIABLE = Pattern.compile(
+            "(?:Component\\s*\\.\\s*text|ValidationUtils\\s*\\.\\s*create"
+                    + "(?:Error|Warning|Success)Component)\\s*\\(\\s*([a-zA-Z][a-zA-Z0-9_]*)\\b");
+    private static final int RESOLVED_BYPASS_WINDOW = 500;
 
     @Test
     void everyLiteralMessagesGetKey_existsInEnglishProperties() throws IOException {
@@ -139,10 +145,27 @@ class MessagesSourceScanTest {
                 long line = source.substring(0, matcher.start()).lines().count();
                 bypasses.add(javaFile + ":" + line);
             }
-            matcher = RESOLVED_LOCALIZED_COMPONENT.matcher(source);
+            Map<String, List<Integer>> resolvedAssignments = new HashMap<>();
+            matcher = RESOLVED_GET_ASSIGNMENT.matcher(source);
             while (matcher.find()) {
-                long line = source.substring(0, matcher.start()).lines().count();
-                bypasses.add(javaFile + ":" + line);
+                resolvedAssignments.computeIfAbsent(matcher.group(1), name -> new ArrayList<>())
+                        .add(matcher.end());
+            }
+            if (!resolvedAssignments.isEmpty()) {
+                matcher = COMPONENT_CALL_WITH_VARIABLE.matcher(source);
+                while (matcher.find()) {
+                    List<Integer> assignmentEnds = resolvedAssignments.get(matcher.group(1));
+                    if (assignmentEnds == null) {
+                        continue;
+                    }
+                    int callStart = matcher.start();
+                    boolean nearby = assignmentEnds.stream().anyMatch(
+                            end -> end <= callStart && callStart - end <= RESOLVED_BYPASS_WINDOW);
+                    if (nearby) {
+                        long line = source.substring(0, callStart).lines().count();
+                        bypasses.add(javaFile + ":" + line);
+                    }
+                }
             }
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to read source file: " + javaFile, e);

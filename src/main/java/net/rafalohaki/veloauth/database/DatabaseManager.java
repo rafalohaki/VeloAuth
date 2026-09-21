@@ -88,6 +88,9 @@ public class DatabaseManager {
      *  field mid-{@code initializeDaos()} and cause an NPE inside ORMLite's {@code DaoManager}.
      *  Held only for the duration of those two methods — neither is on a hot path. */
     private final ReentrantLock lifecycleLock = new ReentrantLock();
+    /** Terminal state: once {@link #shutdown()} ran, {@link #initialize()} must not reopen
+     *  connections. Guarded by {@link #lifecycleLock}. */
+    private boolean closed;
     private final DatabaseConfig config;
     private final Messages messages;
     private final ExecutorService dbExecutor;
@@ -165,6 +168,13 @@ public class DatabaseManager {
             }
             lifecycleLock.lock();
             try {
+                if (closed) {
+                    if (logger.isWarnEnabled()) {
+                        logger.warn(DB_MARKER,
+                                "initialize() called after shutdown — refusing to reopen database");
+                    }
+                    return false;
+                }
                 return performDatabaseInitialization();
             } catch (SQLException e) {
                 if (logger.isErrorEnabled()) {
@@ -272,12 +282,13 @@ public class DatabaseManager {
     public void shutdown() {
         try {
             healthCheck.stop();
-            connected = false;
             // Wait for any in-flight initialize() to finish its connectionSource assignment
             // before we tear down resources; otherwise we could null connectionSource while
             // initializeDaos() is mid-call.
             lifecycleLock.lock();
             try {
+                closed = true;
+                connected = false;
                 closeConnectionResources();
             } finally {
                 lifecycleLock.unlock();

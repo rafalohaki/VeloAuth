@@ -8,6 +8,7 @@ import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
+import static net.rafalohaki.veloauth.util.PlayerMessages.playerMessage;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
@@ -46,6 +47,7 @@ public final class AuthTimeoutScheduler {
      * within the default 300s auth timeout window.
      */
     private static final int REMINDER_INTERVAL_SECONDS = 10;
+    private static final String GENERIC_PROMPT_KEY = "auth.prompt.generic";
 
     private final VeloAuth plugin;
     private final Settings settings;
@@ -55,6 +57,9 @@ public final class AuthTimeoutScheduler {
     private final Logger logger;
     private final ConcurrentMap<UUID, ScheduledTask> pending = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, ScheduledTask> reminders = new ConcurrentHashMap<>();
+    /** Account-status-aware reminder content, filled in by AuthListener once the nickname
+     *  lookup resolves; absent entry means "status unknown — use the generic prompt". */
+    private final ConcurrentMap<UUID, ReminderPrompt> reminderPrompts = new ConcurrentHashMap<>();
     private final ReentrantLock lifecycleLock = new ReentrantLock();
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -114,7 +119,7 @@ public final class AuthTimeoutScheduler {
                 return; // already moved on, nothing to do
             }
 
-            player.disconnect(messages.component("auth.timeout.kick", NamedTextColor.RED, seconds));
+            player.disconnect(playerMessage(player, settings, messages, "auth.timeout.kick", NamedTextColor.RED, seconds));
             if (logger.isInfoEnabled()) {
                 logger.info(AUTH_MARKER,
                         "Kicked player {} after {}s auth timeout (no login/register)",
@@ -140,16 +145,36 @@ public final class AuthTimeoutScheduler {
                 || isAuthorizedAndStillOnAuthServer(player)
                 || !connectionManager.isPlayerOnAuthServer(player)) {
             reminders.remove(player.getUniqueId(), self);
+            reminderPrompts.remove(player.getUniqueId());
             self.cancel();
             return;
         }
-        player.sendMessage(messages.component("auth.prompt.generic", NamedTextColor.YELLOW));
+        ReminderPrompt prompt = reminderPrompts.getOrDefault(player.getUniqueId(), ReminderPrompt.GENERIC);
+        player.sendMessage(playerMessage(player, settings, messages, prompt.key(), prompt.color()));
+    }
+
+    /**
+     * Switches the repeating reminder to the account-status-specific prompt (issue #54).
+     * Ignored when no timeout is armed for the player, so a lookup finishing after
+     * disconnect cannot leave a stale entry behind.
+     */
+    public void useReminderPrompt(UUID uuid, String key, NamedTextColor color) {
+        if (uuid == null || key == null) {
+            return;
+        }
+        if (pending.containsKey(uuid) || reminders.containsKey(uuid)) {
+            reminderPrompts.put(uuid, new ReminderPrompt(key, color));
+        }
     }
 
     private boolean isAuthorizedAndStillOnAuthServer(Player player) {
         // If the cache says the player is authorized for their current IP, they have authenticated
         // — the cancel() call must have raced with the scheduler. Skip the kick.
-        return authCache.isPlayerAuthorized(player.getUniqueId(), PlayerAddressUtils.getPlayerIp(player));
+        // An expired session means the player must log in again, so reminders and the kick
+        // still apply despite a surviving authorization entry.
+        String ip = PlayerAddressUtils.getPlayerIp(player);
+        return authCache.isPlayerAuthorized(player.getUniqueId(), ip)
+                && authCache.hasActiveSession(player.getUniqueId(), player.getUsername(), ip);
     }
 
     /**
@@ -158,6 +183,7 @@ public final class AuthTimeoutScheduler {
     public void cancel(UUID uuid) {
         ScheduledTaskRegistry.cancel(pending, uuid);
         ScheduledTaskRegistry.cancel(reminders, uuid);
+        reminderPrompts.remove(uuid);
     }
 
     /**
@@ -169,9 +195,15 @@ public final class AuthTimeoutScheduler {
             if (closed.compareAndSet(false, true)) {
                 ScheduledTaskRegistry.cancelAll(pending);
                 ScheduledTaskRegistry.cancelAll(reminders);
+                reminderPrompts.clear();
             }
         } finally {
             lifecycleLock.unlock();
         }
+    }
+
+    private record ReminderPrompt(String key, NamedTextColor color) {
+        private static final ReminderPrompt GENERIC =
+                new ReminderPrompt(GENERIC_PROMPT_KEY, NamedTextColor.YELLOW);
     }
 }

@@ -43,6 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
+import java.util.regex.Pattern;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.IntSupplier;
 
@@ -56,6 +57,7 @@ import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
 final class VelocityEmbeddedCapacityProfile {
 
     private static final int MAXIMUM_CONNECTIONS = 10_000;
+    private static final Pattern POSITIVE_INTEGER = Pattern.compile("[0-9]+");
     private static final Duration DEFAULT_BATCH_TIMEOUT = Duration.ofMinutes(10);
     private static final Duration DEFAULT_CONTROL_TIMEOUT = Duration.ofMinutes(5);
     private static final String EXPECTED_COMMAND_RESPONSE = "Account not registered!";
@@ -85,7 +87,7 @@ final class VelocityEmbeddedCapacityProfile {
         List<Integer> targets = new ArrayList<>();
         int previous = 0;
         for (String token : configuredTargets.split(",", -1)) {
-            if (!token.matches("[0-9]+")) {
+            if (!POSITIVE_INTEGER.matcher(token).matches()) {
                 throw new IllegalArgumentException("Capacity target is not a positive integer: " + token);
             }
             int target;

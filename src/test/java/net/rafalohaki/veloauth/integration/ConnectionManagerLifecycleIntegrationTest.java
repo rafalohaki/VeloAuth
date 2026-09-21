@@ -230,6 +230,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(result.isSuccessful()).thenReturn(true);
         when(authCache.getAuthorizedPlayer(playerUuid)).thenReturn(new CachedAuthUser(
                 playerUuid, "ConcurrentPlayer", "127.0.0.1", System.currentTimeMillis(), false, null));
+        when(authCache.hasActiveSession(eq(playerUuid), any(), any())).thenReturn(true);
         when(proxyServer.getScheduler()).thenReturn(scheduler);
         when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
         when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
@@ -251,6 +252,25 @@ class ConnectionManagerLifecycleIntegrationTest {
                 manualAttempt.get(2, TimeUnit.SECONDS);
             }
         }
+    }
+
+    @Test
+    void autoTransfer_ExpiredSession_DoesNotStartBackendConnection() {
+        // Regression: an authorization cache entry without an active session (session TTL
+        // is the re-authentication boundary) must never auto-transfer to a backend.
+        UUID playerUuid = UUID.randomUUID();
+        Player player = org.mockito.Mockito.mock(Player.class);
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.getUsername()).thenReturn("ExpiredSessionPlayer");
+        when(player.getRemoteAddress()).thenReturn(new InetSocketAddress("127.0.0.1", 25565));
+        when(authCache.getAuthorizedPlayer(playerUuid)).thenReturn(new CachedAuthUser(
+                playerUuid, "ExpiredSessionPlayer", "127.0.0.1", System.currentTimeMillis(), false, null));
+        when(authCache.hasActiveSession(eq(playerUuid), any(), any())).thenReturn(false);
+
+        connectionManager.beginTransferSession(player);
+        connectionManager.autoTransferFromAuthServerToBackend(player);
+
+        verify(player, never()).createConnectionRequest(any());
     }
 
     @Test
@@ -351,6 +371,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(newResult.isSuccessful()).thenReturn(true);
         when(authCache.getAuthorizedPlayer(playerUuid)).thenReturn(new CachedAuthUser(
                 playerUuid, "NewPlayer", "127.0.0.1", System.currentTimeMillis(), false, null));
+        when(authCache.hasActiveSession(eq(playerUuid), any(), any())).thenReturn(true);
         when(proxyServer.getScheduler()).thenReturn(scheduler);
         when(scheduler.buildTask(any(), callbackCaptor.capture())).thenReturn(taskBuilder);
         when(taskBuilder.delay(eq(1500L), eq(TimeUnit.MILLISECONDS))).thenReturn(taskBuilder);
@@ -480,6 +501,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(authSuccess.isSuccessful()).thenReturn(true);
         when(authCache.getAuthorizedPlayer(playerUuid)).thenReturn(new CachedAuthUser(
                 playerUuid, "NewFallbackPlayer", "127.0.0.1", System.currentTimeMillis(), false, null));
+        when(authCache.hasActiveSession(eq(playerUuid), any(), any())).thenReturn(true);
         when(proxyServer.getScheduler()).thenReturn(scheduler);
         when(scheduler.buildTask(any(), org.mockito.ArgumentMatchers.<Consumer<ScheduledTask>>any()))
                 .thenReturn(taskBuilder);
@@ -762,6 +784,7 @@ class ConnectionManagerLifecycleIntegrationTest {
         when(newPlayer.getRemoteAddress()).thenReturn(new InetSocketAddress("127.0.0.1", 25565));
         when(authCache.getAuthorizedPlayer(playerUuid)).thenReturn(new CachedAuthUser(
                 playerUuid, "AutoPlayer", "127.0.0.1", System.currentTimeMillis(), false, null));
+        when(authCache.hasActiveSession(eq(playerUuid), any(), any())).thenReturn(true);
         when(proxyServer.getScheduler()).thenReturn(scheduler);
         when(scheduler.buildTask(any(), org.mockito.ArgumentMatchers.<Consumer<ScheduledTask>>any()))
                 .thenReturn(taskBuilder);

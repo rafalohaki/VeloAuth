@@ -35,7 +35,7 @@ Want to see VeloAuth in action? **[2b2t.pl](https://2b2t.pl)** runs the plugin i
 - 🔄 **Conflict Resolution** - Smart handling of premium/cracked nickname conflicts
 - 📊 **Admin Tools** - Complete conflict management with `/vauth conflicts`
 - 🗄️ **Multi-Database** - MySQL, PostgreSQL, H2, SQLite
-- 🌍 **17 Languages** - EN, PL, DE, FR, RU, TR, SI, FI, ZH_CN, ZH_HK, JA, HI, VI, KO, TH, ID, PT_BR
+- 🌍 **23 Languages** - EN, PL, DE, FR, RU, TR, SI, FI, NL, ES, IT, CS, RO, SK, ZH_CN, ZH_HK, JA, HI, VI, KO, TH, ID, PT_BR
 - 🔄 **LimboAuth Schema Compatible** - existing accounts are upgraded in place with additive, automatic schema changes; no manual UUID rewrite
 - 📢 **Discord Alerts** - Webhook notifications for security events; failed deliveries are retried instead of consuming the alert cooldown
 - 🧵 **Virtual Threads** - Built on Java 21 for maximum performance
@@ -194,7 +194,7 @@ rebuilds the candidate, or replaces release assets.
    use `external`; an existing explicit `embedded` selection remains embedded. Files are not
    rewritten. The absent-key automatic-transfer delay changes from the historical 300 ms to 1500 ms;
    set `connection.auto-transfer-delay-ms` explicitly only after testing the desired dwell time.
-5. Existing external language values remain operator-owned, with one narrow 1.5 repair: in the 17
+5. Existing external language values remain operator-owned, with one narrow 1.5 repair: in the 23
    built-in locale files VeloAuth replaces the exact historical stock defaults for
    `2fa.qr.warning`, `admin.report.generating` and `admin.report.warning` with their corrected 1.5
    defaults. Only one exact canonical physical line is eligible; custom, empty, reformatted or
@@ -259,7 +259,9 @@ Minimal auth server configuration in `plugins/veloauth/config.yml`:
 
 ```yaml
 language: en
-# Built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
+# Set to false to use this language for every player instead of the Minecraft client locale.
+detect-client-language: true
+# Built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "nl", "es", "it", "cs", "ro", "sk", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
 
 auth-server:
   # Fresh configs and files without this key use external. Embedded is an explicit canary opt-in.
@@ -476,7 +478,7 @@ these bounded custom charts:
 | `client_versions` | Advanced Pie | Current online players grouped only by Velocity protocol version |
 | `auth_server_mode` | Simple Pie | `embedded` or `external` active at startup |
 | `database_backend` | Simple Pie | `H2`, `SQLITE`, `MYSQL`, `POSTGRESQL`, or `OTHER` |
-| `language` | Simple Pie | One of the 17 built-in codes, otherwise the single `custom` bucket |
+| `language` | Simple Pie | One of the 23 built-in codes, otherwise the single `custom` bucket |
 | `premium_routing` | Simple Pie | `disabled`, `auth-server`, or `verified-bypass` |
 | `floodgate_routing` | Simple Pie | `disabled`, `auth-server`, or `verified-bypass` |
 | `two_factor_support` | Simple Pie | `enabled` or `disabled` |
@@ -517,14 +519,14 @@ security:
 | Standard | 1 | 1 | 1 | 0 | Mid-sized servers with staff accounts |
 | Strict | 1 | 1 | 1 | 1 | Servers with economy/premium tiers or regulated regions |
 
-Counters apply **on top of** `min-password-length`. Validation error messages (`validation.password.needs_digit/upper/lower/special`) are localized to all 17 supported languages.
+Counters apply **on top of** `min-password-length`. Validation error messages (`validation.password.needs_digit/upper/lower/special`) are localized to all 23 supported languages.
 
 #### Message colors and HEX gradients
 
 Player-facing messages in `plugins/veloauth/lang/messages_<lang>.properties` support legacy colors, decorations, and six-digit RGB colors. The recommended HEX form is `<#RRGGBB>`; legacy `&#RRGGBB`, `§#RRGGBB`, and `§x§R§R§G§G§B§B` forms are also accepted.
 
 During an upgrade, existing external values remain authoritative except for three known historical
-stock defaults. In the 17 built-in locales, exact unchanged values of `2fa.qr.warning`,
+stock defaults. In the 23 built-in locales, exact unchanged values of `2fa.qr.warning`,
 `admin.report.generating` and `admin.report.warning` are upgraded to the bundled 1.5 wording.
 Only one exact canonical physical line is eligible; VeloAuth preserves custom, empty, reformatted
 and duplicate entries byte-for-byte. Custom languages never receive this replacement. Missing
@@ -562,6 +564,12 @@ Built-in language codes you can copy directly into config:
 | `fr` | French |
 | `de` | German |
 | `fi` | Finnish |
+| `nl` | Dutch |
+| `es` | Spanish |
+| `it` | Italian |
+| `cs` | Czech |
+| `ro` | Romanian |
+| `sk` | Slovak |
 | `zh_cn` | Chinese Simplified |
 | `zh_hk` | Chinese Traditional (Hong Kong) |
 | `ja` | Japanese |
