@@ -112,47 +112,19 @@ matches never grant this bypass.
   [GitHub Releases](https://github.com/rafalohaki/VeloAuth/releases) and
   [Modrinth](https://modrinth.com/plugin/veloauth).
 
-The VeloAuth 1.5 candidate has one identity across every publication surface: Maven version
-`1.5.0`, immutable tag `v1.5.0`, and unchanged artifact name `veloauth-1.5.0.jar`. Before release,
-`scripts/verify-release-identity.sh v1.5.0` verifies the POM, generated plugin metadata,
-`BuildConstants.VERSION`, packaged Maven metadata and the adjacent SHA-256. Once the release-manifest
-producer is present, the same command also requires and validates the adjacent manifest. Whether an
-operator privately distributed an earlier 1.5.0 build cannot be inferred from Git history; that is
-an external release gate. If confirmed, bump the candidate to 1.5.1 everywhere before tagging.
+Every `main` push that passes the full verify matrix republishes the single `latest` release in
+place. Its title and notes carry the exact Maven version and source commit
+(`Rolling Latest Build — <version> @ <sha>`), and it owns the permanent download URL
+`https://github.com/rafalohaki/VeloAuth/releases/latest/download/veloauth-latest.jar`. The `latest`
+tag is repointed through the git ref API and the asset is replaced with `--clobber`, so watchers
+are not notified again on every push and the rolling build is the only release on the page.
 
-Version tags are the only publication trigger; pushes to `main` or pull requests verify but never
-release. A tag job builds one candidate with the checked-in Maven 3.9.16 wrapper and exact Temurin
-21.0.12+8, carries the same absolute JAR through both real-proxy smokes, then publishes a workflow
-artifact containing exactly the JAR, its SHA-256 sidecar and its canonical manifest. Maven/JVM
-override variables are rejected; user/system Maven RC files are disabled, and the canonical build
-uses a task-owned settings file, Maven user home and local repository. The manifest's stable
-`buildCommand` records the public build contract; those controlled environment files are the
-hermetic execution context for that command. Velocity-CTD build 355 itself uses Java 25 bytecode,
-so only that proxy process runs on exact Temurin 25.0.4+7 during its smoke; the plugin build,
-Maven integration client, ordinary Velocity smoke and manifest identity remain on exact Temurin
-21.0.12+8.
-
-Two release channels coexist. The rolling channel republishes the single `latest` release from
-every `main` push that passed the full verify matrix; it owns the permanent download URL
-`https://github.com/rafalohaki/VeloAuth/releases/latest/download/veloauth-latest.jar` and is the
-only job allowed to move the `latest` tag or replace release assets. The versioned channel is
-triggered only by `v*` tags and publishes attested, once-only releases with `--latest=false`, so
-they never take the latest marker (and that permanent URL) away from the rolling release.
-GitHub's immutable-releases repository setting stays disabled because the rolling channel must
-replace its own assets in place; versioned releases are immutable in practice instead: the job
-refuses to create or modify an already existing release and never uses `--clobber`, and a
-protected tag ruleset that blocks update/deletion of `v*` tags must be enabled before anyone
-creates a version tag.
-
-The GitHub `production-release` environment is a mandatory protected environment with manual
-maintainer approval. The release job can be approved only after the exact workflow candidate
-passes the external-limbo canary; protected environment variables must set
-`EXTERNAL_CANARY_GREEN=true` and
-`OPERATOR_RELEASE_SIGNOFF=v1.5.0:<40-character-source-commit>`. The job downloads the same workflow
-artifact, verifies its provenance, and refuses to create or modify an already existing release. It
-remotely peels either a lightweight or annotated version tag to the workflow commit immediately
-before publication and checks it again afterward. It never moves a `latest` tag, renames the JAR,
-rebuilds the candidate, or replaces release assets.
+The earlier versioned channel — immutable `v*` tag releases with attestation, a protected
+environment and operator sign-off evidence — is discontinued: the workflow no longer runs on tag
+pushes, so nothing else can publish a release. Previously published versioned artifacts (for
+example `v1.6.0`) can still be verified offline with `verify-release-candidate.sh --existing` and
+`gh attestation verify` as documented below, and `verify-release-identity.sh` still checks that a
+built JAR's internal identity matches the Maven version.
 
 ## Requirements
 
@@ -848,24 +820,23 @@ SLF4J, Jakarta Inject, Adventure, Gson, Configurate, SnakeYAML and Netty classes
 CI pins [Dependency Review v5.0.0](https://github.com/actions/dependency-review-action/releases/tag/v5.0.0)
 to `a1d282b36b6f3519aa1f3fc636f609c47dddb294` for pull requests and pins
 [OSV-Scanner v2.6.0](https://github.com/google/osv-scanner-action/releases/tag/v2.6.0) to
-`a345acffa64b0eaede81a3d9aae6141214d9c8fc` for full `pom.xml` scans on pushes, tags and the weekly
+`a345acffa64b0eaede81a3d9aae6141214d9c8fc` for full `pom.xml` scans on pushes and the weekly
 schedule. OSV cannot resolve the immutable timestamped MCProtocolLib build by itself, so the same
 workflow first resolves Maven's complete production graph into the tested CycloneDX SBOM. OSV scans
 both the direct POM inventory and that same-run transitive inventory with external
-re-resolution disabled; this avoids silently dropping custom-repository dependencies. A tag release
-waits for the OSV job from the same workflow run, so candidate construction cannot race vulnerability
-admission. There are no vulnerability allowlists. Any future vulnerability exception must include an
+re-resolution disabled; this avoids silently dropping custom-repository dependencies.
+There are no vulnerability allowlists. Any future vulnerability exception must include an
 advisory ID, reason, owner and expiry date; an expired or incomplete exception is invalid.
 
-After the exact candidate JAR and SHA-256 sidecar exist, verify its identity before any smoke,
-attestation or upload:
+To check that a built JAR's internal identity matches the Maven version before any smoke or
+publication step:
 
 ```bash
 ./scripts/verify-release-identity.sh v1.5.0
 ```
 
-The canonical tag candidate is created only by CI. A downloaded candidate directory can be checked
-without rebuilding or running either smoke test:
+A downloaded versioned-candidate directory (for example the published `v1.6.0` artifacts) can be
+checked without rebuilding or running either smoke test:
 
 ```bash
 ./scripts/verify-release-candidate.sh --existing /absolute/candidate-directory v1.5.0
@@ -882,7 +853,7 @@ GitHub Actions it additionally matches every available `GITHUB_*` identity field
 read-only Task5 internal identity check for `velocity-plugin.json`, packaged `pom.properties` and
 `BuildConstants.VERSION` using exact Temurin 21. The root POM version is parsed directly as XML;
 the identity verifier neither invokes Maven nor reads Maven settings or repositories. `--existing`
-performs zero builds and zero smoke tests; it is the offline Task8/canary handoff contract and
+performs zero builds and zero smoke tests; it is the offline candidate handoff contract and
 requires exact Temurin 21.0.12+8 to be discoverable or supplied through `VELOAUTH_JAVA21_HOME`.
 
 Prove byte-for-byte reproducibility from a clean committed HEAD with the exact Temurin 21.0.12+8
@@ -894,18 +865,18 @@ VELOAUTH_JAVA21_HOME=/path/to/temurin-21.0.12+8/Contents/Home \
   ./scripts/verify-reproducible-jar.sh
 ```
 
-For a release, `verify-release-candidate.sh --build` first performs the one canonical full build,
-copies that exact JAR into the candidate directory, then invokes the verifier with
-`--compare-existing /absolute/candidate.jar`. Both fresh clone builds must match the canonical JAR
-directly before either real-proxy smoke, manifest creation or attestation can begin; the verifier
+For a locally produced candidate, `verify-release-candidate.sh --build` first performs the one
+canonical full build, copies that exact JAR into the candidate directory, then invokes the
+verifier with `--compare-existing /absolute/candidate.jar`. Both fresh clone builds must match
+the canonical JAR directly before either real-proxy smoke or manifest creation; the verifier
 never replaces the candidate.
 
 On macOS the verifier also checks `java_home`, then `JAVA_HOME` and `PATH`, but accepts only that
 exact Temurin build. It never installs a JDK silently. Maven and Java option environment variables
 must be empty or unset, and Maven user/system RC files are disabled for the controlled builds; the
 verifier fails instead of silently producing a different but internally repeatable artifact. This
-identity and reproducibility evidence is necessary but not sufficient for production: provenance,
-the external-limbo canary and explicit operator approval remain separate gates.
+identity and reproducibility evidence is necessary but not sufficient for production: provenance
+and explicit operator approval remain separate gates.
 
 The PostgreSQL harness verifies case-insensitive premium nickname reconciliation, batched conflict
 deletion, idempotent LimboAuth migration, insert-only registration ownership, explicit transaction
