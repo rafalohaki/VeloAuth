@@ -163,8 +163,6 @@ workflow_fragments = (
     "download-artifact: veloauth-osv-input-${{ github.sha }}",
     "--no-resolve\n        --lockfile=pom.xml\n"
     "        --lockfile=veloauth-${{ needs.dependency-inventory.outputs.version }}.cdx.json",
-    "needs: [candidate, osv-scan]",
-    "needs.osv-scan.result == 'success'",
 )
 for fragment in workflow_fragments:
     if fragment not in workflow:

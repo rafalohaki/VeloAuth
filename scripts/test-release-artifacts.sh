@@ -8,7 +8,6 @@ CANDIDATE_VERIFIER="${SCRIPT_DIR}/verify-release-candidate.sh"
 EMBEDDED_SMOKE="${SCRIPT_DIR}/test-velocity-embedded.sh"
 CTD_SMOKE="${SCRIPT_DIR}/test-velocity-ctd-embedded.sh"
 WORKFLOW="${PROJECT_DIR}/.github/workflows/build-and-release.yml"
-RELEASE_TEMPLATE="${PROJECT_DIR}/.github/RELEASE_TEMPLATE.md"
 TEMP_PARENT="$(cd -- "${TMPDIR:-/tmp}" && pwd -P)"
 TEMP_PREFIX="${TEMP_PARENT%/}/veloauth-release-artifacts-test."
 TEMP_DIR=""
@@ -722,13 +721,6 @@ run_expect_failure "${TEMP_DIR}/empty-section.out" "${CANDIDATE_VERIFIER}" \
 assert_contains "${TEMP_DIR}/empty-section.out" "is empty" \
   "an empty changelog section must fail"
 
-ACTUAL_NOTES="${TEMP_DIR}/actual-release-notes.md"
-"${CANDIDATE_VERIFIER}" --render-notes "${RELEASE_TEMPLATE}" \
-  "${PROJECT_DIR}/CHANGELOG.md" "${ACTUAL_NOTES}" "${VERSION}"
-if grep -Eq '{{[^{}]+}}' "${ACTUAL_NOTES}"; then
-  fail "actual release template leaves unresolved placeholders"
-fi
-
 BAD_NOTES_TEMPLATE="${TEMP_DIR}/bad-notes-template.md"
 printf '{{VERSION}}\n{{CHANGELOG}}\n{{UNRESOLVED}}\n' >"${BAD_NOTES_TEMPLATE}"
 run_expect_failure "${TEMP_DIR}/bad-notes.out" "${CANDIDATE_VERIFIER}" \
@@ -749,62 +741,47 @@ required = [
     "actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6",
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-    "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
-    "environment: production-release",
-    "./scripts/verify-release-candidate.sh --build",
-    "./scripts/verify-release-candidate.sh --existing",
-    "./scripts/verify-release-candidate.sh --render-notes",
     "./scripts/test-verify-reproducible-jar.sh",
-    "gh attestation verify",
-    "gh release download",
-    "--signer-workflow",
-    "--source-ref",
-    "--source-digest",
-    "--latest=false",
-    "Refuse to mutate an existing GitHub release",
-    "EXTERNAL_CANARY_GREEN",
     "java-version: '25.0.4+7.0.LTS'",
     "VELOAUTH_CTD_JAVA25_HOME",
-    "X-GitHub-Api-Version: 2026-03-10",
-    "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}",
-    "repos/${GITHUB_REPOSITORY}/git/tags/",
 ]
 for token in required:
     if token not in text:
         raise SystemExit(f"TEST FAILURE: workflow missing required token: {token}")
-for job in ("verify", "candidate", "release"):
+for job in ("verify", "rolling"):
     if not re.search(rf"^  {job}:\s*$", text, re.MULTILINE):
         raise SystemExit(f"TEST FAILURE: workflow missing {job} job")
-if text.count("verify-release-candidate.sh --build") != 1:
-    raise SystemExit("TEST FAILURE: workflow must run exactly one canonical candidate build")
-if not re.search(r"(?ms)^  release:.*?^    needs:.*candidate", text):
-    raise SystemExit("TEST FAILURE: release job must depend on candidate")
-if not re.search(r"(?ms)^  release:.*?actions/download-artifact@", text):
-    raise SystemExit("TEST FAILURE: release job must download the candidate workflow artifact")
+for absent_job in ("candidate", "release"):
+    if re.search(rf"^  {absent_job}:\s*$", text, re.MULTILINE):
+        raise SystemExit(
+            f"TEST FAILURE: the {absent_job} job must stay removed — the rolling release "
+            "is the only release path")
 for forbidden in (
     "allowUpdates", "replacesArtifacts", "ncipollo/release-action", "overwrite: true",
     "$(date", "date -u",
     "actions/attest-build-provenance@",
+    "actions/attest@",
+    "gh attestation verify",
+    "environment: production-release",
+    "EXTERNAL_CANARY_GREEN",
+    "OPERATOR_RELEASE_SIGNOFF",
+    "--latest=false",
+    "startsWith(github.ref, 'refs/tags/v')",
 ):
     if forbidden.lower() in text.lower():
-        raise SystemExit(f"TEST FAILURE: workflow contains forbidden mutable token: {forbidden}")
+        raise SystemExit(f"TEST FAILURE: workflow contains forbidden token: {forbidden}")
 
-# In-place release mutation belongs to the rolling job and nowhere else. The versioned path
-# publishes immutable artifacts, so a --clobber leaking into it would silently make an
-# "immutable" release overwritable.
-def job_section(name, following):
-    body = text.split(f"\n  {name}:", 1)
-    if len(body) != 2:
-        raise SystemExit(f"TEST FAILURE: workflow is missing the {name} job")
-    return body[1].split(f"\n  {following}:", 1)[0]
-
-
-rolling_section = job_section("rolling", "candidate")
-versioned_section = text.split("\n  candidate:", 1)[1]
-for mutable_token in ("--clobber", "refs/tags/latest", "git tag -a latest"):
-    if mutable_token.lower() in versioned_section.lower():
+# In-place release mutation belongs to the rolling job, which is the last job in the file.
+rolling_split = text.split("\n  rolling:", 1)
+if len(rolling_split) != 2:
+    raise SystemExit("TEST FAILURE: workflow is missing the rolling job")
+pre_rolling, rolling_section = rolling_split
+if re.search(r"(?m)^  [a-z0-9_-]+:\s*$", rolling_section):
+    raise SystemExit("TEST FAILURE: rolling must stay the last job — nothing may publish after it")
+for versioned_token in ("gh release create", "gh release download"):
+    if versioned_token in pre_rolling.lower():
         raise SystemExit(
-            f"TEST FAILURE: versioned release path must stay immutable: {mutable_token}")
+            f"TEST FAILURE: versioned-release call leaked outside the rolling job: {versioned_token}")
 if "--clobber" not in rolling_section:
     raise SystemExit("TEST FAILURE: rolling release must replace assets in place")
 for rolling_token in (
@@ -817,8 +794,8 @@ for rolling_token in (
         raise SystemExit(f"TEST FAILURE: rolling contract is missing: {rolling_token}")
 if not re.search(r"(?m)^\s+pull_request:\s*$", text):
     raise SystemExit("TEST FAILURE: workflow must verify pull requests")
-if "tags:" not in text or "v*" not in text:
-    raise SystemExit("TEST FAILURE: workflow must create candidates only from version tags")
+if re.search(r"(?m)^\s+tags:", text):
+    raise SystemExit("TEST FAILURE: the version-tag trigger must stay removed")
 PY
 ruby - "${WORKFLOW}" <<'RUBY' || exit 1
 require "yaml"
@@ -829,118 +806,28 @@ raise "TEST FAILURE: workflow trigger map is missing" unless triggers.is_a?(Hash
 push = triggers.fetch("push")
 pull_request = triggers.fetch("pull_request")
 raise "TEST FAILURE: main verification push trigger is missing" unless push.fetch("branches").include?("main")
-raise "TEST FAILURE: release tag trigger is missing" unless push.fetch("tags").include?("v*")
 raise "TEST FAILURE: pull request verification trigger is missing" unless pull_request.is_a?(Hash)
 
 jobs = workflow.fetch("jobs")
 verify = jobs.fetch("verify")
-candidate = jobs.fetch("candidate")
-release = jobs.fetch("release")
+rolling = jobs.fetch("rolling")
 setup_steps = jobs.values.flat_map { |job| job.fetch("steps", []) }.select do |step|
   step.fetch("uses", "").start_with?("actions/setup-java@")
 end
-raise "TEST FAILURE: expected six exact setup-java steps" unless setup_steps.length == 6
+raise "TEST FAILURE: expected three exact setup-java steps" unless setup_steps.length == 3
 setup_steps.each do |step|
   unless step.fetch("with").fetch("show-download-progress") == true
     raise "TEST FAILURE: every setup-java step must prevent inherited MAVEN_ARGS=-ntp"
   end
 end
 raise "TEST FAILURE: branch/PR verifier must reject tag refs" unless verify.fetch("if").include?("!startsWith")
-raise "TEST FAILURE: candidate must be tag-only" unless candidate.fetch("if").include?("refs/tags/v")
-raise "TEST FAILURE: release must be tag-only" unless release.fetch("if").include?("refs/tags/v")
-unless release.fetch("needs").sort == ["candidate", "osv-scan"]
-  raise "TEST FAILURE: release must depend only on candidate and same-run OSV admission"
-end
-raise "TEST FAILURE: release lacks protected environment" unless release.fetch("environment") == "production-release"
-
-candidate_scripts = candidate.fetch("steps").map { |step| step["run"] }.compact.join("\n")
-unless candidate_scripts.include?('expected_tag="v${version}"') &&
-       candidate_scripts.include?('"${RELEASE_REF_NAME}" != "${expected_tag}"') &&
-       candidate_scripts.include?('"$(git rev-parse HEAD)" != "${RELEASE_SHA}"')
-  raise "TEST FAILURE: candidate does not bind tag, POM version, checkout, and workflow SHA"
-end
-
-candidate_steps = candidate.fetch("steps")
-java25_index = candidate_steps.index { |step| step["id"] == "candidate-java25" }
-java21_index = candidate_steps.index { |step| step["name"] == "Restore exact Temurin 21.0.12+8 as the build default" }
-repro_index = candidate_steps.index { |step| step["name"] == "Run reproducibility fixture tests" }
-build_index = candidate_steps.index { |step| step["name"] == "Build and smoke the single canonical candidate" }
-attest_index = candidate_steps.index { |step| step["name"] == "Attest the exact candidate JAR" }
-post_attest_index = candidate_steps.index { |step| step["name"] == "Re-hash the attested candidate before upload" }
-upload_index = candidate_steps.index { |step| step["name"] == "Upload the immutable three-file candidate" }
-raise "TEST FAILURE: candidate reproducibility step is missing" unless repro_index
-unless java25_index < java21_index && java21_index < repro_index
-  raise "TEST FAILURE: candidate must capture exact Java 25 then restore exact Java 21 before build gates"
-end
-build_env = candidate_steps.fetch(build_index).fetch("env")
-unless build_env.fetch("VELOAUTH_CTD_JAVA25_HOME").include?("candidate-java25")
-  raise "TEST FAILURE: canonical candidate does not pass the pinned Java 25 home only to CTD smoke"
-end
-repro_script = candidate_steps.fetch(repro_index).fetch("run")
-unless repro_script.include?("./scripts/test-verify-reproducible-jar.sh")
-  raise "TEST FAILURE: candidate must run reproducibility fixture gates"
-end
-build_script = candidate_steps.fetch(build_index).fetch("run")
-unless build_script.include?("verify-release-candidate.sh --build")
-  raise "TEST FAILURE: canonical build must own candidate/reproducibility comparison"
-end
-unless repro_index < build_index && build_index < attest_index && attest_index < post_attest_index && post_attest_index < upload_index
-  raise "TEST FAILURE: candidate order must be fixture, canonical build plus comparison, attest, re-hash, upload"
-end
-
-release_steps = release.fetch("steps")
-gate_index = release_steps.index { |step| step["name"] == "Enforce canary and operator approval evidence" }
-publish_index = release_steps.index { |step| step["name"] == "Publish one versioned release with exactly three assets" }
-release_attest_index = release_steps.index { |step| step["name"] == "Verify the exact attestation before publication" }
-release_rehash_index = release_steps.index { |step| step["name"] == "Re-hash the attested candidate before publication" }
-published_verify_index = release_steps.index { |step| step["name"] == "Verify published assets byte for byte" }
-refuse_index = release_steps.index { |step| step["name"] == "Refuse to mutate an existing GitHub release" }
-raise "TEST FAILURE: protected release gate is missing" unless gate_index
-raise "TEST FAILURE: versioned publication step is missing" unless publish_index
-raise "TEST FAILURE: refuse-to-mutate gate is missing" unless refuse_index
-raise "TEST FAILURE: protected release gate must precede publication" unless gate_index < publish_index
-unless release_attest_index < release_rehash_index && release_rehash_index < refuse_index && refuse_index < publish_index && publish_index < published_verify_index
-  raise "TEST FAILURE: release order must be attest, re-hash, refuse-mutation, publish, byte verification"
-end
-publish_flags = release_steps.fetch(publish_index).fetch("run")
-unless publish_flags.include?("--latest=false")
-  raise "TEST FAILURE: versioned releases must not take the latest marker away from the rolling release"
-end
-publish_script = release_steps.fetch(publish_index).fetch("run")
-unless publish_script.include?("git/ref/tags/${GITHUB_REF_NAME}") &&
-       publish_script.include?("git/tags/${tag_sha}") &&
-       publish_script.index("git/ref/tags/${GITHUB_REF_NAME}") < publish_script.index("gh release create")
-  raise "TEST FAILURE: remote lightweight/annotated tag must be peeled immediately before publication"
-end
-published_script = release_steps.fetch(published_verify_index).fetch("run")
-unless published_script.include?("gh release download") &&
-       published_script.include?("cmp --") &&
-       published_script.include?("verify-release-candidate.sh --existing") &&
-       published_script.include?("git/ref/tags/${GITHUB_REF_NAME}")
-  raise "TEST FAILURE: published release must be byte-identical with exactly three assets"
-end
-gate = release_steps.fetch(gate_index)
-gate_env = gate.fetch("env")
-raise "TEST FAILURE: external canary evidence is not read from protected environment" unless gate_env.key?("EXTERNAL_CANARY_GREEN")
-raise "TEST FAILURE: operator signoff evidence is not read from protected environment" unless gate_env.key?("OPERATOR_RELEASE_SIGNOFF")
-gate_script = gate.fetch("run")
-raise "TEST FAILURE: external canary must be explicitly green" unless gate_script.include?('EXTERNAL_CANARY_GREEN}" != true')
-raise "TEST FAILURE: operator signoff must bind tag and commit" unless gate_script.include?('expected_signoff="${GITHUB_REF_NAME}:${GITHUB_SHA}"')
+raise "TEST FAILURE: rolling must publish only from main pushes" unless rolling.fetch("if").include?("refs/heads/main")
+raise "TEST FAILURE: rolling must be gated on the full verify matrix" unless rolling.fetch("needs") == "verify"
 RUBY
 
-grep -Fq 'production-release' "${RELEASE_TEMPLATE}" \
-  || fail "release template must document the protected production-release environment"
-grep -Fq 'EXTERNAL_CANARY_GREEN' "${RELEASE_TEMPLATE}" \
-  || fail "release template must document the external canary approval gate"
-grep -Fq 'production-release' "${PROJECT_DIR}/README.md" \
-  || fail "README must document the protected release environment precondition"
 grep -Fq 'verify-release-candidate.sh --existing' "${PROJECT_DIR}/README.md" \
   || fail "README must document offline verification of an existing candidate"
 grep -Fq 'releases/latest/download/veloauth-latest.jar' "${PROJECT_DIR}/README.md" \
   || fail "README must document the permanent rolling download URL owned by the latest release"
-grep -Fq -- '--latest=false' "${PROJECT_DIR}/README.md" \
-  || fail "README must document that versioned releases never take the latest marker"
-grep -Fq 'protected tag ruleset' "${PROJECT_DIR}/README.md" \
-  || fail "README must require a protected tag ruleset before tag creation"
 
 echo "Release artifact fixture tests passed"
