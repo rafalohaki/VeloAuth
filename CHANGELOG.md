@@ -2,6 +2,27 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
+## [1.6.2] - 2026-09-21
+
+### Added
+
+- Auth messages in the client's Minecraft locale via `detect-client-language` (default on),
+  with fallback to the configured `language`.
+
+### Changed
+
+- Auth reminder now follows account status (`/login` vs `/register`); session TTL enforced
+  on the auth-server fast path.
+
+### Fixed
+
+- Premium resolver cache bypass for `hit-ttl-minutes=0`; concurrent DB init race; SQLite
+  WAL-relocation guard; reopening a shut-down database.
+
+### Security
+
+- Netty 4.2.17.Final, Caffeine 3.2.4, slf4j-simple 2.0.18; maven-shade 3.6.2, PMD 7.26.0.
+
 ## [1.6.1] - 2026-08-25
 
 ### Fixed
