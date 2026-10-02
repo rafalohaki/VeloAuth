@@ -90,15 +90,15 @@ final class ReportRedactor {
     private static final String COMMAND_ARGUMENT = "(?:\\\"[^\\\"\\r\\n]*\\\"|'[^'\\r\\n]*'|\\S+)";
 
     private static final Pattern SINGLE_ARGUMENT_AUTH_COMMAND = Pattern.compile(
-            "(?i)(?<![A-Za-z0-9_])((?:/(?:login|log|l)|/(?:2fa|totp|twofa)[ \\t]+(?:verify|disable))[ \\t]+)"
+            "(?i)(?<!\\w)((?:/(?:login|log|l)|/(?:2fa|totp|twofa)[ \\t]+(?:verify|disable))[ \\t]+)"
                     + COMMAND_ARGUMENT);
 
     private static final Pattern REGISTER_COMMAND = Pattern.compile(
-            "(?i)(?<![A-Za-z0-9_])(/(?:register|reg)[ \\t]+)"
+            "(?i)(?<!\\w)(/(?:register|reg)[ \\t]+)"
                     + COMMAND_ARGUMENT + "([ \\t]+)" + COMMAND_ARGUMENT);
 
     private static final Pattern CHANGE_PASSWORD_COMMAND = Pattern.compile(
-            "(?i)(?<![A-Za-z0-9_])(/changepassword[ \\t]+)"
+            "(?i)(?<!\\w)(/changepassword[ \\t]+)"
                     + COMMAND_ARGUMENT + "([ \\t]+)" + COMMAND_ARGUMENT);
 
     private ReportRedactor() {
