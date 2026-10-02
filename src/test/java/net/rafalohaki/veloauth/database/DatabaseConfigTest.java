@@ -36,6 +36,33 @@ class DatabaseConfigTest {
     }
 
     @Test
+    void buildJdbcUrl_mysqlDefaultsToVerifiedTls() {
+        String url = DatabaseConfig.buildJdbcUrl(
+                DatabaseType.MYSQL, "db.example.com", 3306, "veloauth", "", null);
+
+        assertTrue(url.contains("sslMode=VERIFY_IDENTITY"));
+        assertFalse(url.contains("useSSL=false"));
+    }
+
+    @Test
+    void buildJdbcUrl_mysqlPreservesExplicitSslMode() {
+        String url = DatabaseConfig.buildJdbcUrl(
+                DatabaseType.MYSQL, "db.example.com", 3306, "veloauth", "?SSLmode=REQUIRED", null);
+
+        assertTrue(url.endsWith("?SSLmode=REQUIRED"));
+        assertFalse(url.contains("VERIFY_IDENTITY"));
+    }
+
+    @Test
+    void buildJdbcUrl_mysqlPreservesExplicitLegacySslSetting() {
+        String url = DatabaseConfig.buildJdbcUrl(
+                DatabaseType.MYSQL, "db.example.com", 3306, "veloauth", "?useSSL=false", null);
+
+        assertTrue(url.endsWith("?useSSL=false"));
+        assertFalse(url.contains("VERIFY_IDENTITY"));
+    }
+
+    @Test
     void forLocalDatabaseWithMigration_freshInstall_resolvesPluginDataDirectory() {
         Path pluginDataDirectory = tempDir.resolve("plugins").resolve("veloauth");
         String database = "fresh_install_" + System.nanoTime();

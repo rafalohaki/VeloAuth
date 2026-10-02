@@ -329,9 +329,9 @@ public final class DatabaseConfig {
      * Buduje JDBC URL dla HikariCP.
      * Supports connection parameters and PostgreSQL SSL settings.
      */
-    private static String buildJdbcUrl(DatabaseType dbType, String hostname, int port, String database,
-                                       String connectionParameters,
-                                       net.rafalohaki.veloauth.config.Settings.PostgreSQLSettings postgreSQLSettings) {
+    static String buildJdbcUrl(DatabaseType dbType, String hostname, int port, String database,
+                               String connectionParameters,
+                               net.rafalohaki.veloauth.config.Settings.PostgreSQLSettings postgreSQLSettings) {
         String params = processConnectionParameters(connectionParameters);
 
         if (dbType == null) {
@@ -366,11 +366,26 @@ public final class DatabaseConfig {
     
     private static String addMySqlDefaultParams(String params) {
         if (params.isEmpty()) {
-            return "?useSSL=false&serverTimezone=UTC&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048";
-        } else if (!params.contains("useSSL")) {
-            return params + "&useSSL=false";
+            return "?serverTimezone=UTC&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048"
+                    + "&sslMode=VERIFY_IDENTITY";
         }
-        return params;
+        if (hasMySqlParameter(params, "sslMode") || hasMySqlParameter(params, "useSSL")) {
+            return params;
+        }
+        return params + (params.endsWith("?") || params.endsWith("&") ? "" : "&")
+                + "sslMode=VERIFY_IDENTITY";
+    }
+
+    private static boolean hasMySqlParameter(String parameters, String expectedName) {
+        String query = parameters.replaceFirst("^[?&]+", "");
+        for (String pair : query.split("[&;]")) {
+            int separator = pair.indexOf('=');
+            String name = separator < 0 ? pair : pair.substring(0, separator);
+            if (expectedName.equalsIgnoreCase(name.trim())) {
+                return true;
+            }
+        }
+        return false;
     }
     
     private static String buildPostgreSqlUrl(String hostname, int port, String database, String params,

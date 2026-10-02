@@ -16,11 +16,13 @@ import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
@@ -31,14 +33,14 @@ import java.util.regex.Pattern;
  * Aggregates premium resolvers with caching and priority fallback.
  * <p>
  * In-memory caching is delegated to Caffeine ({@link VeloAuthCaches#variableTtl}) so
- * positive hits use the configured {@code hit-ttl-minutes} while negative results
- * (player not premium) use the much shorter {@code miss-ttl-minutes}. Capacity is
+ * positive hits use the configured {@code hit-ttl-minutes} while confirmed offline names
+ * use the shorter {@code miss-ttl-minutes}. Transient UNKNOWN results are not cached. Capacity is
  * bounded by {@code memory-cache-max-size}; W-TinyLFU handles eviction in O(1).
  * <p>
  * Cache expiry and eviction are delegated to Caffeine. Cold external work is additionally
  * protected by per-source admission, single-flight nickname deduplication and a global
  * concurrency semaphore. Those bound how many lookups run; the outbound request rate each
- * upstream sees is bounded separately by {@link UpstreamRateLimiter}, one per resolver.
+ * upstream sees is bounded separately by {@link UpstreamRateLimiter}, shared by its endpoints.
  */
 public class PremiumResolverService {
 
@@ -57,6 +59,9 @@ public class PremiumResolverService {
      *  (Ashcon, wpme) are mirrors and can be stale or partial, so their OFFLINE alone is
      *  weaker evidence. See {@link #selectBestResult} for the decision rule. */
     static final String AUTHORITATIVE_RESOLVER_ID = "mojang";
+    private static final String MINECRAFT_SERVICES_RESOLVER_ID = ResolverConfig.MINECRAFT_SERVICES.id();
+    private static final Set<String> AUTHORITATIVE_RESOLVER_IDS = Set.of(
+            AUTHORITATIVE_RESOLVER_ID, MINECRAFT_SERVICES_RESOLVER_ID);
 
     private final Logger logger;
     private final PremiumUuidDao dao; // Renamed to avoid conflict with class name
@@ -117,7 +122,7 @@ public class PremiumResolverService {
             return;
         }
         for (ResolverConfig config : ResolverConfig.values()) {
-            if (isEnabled(config, rs)) {
+            if (isEnabled(config, rs) && !config.isFallbackOnly()) {
                 warnAboutUpstreamBudget(config.id(), requestsPerMinute(config, rs),
                         config.reportedLimitPerMinute());
             }
@@ -216,11 +221,13 @@ public class PremiumResolverService {
         int timeoutMs = Math.max(100, settings.getRequestTimeoutMs());
         int maxWaitMs = settings.getRateLimit().getMaxWaitMillis();
         List<PremiumResolver> resolverList = new ArrayList<>();
+        Map<String, UpstreamRateLimiter> rateLimiters = new HashMap<>();
         for (ResolverConfig config : ResolverConfig.values()) {
+            UpstreamRateLimiter limiter = rateLimiters.computeIfAbsent(
+                    config.rateLimitGroup(), group -> UpstreamRateLimiter.perMinute(
+                            group, requestsPerMinute(config, settings), maxWaitMs));
             resolverList.add(new ConfigurablePremiumResolver(
-                    logger, isEnabled(config, settings), timeoutMs, config,
-                    UpstreamRateLimiter.perMinute(
-                            config.id(), requestsPerMinute(config, settings), maxWaitMs)));
+                    logger, isEnabled(config, settings), timeoutMs, config, limiter));
         }
         return Collections.unmodifiableList(resolverList);
     }
@@ -234,6 +241,7 @@ public class PremiumResolverService {
             case MOJANG -> settings.isMojangEnabled();
             case ASHCON -> settings.isAshconEnabled();
             case WPME -> settings.isWpmeEnabled();
+            case MINECRAFT_SERVICES -> settings.isMojangEnabled();
         };
     }
 
@@ -244,6 +252,7 @@ public class PremiumResolverService {
             case MOJANG -> limits.getMojangRequestsPerMinute();
             case ASHCON -> limits.getAshconRequestsPerMinute();
             case WPME -> limits.getWpmeRequestsPerMinute();
+            case MINECRAFT_SERVICES -> limits.getMojangRequestsPerMinute();
         };
     }
 
@@ -251,7 +260,9 @@ public class PremiumResolverService {
         if (!logger.isInfoEnabled()) {
             return;
         }
-        logger.info(PREMIUM_MARKER, "[PremiumResolver] Config - Mojang: {}, Ashcon: {}, Wpme: {}",
+        logger.info(PREMIUM_MARKER,
+                "[PremiumResolver] Config - Mojang (with official Minecraft Services fallback): {}, "
+                        + "Ashcon: {}, Wpme: {}",
                 rs.isMojangEnabled(), rs.isAshconEnabled(), rs.isWpmeEnabled());
         Settings.ResolverRateLimitSettings limits = rs.getRateLimit();
         logger.info(PREMIUM_MARKER,
@@ -303,8 +314,34 @@ public class PremiumResolverService {
             return null;
         }
 
-        ResolverResults results = executeResolversInParallel(enabledResolvers, trimmed);
+        List<PremiumResolver> fallbackResolvers = enabledResolvers.stream()
+                .filter(resolver -> isFallbackOnly(resolver.id()))
+                .toList();
+        List<PremiumResolver> primaryResolvers = enabledResolvers.stream()
+                .filter(resolver -> !isFallbackOnly(resolver.id()))
+                .toList();
+        ResolverResults results = executeResolversInParallel(primaryResolvers, trimmed);
+        if (shouldUseMinecraftServicesFallback(results, fallbackResolvers)) {
+            results = results.merge(executeResolversInParallel(fallbackResolvers, trimmed));
+        }
         return selectBestResult(results, trimmed);
+    }
+
+    private static boolean isFallbackOnly(String resolverId) {
+        return MINECRAFT_SERVICES_RESOLVER_ID.equals(resolverId);
+    }
+
+    private static boolean shouldUseMinecraftServicesFallback(
+            ResolverResults results, List<PremiumResolver> fallbackResolvers) {
+        if (fallbackResolvers.isEmpty()) {
+            return false;
+        }
+        PremiumResolution mojang = results.byId(AUTHORITATIVE_RESOLVER_ID);
+        if (mojang == null || !mojang.isUnknown()) {
+            return false;
+        }
+        String reason = mojang.message();
+        return !"upstream rate limit".equals(reason) && !"http 429".equals(reason);
     }
 
     private ResolverResults executeResolversInParallel(List<PremiumResolver> enabledResolvers, String trimmed) {
@@ -389,12 +426,12 @@ public class PremiumResolverService {
      * <ol>
      *   <li><b>PREMIUM answers</b> → all positive answers must agree on UUID. Mojang wins
      *       deterministically when present; conflicting UUIDs return UNKNOWN (fail-closed).</li>
-     *   <li><b>Mojang OFFLINE</b> → trust immediately. Mojang is the authoritative source for
-     *       "this name does not have a premium account"; other resolvers are mirrors.</li>
-     *   <li><b>Mojang silent (UNKNOWN or disabled) + all non-Mojang enabled resolvers OFFLINE</b>
+     *   <li><b>An authoritative OFFLINE answer with no positive answer</b> → trust it. Mojang and
+     *       its official Minecraft Services fallback are authoritative; other resolvers are mirrors.</li>
+     *   <li><b>Both authoritative endpoints silent + all mirrors OFFLINE</b>
      *       → trust OFFLINE. Strong consensus from independent mirrors is treated as a quorum
-     *       substitute for Mojang's word.</li>
-     *   <li><b>Mojang silent + any non-Mojang UNKNOWN</b> → return UNKNOWN. Mixing OFFLINE with
+     *       substitute for an unavailable first-party endpoint.</li>
+     *   <li><b>Authoritative endpoints silent + any mirror UNKNOWN</b> → return UNKNOWN. Mixing OFFLINE with
      *       UNKNOWN from another mirror is insufficient evidence; the listener will deny the
      *       login (fail-closed). This is the case the previous "any OFFLINE wins" logic got
      *       wrong — it could classify a premium account as OFFLINE when Mojang timed out and
@@ -415,19 +452,18 @@ public class PremiumResolverService {
             return premium;
         }
 
-        PremiumResolution mojang = results.byId(AUTHORITATIVE_RESOLVER_ID);
-        if (mojang != null && mojang.isOffline()) {
+        PremiumResolution authoritativeOffline = results.authoritativeOfflineResult();
+        if (authoritativeOffline != null) {
             if (logger.isDebugEnabled()) {
                 logger.debug(PREMIUM_MARKER,
                         "[PARALLEL] {} resolved as OFFLINE by authoritative resolver ({})",
-                        trimmed, AUTHORITATIVE_RESOLVER_ID);
+                        trimmed, authoritativeOffline.source());
             }
-            return mojang;
+            return authoritativeOffline;
         }
 
-        // Mojang silent (UNKNOWN or disabled). Quorum fallback: trust OFFLINE only if every
-        // non-Mojang enabled resolver also said OFFLINE. Any UNKNOWN from a mirror voids the
-        // quorum because a stale/down mirror cannot disprove premium status on its own.
+        // First-party endpoints silent (UNKNOWN or disabled). Trust OFFLINE only if every
+        // enabled mirror also said OFFLINE; any UNKNOWN voids the quorum.
         List<PremiumResolution> nonMojang = results.nonAuthoritativeResults();
         boolean haveQuorum = !nonMojang.isEmpty()
                 && nonMojang.stream().allMatch(PremiumResolution::isOffline);
@@ -443,7 +479,8 @@ public class PremiumResolverService {
 
         logQuorumFailure(results, trimmed);
         return PremiumResolution.unknown(RESOLVER_SERVICE,
-                "no quorum: mojang=" + statusLabel(mojang)
+                "no quorum: mojang=" + statusSummary(results.byId(AUTHORITATIVE_RESOLVER_ID))
+                        + ", minecraft-services=" + statusSummary(results.byId(MINECRAFT_SERVICES_RESOLVER_ID))
                         + ", non-mojang=" + nonMojangSummary(nonMojang));
     }
 
@@ -472,10 +509,12 @@ public class PremiumResolverService {
             return;
         }
         PremiumResolution mojang = results.byId(AUTHORITATIVE_RESOLVER_ID);
+        PremiumResolution minecraftServices = results.byId(MINECRAFT_SERVICES_RESOLVER_ID);
         List<PremiumResolution> nonMojang = results.nonAuthoritativeResults();
         logger.warn(PREMIUM_MARKER,
-                "[PARALLEL] {} UNKNOWN: mojang={} non-mojang={} — login will be denied (fail-closed)",
-                trimmed, statusLabel(mojang), nonMojangSummary(nonMojang));
+                "[PARALLEL] {} UNKNOWN: mojang={} minecraft-services={} non-mojang={} "
+                        + "— login will be denied (fail-closed)",
+                trimmed, statusSummary(mojang), statusSummary(minecraftServices), nonMojangSummary(nonMojang));
     }
 
     private static String statusLabel(PremiumResolution resolution) {
@@ -491,6 +530,20 @@ public class PremiumResolverService {
         return "UNKNOWN";
     }
 
+    private static String statusSummary(PremiumResolution resolution) {
+        String status = statusLabel(resolution);
+        if (resolution == null || !resolution.isUnknown()
+                || resolution.message() == null || resolution.message().isBlank()) {
+            return status;
+        }
+        StringBuilder safeReason = new StringBuilder();
+        for (int index = 0; index < resolution.message().length() && safeReason.length() < 120; index++) {
+            char character = resolution.message().charAt(index);
+            safeReason.append(Character.isISOControl(character) ? ' ' : character);
+        }
+        return status + " (" + safeReason + ")";
+    }
+
     private static String nonMojangSummary(List<PremiumResolution> nonMojang) {
         if (nonMojang.isEmpty()) {
             return "[]";
@@ -501,7 +554,7 @@ public class PremiumResolverService {
             if (i > 0) {
                 sb.append(", ");
             }
-            sb.append(r.source()).append('=').append(statusLabel(r));
+            sb.append(r.source()).append('=').append(statusSummary(r));
         }
         return sb.append(']').toString();
     }
@@ -513,12 +566,18 @@ public class PremiumResolverService {
      */
     private record ResolverResults(Map<String, PremiumResolution> byResolver) {
 
+        ResolverResults merge(ResolverResults other) {
+            Map<String, PremiumResolution> merged = new HashMap<>(byResolver);
+            merged.putAll(other.byResolver);
+            return new ResolverResults(Map.copyOf(merged));
+        }
+
         List<PremiumResolution> premiumResultsByPriority() {
             List<Map.Entry<String, PremiumResolution>> entries = byResolver.entrySet().stream()
                     .filter(entry -> entry.getValue() != null && entry.getValue().isPremium())
                     .sorted(Comparator
-                            .comparing((Map.Entry<String, PremiumResolution> entry) ->
-                                    !AUTHORITATIVE_RESOLVER_ID.equals(entry.getKey()))
+                            .comparingInt((Map.Entry<String, PremiumResolution> entry) ->
+                                    resolverPriority(entry.getKey()))
                             .thenComparing(Map.Entry::getKey))
                     .toList();
             return entries.stream().map(Map.Entry::getValue).toList();
@@ -528,18 +587,36 @@ public class PremiumResolverService {
             return byResolver.get(id);
         }
 
+        PremiumResolution authoritativeOfflineResult() {
+            PremiumResolution mojang = byResolver.get(AUTHORITATIVE_RESOLVER_ID);
+            if (mojang != null && mojang.isOffline()) {
+                return mojang;
+            }
+            PremiumResolution minecraftServices = byResolver.get(MINECRAFT_SERVICES_RESOLVER_ID);
+            return minecraftServices != null && minecraftServices.isOffline()
+                    ? minecraftServices
+                    : null;
+        }
+
         List<PremiumResolution> nonAuthoritativeResults() {
             List<PremiumResolution> out = new ArrayList<>(byResolver.size());
             List<Map.Entry<String, PremiumResolution>> entries = byResolver.entrySet().stream()
                     .sorted(Map.Entry.comparingByKey())
                     .toList();
             for (Map.Entry<String, PremiumResolution> entry : entries) {
-                if (!AUTHORITATIVE_RESOLVER_ID.equals(entry.getKey()) && entry.getValue() != null) {
+                if (!AUTHORITATIVE_RESOLVER_IDS.contains(entry.getKey()) && entry.getValue() != null) {
                     out.add(entry.getValue());
                 }
             }
             return out;
         }
+    }
+
+    private static int resolverPriority(String resolverId) {
+        if (AUTHORITATIVE_RESOLVER_ID.equals(resolverId)) {
+            return 0;
+        }
+        return AUTHORITATIVE_RESOLVER_IDS.contains(resolverId) ? 1 : 2;
     }
 
     public PremiumResolution resolve(String username) {
@@ -720,12 +797,14 @@ public class PremiumResolverService {
     }
 
     /**
-     * Cache write. When the matching TTL tier is disabled (configured to {@code 0}) we
-     * intentionally drop any existing entry instead of putting one with a phantom TTL —
-     * matches the legacy semantics where {@code hit-ttl-minutes=0} or {@code miss-ttl-minutes=0}
-     * meant "every login queries the API for this kind of result".
+     * Cache confirmed results only. When a TTL tier is disabled, drop the entry instead of
+     * putting one with a phantom TTL so the next login queries the API again.
      */
     private void cacheResult(String key, PremiumResolution resolution) {
+        if (resolution.isUnknown()) {
+            cache.invalidate(key);
+            return;
+        }
         long ttl = resolution.isPremium() ? premiumTtlMillis : missTtlMillis;
         if (ttl <= 0L) {
             cache.invalidate(key);
