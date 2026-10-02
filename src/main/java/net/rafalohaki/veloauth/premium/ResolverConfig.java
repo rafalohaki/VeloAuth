@@ -1,6 +1,7 @@
 package net.rafalohaki.veloauth.premium;
 
 import java.net.HttpURLConnection;
+import java.io.Serializable;
 
 /**
  * Configuration for a premium resolver.
@@ -104,17 +105,15 @@ public enum ResolverConfig {
     }
 
     private record ProfileFields(int notFoundResponseCode, String uuidField, String usernameField,
-                                 boolean usesRawUuidFormat) {
+                                 boolean usesRawUuidFormat) implements Serializable {
     }
 
     private record ResolverPolicy(int reportedLimitPerMinute, String rateLimitGroup,
-                                  boolean fallbackOnly, boolean authoritative) {
+                                  boolean fallbackOnly, boolean authoritative) implements Serializable {
     }
 
     private static final class ResolverIds {
         private static final String MOJANG = "mojang";
 
-        private ResolverIds() {
-        }
     }
 }
