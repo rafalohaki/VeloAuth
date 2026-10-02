@@ -2,6 +2,19 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Premium resolver `UNKNOWN` results are no longer cached as non-premium. If Mojang is temporarily
+  unavailable, VeloAuth tries the official Minecraft Services profile endpoint; it shares Mojang's
+  request budget, is skipped on rate-limit responses and reports per-endpoint failure reasons.
+
+### Security
+
+- MySQL connections now default to TLS with server identity verification unless an explicit SSL
+  option is configured. Opt-in diagnostic log redaction also masks authentication-command arguments.
+
 ## [1.6.2] - 2026-09-21
 
 ### Added

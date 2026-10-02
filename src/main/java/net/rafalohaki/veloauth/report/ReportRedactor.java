@@ -87,6 +87,20 @@ final class ReportRedactor {
                     + "(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;&#]+)"
     );
 
+    private static final String COMMAND_ARGUMENT = "(?:\\\"[^\\\"\\r\\n]*\\\"|'[^'\\r\\n]*'|\\S+)";
+
+    private static final Pattern SINGLE_ARGUMENT_AUTH_COMMAND = Pattern.compile(
+            "(?i)(?<!\\w)((?:/(?:login|log|l)|/(?:2fa|totp|twofa)[ \\t]+(?:verify|disable))[ \\t]+)"
+                    + COMMAND_ARGUMENT);
+
+    private static final Pattern REGISTER_COMMAND = Pattern.compile(
+            "(?i)(?<!\\w)(/(?:register|reg)[ \\t]+)"
+                    + COMMAND_ARGUMENT + "([ \\t]+)" + COMMAND_ARGUMENT);
+
+    private static final Pattern CHANGE_PASSWORD_COMMAND = Pattern.compile(
+            "(?i)(?<!\\w)(/changepassword[ \\t]+)"
+                    + COMMAND_ARGUMENT + "([ \\t]+)" + COMMAND_ARGUMENT);
+
     private ReportRedactor() {
     }
 
@@ -155,11 +169,21 @@ final class ReportRedactor {
             return input;
         }
         String redacted = DISCORD_WEBHOOK.matcher(input).replaceAll(REDACTED);
+        redacted = redactAuthenticationCommands(redacted);
         redacted = BEARER_TOKEN.matcher(redacted)
                 .replaceAll(m -> m.group(1) + REDACTED);
         redacted = LOG_KEY_VALUE.matcher(redacted)
                 .replaceAll(m -> isSecretKey(m.group(2)) ? m.group(1) + REDACTED : m.group());
         redacted = redactYaml(redacted);
         return redactConnectionUrl(redacted);
+    }
+
+    private static String redactAuthenticationCommands(String input) {
+        String redacted = SINGLE_ARGUMENT_AUTH_COMMAND.matcher(input)
+                .replaceAll(m -> m.group(1) + REDACTED);
+        redacted = REGISTER_COMMAND.matcher(redacted)
+                .replaceAll(m -> m.group(1) + REDACTED + m.group(2) + REDACTED);
+        return CHANGE_PASSWORD_COMMAND.matcher(redacted)
+                .replaceAll(m -> m.group(1) + REDACTED + m.group(2) + REDACTED);
     }
 }

@@ -422,7 +422,7 @@ waiting for restart. Invalid candidates leave both active values and pending sta
 - **VeloAuth `config.yml`** — secrets redacted (`password`/`passwd`, webhook URLs, SSL passwords, API/access tokens, client secrets, forwarding secrets and connection-URL/query credentials → `<redacted>`)
 - **`velocity.toml`** — secrets redacted (same redaction rules)
 - **Active/pending settings status** — restart-only groups configured but not yet active
-- **Recent proxy logs (opt-in)** — omitted by default because logs can contain IPs, chat and third-party secrets. With `include-logs: true`, the tail of `logs/latest.log` is capped at 10 MiB and passed through local best-effort redaction before upload.
+- **Recent proxy logs (opt-in)** — omitted by default because logs can contain IPs, chat and third-party secrets. With `include-logs: true`, the tail of `logs/latest.log` is capped at 10 MiB and passed through local best-effort redaction before upload, including login, registration, password-change and TOTP command arguments.
 - **Metadata** — VeloAuth/Velocity/Java versions, online-mode, server count, database type, ping timeout and effective premium routing flags (visible); active auth-server name/mode/client compatibility, try-list and backend names (hidden, without backend addresses).
 
 ```yaml
@@ -592,7 +592,10 @@ failure leaves the alert eligible for retry; only one delivery attempt can be in
 ### Database Config
 
 Supported: H2 (default, local), SQLite (local), MySQL and PostgreSQL. Remote databases use HikariCP;
-local databases use direct JDBC. A minimal PostgreSQL configuration is:
+local databases use direct JDBC. MySQL connections default to `sslMode=VERIFY_IDENTITY`; the server
+certificate must be trusted by the JVM and match `database.hostname`. Explicit `sslMode` or legacy
+`useSSL` settings in `connection-parameters` override that default. A minimal PostgreSQL
+configuration is:
 
 ```yaml
 database:
@@ -608,10 +611,11 @@ database:
     ssl-mode: "require"
 ```
 
-Prefer the structured fields above. If `connection-url` is used, put query parameters in
-`connection-parameters`; credentials and SSL secrets are redacted from `/vauth report`. Always
-back up the database before changing storage type, importing LimboAuth data or upgrading a release
-that contains schema changes.
+Prefer the structured fields above. For MySQL with a private CA, add that CA to the JVM trust store
+or configure an explicit `sslMode` in `connection-parameters`. If `connection-url` is used, put
+query parameters in `connection-parameters`; credentials and SSL secrets are redacted from
+`/vauth report`. Always back up the database before changing storage type, importing LimboAuth data
+or upgrading a release that contains schema changes.
 
 H2 and SQLite live under `plugins/veloauth/data/` inside the plugin data directory. Installations
 upgraded from releases that used `./data` relative to the proxy working directory are migrated
@@ -662,7 +666,7 @@ commit error is reported as an unknown outcome rather than a false success or a 
 1. **Player connects** to Velocity
 2. **VeloAuth checks** authoritative premium state in `AUTH`, then the in-memory premium cache
 3. If **not in memory**, checks the `PREMIUM_UUIDS` database cache (persistent across restarts, but never authoritative over `AUTH`)
-4. If **not in DB cache**, resolves via **Mojang/Ashcon API** in parallel using virtual threads
+4. If **not in DB cache**, resolves via Mojang and configured mirrors in parallel using virtual threads; if Mojang is temporarily unavailable, it tries the official Minecraft Services profile endpoint before applying the fail-closed quorum
 5. Velocity completes the selected online/offline handshake; premium Java identity is trusted only when the final `Player#isOnlineMode()` is `true`
 6. By default **every Java player** is sent through the auth server. A confirmed Floodgate UUID can use its separate bypass; a Mojang-verified Java player can preserve the original forced-host/`try` target only with `premium.bypass-auth-server: true`
 7. Premium players on auth/limbo are transferred automatically; cracked players type **/login** or **/register**, are verified with BCrypt, and first registration ownership is committed atomically by the database
@@ -670,12 +674,16 @@ commit error is reported as an unknown outcome rather than a false success or a 
 
 ### Premium Resolution (3 layers)
 ```
-Connect → [In-memory cache] → [Database cache] → [Mojang/Ashcon API]
-              ~0ms                ~1ms                 ~200-500ms
+Connect → [In-memory cache] → [Database cache] → [Mojang + mirror APIs]
+              ~0ms                ~1ms                    ~200-500ms
+                                                           `- official Minecraft Services fallback on transient Mojang failure
 ```
 API calls run in parallel on virtual threads. Concurrent requests for the same cold nickname
 share one lookup; per-IP and global admission limits prevent one source from consuming resolver
-capacity for the whole proxy. Results are cached in the database and survive proxy restarts.
+capacity for the whole proxy. The official fallback shares Mojang's outbound request budget and is
+not used to bypass local or upstream rate limits. Transient `UNKNOWN` results are not cached as
+offline misses, so a later join can retry. Confirmed results are cached in the database and survive
+proxy restarts.
 
 ### Nickname Change Detection
 When a premium player logs in with a different username than what is stored (Mojang account rename), VeloAuth automatically detects the mismatch and updates the database record, keeping the UUID-to-username mapping accurate without any admin intervention.

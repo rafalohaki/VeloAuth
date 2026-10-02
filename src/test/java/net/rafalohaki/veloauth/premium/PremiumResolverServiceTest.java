@@ -669,4 +669,91 @@ class PremiumResolverServiceTest {
         assertTrue(result.isUnknown(),
                 "All resolvers UNKNOWN → UNKNOWN (login denied)");
     }
+
+    @Test
+    void transientUnknown_isNotCachedAndNextLoginRetriesResolvers() {
+        String username = "RetryUnknownNick";
+        UUID uuid = UUID.randomUUID();
+        PremiumResolver mojang = mockResolver("mojang",
+                PremiumResolution.unknown("mojang", "timeout"));
+        PremiumResolver wpme = mockResolver("wpme",
+                PremiumResolution.unknown("wpme", "timeout"));
+        when(mojang.resolve(username)).thenReturn(
+                PremiumResolution.unknown("mojang", "timeout"),
+                PremiumResolution.premium(uuid, username, "mojang"));
+        when(dao.saveOrUpdate(any(UUID.class), anyString())).thenReturn(true);
+        PremiumResolverService resolverService = serviceWith(List.of(mojang, wpme));
+
+        PremiumResolution first = resolverService.resolve(username);
+        PremiumResolution second = resolverService.resolve(username);
+
+        assertTrue(first.isUnknown());
+        assertTrue(second.isPremium());
+        assertEquals(uuid, second.uuid());
+        verify(mojang, times(2)).resolve(username);
+    }
+
+    @Test
+    void minecraftServicesFallback_recoversWhenMojangIsUnavailable() {
+        String username = "OfficialFallback";
+        UUID uuid = UUID.randomUUID();
+        PremiumResolver mojang = mockResolver("mojang",
+                PremiumResolution.unknown("mojang", "http 503"));
+        PremiumResolver wpme = mockResolver("wpme",
+                PremiumResolution.unknown("wpme", "timeout"));
+        PremiumResolver fallback = mockResolver(ResolverConfig.MINECRAFT_SERVICES.id(),
+                PremiumResolution.premium(uuid, username, ResolverConfig.MINECRAFT_SERVICES.id()));
+        when(dao.saveOrUpdate(any(UUID.class), anyString())).thenReturn(true);
+
+        PremiumResolution result = serviceWith(List.of(mojang, wpme, fallback)).resolve(username);
+
+        verify(fallback).resolve(username);
+        assertTrue(result.isPremium(), result.toString());
+        assertEquals(uuid, result.uuid());
+        assertEquals(ResolverConfig.MINECRAFT_SERVICES.id(), result.source());
+    }
+
+    @Test
+    void minecraftServicesFallback_officialOfflineResultIsAuthoritative() {
+        String username = "FallbackOffline";
+        PremiumResolver mojang = mockResolver("mojang",
+                PremiumResolution.unknown("mojang", "timeout"));
+        PremiumResolver wpme = mockResolver("wpme",
+                PremiumResolution.unknown("wpme", "timeout"));
+        PremiumResolver fallback = mockResolver(ResolverConfig.MINECRAFT_SERVICES.id(),
+                PremiumResolution.offline(username, ResolverConfig.MINECRAFT_SERVICES.id(), "not found"));
+
+        PremiumResolution result = serviceWith(List.of(mojang, wpme, fallback)).resolve(username);
+
+        verify(fallback).resolve(username);
+        assertTrue(result.isOffline());
+        assertEquals(ResolverConfig.MINECRAFT_SERVICES.id(), result.source());
+    }
+
+    @Test
+    void minecraftServicesFallback_doesNotRetryAnUpstreamRateLimit() {
+        String username = "RateLimitNick";
+        PremiumResolver mojang = mockResolver("mojang",
+                PremiumResolution.unknown("mojang", "http 429"));
+        PremiumResolver wpme = mockResolver("wpme",
+                PremiumResolution.unknown("wpme", "timeout"));
+        PremiumResolver fallback = mockResolver(ResolverConfig.MINECRAFT_SERVICES.id(),
+                PremiumResolution.premium(UUID.randomUUID(), username,
+                        ResolverConfig.MINECRAFT_SERVICES.id()));
+
+        PremiumResolution result = serviceWith(List.of(mojang, wpme, fallback)).resolve(username);
+
+        verify(fallback, never()).resolve(username);
+        assertTrue(result.isUnknown(), result.toString());
+    }
+
+    @Test
+    void minecraftServicesFallback_usesOfficialEndpointAndMojangBudget() {
+        assertEquals("https://api.minecraftservices.com/minecraft/profile/lookup/name/",
+                ResolverConfig.MINECRAFT_SERVICES.endpoint());
+        assertEquals(ResolverConfig.MOJANG.rateLimitGroup(),
+                ResolverConfig.MINECRAFT_SERVICES.rateLimitGroup());
+        assertTrue(ResolverConfig.MINECRAFT_SERVICES.isAuthoritative());
+        assertTrue(ResolverConfig.MINECRAFT_SERVICES.isFallbackOnly());
+    }
 }

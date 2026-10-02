@@ -47,8 +47,11 @@ database:
   # Optional: Additional connection parameters
   # Query parameters inside connection-url are ignored; place them here instead.
   # For PostgreSQL SSL options, prefer database.postgresql.* settings below.
-  # Example: "?autoReconnect=true&initialTimeout=1&useSSL=false&serverTimezone=UTC"
+  # Example: "?autoReconnect=true&initialTimeout=1&serverTimezone=UTC"
   connection-parameters: ""
+  # MySQL defaults to sslMode=VERIFY_IDENTITY when no SSL option is set. The server certificate
+  # must be trusted by the JVM and match the configured hostname; explicit sslMode/useSSL options
+  # in connection-parameters are respected.
 
   # PostgreSQL-specific configuration (used when storage-type is POSTGRESQL)
   postgresql:
@@ -233,7 +236,8 @@ premium:
   # directly. Enable only when that reduced limbo isolation is acceptable.
   bypass-auth-server: false
   resolver:
-    # Query Mojang API
+    # Query Mojang. If it is temporarily unavailable, VeloAuth also tries the official
+    # Minecraft Services profile lookup. Both endpoints share this request budget.
     mojang-enabled: true
     # Query Ashcon API
     ashcon-enabled: true
@@ -247,9 +251,10 @@ premium:
     # Premium status is stable (Mojang locks names for 37 days after change);
     # 30min TTL reduces API calls 3x while still picking up name changes.
     hit-ttl-minutes: 30
-    # Cache TTL for misses in minutes
+    # Cache TTL for confirmed non-premium names in minutes
     # A non-premium nick cannot suddenly become premium (new account purchase
     # is rare); 10min is safe and reduces API calls 3.3x vs the old 3min.
+    # Transient UNKNOWN/API failures are not cached and can be retried next join.
     miss-ttl-minutes: 10
     # Preserve username case in resolver cache
     case-sensitive: true
@@ -264,11 +269,10 @@ premium:
     # Maximum distinct cold lookups executing at once. Concurrent requests for
     # the same nickname share one lookup and consume only one global slot.
     max-concurrent-lookups: 32
-    # Ceiling on outbound requests VeloAuth sends to each API, per minute.
-    # The limits above bound lookups; these bound traffic. One cold lookup asks
-    # every enabled resolver and each retry costs another request, so a join wave
-    # produces a multiple of itself upstream — these values are what keeps that
-    # multiple under the provider's limit. Set 0 to disable a ceiling.
+    # Ceiling on outbound requests per upstream, per minute. A cold lookup fans out
+    # to enabled mirrors and retries cost more requests. Mojang and its official
+    # Minecraft Services fallback share one budget; the fallback runs only on a
+    # non-rate-limit Mojang failure. Set 0 to disable a ceiling.
     # Mojang's practical limit is around 200/min per source IP; 120 leaves headroom.
     # An idle budget banks a quarter of a minute's worth of requests, so a burst can
     # briefly push a rolling minute to 1.25x the value set here (150 at the default).
