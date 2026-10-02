@@ -16,7 +16,10 @@ public enum ResolverConfig {
             "uuid",
             "username",
             false,
-            ResolverConfig.UNKNOWN_REPORTED_LIMIT
+            ResolverConfig.UNKNOWN_REPORTED_LIMIT,
+            "ashcon",
+            false,
+            false
     ),
 
     WPME(
@@ -26,7 +29,10 @@ public enum ResolverConfig {
             "uuid",
             "username",
             false,
-            ResolverConfig.UNKNOWN_REPORTED_LIMIT
+            ResolverConfig.UNKNOWN_REPORTED_LIMIT,
+            "wpme",
+            false,
+            false
     ),
 
     /**
@@ -41,7 +47,23 @@ public enum ResolverConfig {
             "id",
             "name",
             true,
-            200
+            200,
+            "mojang",
+            false,
+            true
+    ),
+
+    MINECRAFT_SERVICES(
+            "minecraft-services",
+            "https://api.minecraftservices.com/minecraft/profile/lookup/name/",
+            HttpURLConnection.HTTP_NOT_FOUND,
+            "id",
+            "name",
+            true,
+            ResolverConfig.UNKNOWN_REPORTED_LIMIT,
+            "mojang",
+            true,
+            true
     );
 
     /** Sentinel for providers that do not publish a per-minute request limit. */
@@ -54,10 +76,14 @@ public enum ResolverConfig {
     private final String usernameField;
     private final boolean usesRawUuidFormat;
     private final int reportedLimitPerMinute;
+    private final String rateLimitGroup;
+    private final boolean fallbackOnly;
+    private final boolean authoritative;
 
     ResolverConfig(String id, String endpoint, int notFoundResponseCode,
                    String uuidField, String usernameField, boolean usesRawUuidFormat,
-                   int reportedLimitPerMinute) {
+                   int reportedLimitPerMinute, String rateLimitGroup,
+                   boolean fallbackOnly, boolean authoritative) {
         this.id = id;
         this.endpoint = endpoint;
         this.notFoundResponseCode = notFoundResponseCode;
@@ -65,6 +91,9 @@ public enum ResolverConfig {
         this.usernameField = usernameField;
         this.usesRawUuidFormat = usesRawUuidFormat;
         this.reportedLimitPerMinute = reportedLimitPerMinute;
+        this.rateLimitGroup = rateLimitGroup;
+        this.fallbackOnly = fallbackOnly;
+        this.authoritative = authoritative;
     }
 
     public String id() {
@@ -97,5 +126,17 @@ public enum ResolverConfig {
      */
     int reportedLimitPerMinute() {
         return reportedLimitPerMinute;
+    }
+
+    String rateLimitGroup() {
+        return rateLimitGroup;
+    }
+
+    boolean isFallbackOnly() {
+        return fallbackOnly;
+    }
+
+    boolean isAuthoritative() {
+        return authoritative;
     }
 }

@@ -252,6 +252,40 @@ class ReportRedactorTest {
     }
 
     @Test
+    void redactLog_authenticationCommandArguments_replaced() {
+        String input = """
+                [INFO] Alice issued server command: /login loginSecret
+                [INFO] Ally issued server command: /l aliasLoginSecret
+                [INFO] Bob issued server command: /register registerSecret registerSecret
+                [INFO] Billy issued server command: /reg aliasRegisterSecret aliasRegisterSecret
+                [INFO] Carol issued server command: /changepassword oldSecret newSecret
+                [INFO] Dana issued server command: /2fa verify 123456
+                [INFO] Erin issued server command: /2fa disable 654321
+                [INFO] Evie issued server command: /totp verify 456789
+                """;
+
+        String result = ReportRedactor.redactLog(input);
+
+        assertFalse(result.contains("loginSecret"));
+        assertFalse(result.contains("aliasLoginSecret"));
+        assertFalse(result.contains("registerSecret"));
+        assertFalse(result.contains("aliasRegisterSecret"));
+        assertFalse(result.contains("oldSecret"));
+        assertFalse(result.contains("newSecret"));
+        assertFalse(result.contains("123456"));
+        assertFalse(result.contains("654321"));
+        assertFalse(result.contains("456789"));
+        assertTrue(result.contains("/login <redacted>"));
+        assertTrue(result.contains("/l <redacted>"));
+        assertTrue(result.contains("/register <redacted> <redacted>"));
+        assertTrue(result.contains("/reg <redacted> <redacted>"));
+        assertTrue(result.contains("/changepassword <redacted> <redacted>"));
+        assertTrue(result.contains("/2fa verify <redacted>"));
+        assertTrue(result.contains("/2fa disable <redacted>"));
+        assertTrue(result.contains("/totp verify <redacted>"));
+    }
+
+    @Test
     void redact_passwordInComment_notRedacted() {
         // Comments starting with # should not be redacted — they are documentation, not values.
         // The regex anchors on ^\s*<key> which won't match a # prefix.
