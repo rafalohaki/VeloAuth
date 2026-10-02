@@ -58,7 +58,7 @@ public class PremiumResolverService {
      *  truth for "this name exists / does not exist as a premium account". Other resolvers
      *  (Ashcon, wpme) are mirrors and can be stale or partial, so their OFFLINE alone is
      *  weaker evidence. See {@link #selectBestResult} for the decision rule. */
-    static final String AUTHORITATIVE_RESOLVER_ID = "mojang";
+    static final String AUTHORITATIVE_RESOLVER_ID = ResolverConfig.MOJANG.id();
     private static final String MINECRAFT_SERVICES_RESOLVER_ID = ResolverConfig.MINECRAFT_SERVICES.id();
     private static final Set<String> AUTHORITATIVE_RESOLVER_IDS = Set.of(
             AUTHORITATIVE_RESOLVER_ID, MINECRAFT_SERVICES_RESOLVER_ID);
@@ -599,24 +599,20 @@ public class PremiumResolverService {
         }
 
         List<PremiumResolution> nonAuthoritativeResults() {
-            List<PremiumResolution> out = new ArrayList<>(byResolver.size());
-            List<Map.Entry<String, PremiumResolution>> entries = byResolver.entrySet().stream()
+            return byResolver.entrySet().stream()
                     .sorted(Map.Entry.comparingByKey())
+                    .filter(entry -> !AUTHORITATIVE_RESOLVER_IDS.contains(entry.getKey())
+                            && entry.getValue() != null)
+                    .map(Map.Entry::getValue)
                     .toList();
-            for (Map.Entry<String, PremiumResolution> entry : entries) {
-                if (!AUTHORITATIVE_RESOLVER_IDS.contains(entry.getKey()) && entry.getValue() != null) {
-                    out.add(entry.getValue());
-                }
-            }
-            return out;
         }
-    }
 
-    private static int resolverPriority(String resolverId) {
-        if (AUTHORITATIVE_RESOLVER_ID.equals(resolverId)) {
-            return 0;
+        private static int resolverPriority(String resolverId) {
+            if (AUTHORITATIVE_RESOLVER_ID.equals(resolverId)) {
+                return 0;
+            }
+            return AUTHORITATIVE_RESOLVER_IDS.contains(resolverId) ? 1 : 2;
         }
-        return AUTHORITATIVE_RESOLVER_IDS.contains(resolverId) ? 1 : 2;
     }
 
     public PremiumResolution resolve(String username) {
