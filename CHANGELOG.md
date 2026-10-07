@@ -15,6 +15,11 @@ All notable user-visible changes to VeloAuth are documented in this file.
 - MySQL connections now default to TLS with server identity verification unless an explicit SSL
   option is configured. Opt-in diagnostic log redaction also masks authentication-command arguments.
 
+### Changed
+
+- Provided API pins: Netty 4.2.18.Final and slf4j-api 2.0.20. Build plugins: maven-enforcer-plugin
+  3.6.3 and maven-artifact-plugin 3.7.0.
+
 ## [1.6.2] - 2026-09-21
 
 ### Added

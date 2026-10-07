@@ -65,7 +65,7 @@ for dependency in root.findall(f"{namespace}dependencies/{namespace}dependency")
     dependencies[coordinate] = (text(dependency, "version"), text(dependency, "scope", "compile"))
 
 required_dependencies = {
-    "org.slf4j:slf4j-api": ("2.0.17", "provided"),
+    "org.slf4j:slf4j-api": ("2.0.20", "provided"),
     "jakarta.inject:jakarta.inject-api": ("2.0.1", "provided"),
     "net.kyori:adventure-api": ("4.26.1", "provided"),
     "net.kyori:adventure-key": ("4.26.1", "provided"),
@@ -284,7 +284,7 @@ if sbom_path:
         ("org.spongepowered", "configurate-core", "4.2.0"),
         ("org.spongepowered", "configurate-yaml", "4.2.0"),
         ("org.cloudburstmc.math", "immutable", "2.0"),
-        ("org.slf4j", "slf4j-api", "2.0.17"),
+        ("org.slf4j", "slf4j-api", "2.0.20"),
         ("jakarta.inject", "jakarta.inject-api", "2.0.1"),
         ("net.kyori", "adventure-api", "4.26.1"),
         ("net.kyori", "adventure-key", "4.26.1"),
@@ -292,7 +292,7 @@ if sbom_path:
         ("net.kyori", "adventure-text-serializer-legacy", "4.26.1"),
         ("net.kyori", "adventure-text-serializer-plain", "4.26.1"),
         ("com.google.code.gson", "gson", "2.13.2"),
-        ("io.netty", "netty-codec-base", "4.2.17.Final"),
+        ("io.netty", "netty-codec-base", "4.2.18.Final"),
         ("com.mysql", "mysql-connector-j", "9.5.0"),
         ("org.postgresql", "postgresql", "42.7.13"),
         ("com.h2database", "h2", "2.4.240"),
