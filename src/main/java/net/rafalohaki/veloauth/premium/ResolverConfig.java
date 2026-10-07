@@ -1,6 +1,7 @@
 package net.rafalohaki.veloauth.premium;
 
 import java.net.HttpURLConnection;
+import java.io.Serializable;
 
 /**
  * Configuration for a premium resolver.
@@ -12,21 +13,15 @@ public enum ResolverConfig {
     ASHCON(
             "ashcon",
             "https://api.ashcon.app/mojang/v2/user/",
-            HttpURLConnection.HTTP_NOT_FOUND,
-            "uuid",
-            "username",
-            false,
-            ResolverConfig.UNKNOWN_REPORTED_LIMIT
+            new ProfileFields(HttpURLConnection.HTTP_NOT_FOUND, "uuid", "username", false),
+            new ResolverPolicy(ResolverConfig.UNKNOWN_REPORTED_LIMIT, null, false, false)
     ),
 
     WPME(
             "wpme",
             "https://api-mc.wpme.pl/v2/user/",
-            HttpURLConnection.HTTP_NOT_FOUND,
-            "uuid",
-            "username",
-            false,
-            ResolverConfig.UNKNOWN_REPORTED_LIMIT
+            new ProfileFields(HttpURLConnection.HTTP_NOT_FOUND, "uuid", "username", false),
+            new ResolverPolicy(ResolverConfig.UNKNOWN_REPORTED_LIMIT, null, false, false)
     ),
 
     /**
@@ -35,13 +30,17 @@ public enum ResolverConfig {
      * Using -1 as sentinel to indicate "accept both 204 AND 404".
      */
     MOJANG(
-            "mojang",
+            ResolverIds.MOJANG,
             "https://api.mojang.com/users/profiles/minecraft/",
-            -1,
-            "id",
-            "name",
-            true,
-            200
+            new ProfileFields(-1, "id", "name", true),
+            new ResolverPolicy(200, null, false, true)
+    ),
+
+    MINECRAFT_SERVICES(
+            "minecraft-services",
+            "https://api.minecraftservices.com/minecraft/profile/lookup/name/",
+            new ProfileFields(HttpURLConnection.HTTP_NOT_FOUND, "id", "name", true),
+            new ResolverPolicy(ResolverConfig.UNKNOWN_REPORTED_LIMIT, ResolverIds.MOJANG, true, true)
     );
 
     /** Sentinel for providers that do not publish a per-minute request limit. */
@@ -49,22 +48,16 @@ public enum ResolverConfig {
 
     private final String id;
     private final String endpoint;
-    private final int notFoundResponseCode;
-    private final String uuidField;
-    private final String usernameField;
-    private final boolean usesRawUuidFormat;
-    private final int reportedLimitPerMinute;
+    private final ProfileFields profileFields;
+    private final ResolverPolicy policy;
+    private final String rateLimitGroup;
 
-    ResolverConfig(String id, String endpoint, int notFoundResponseCode,
-                   String uuidField, String usernameField, boolean usesRawUuidFormat,
-                   int reportedLimitPerMinute) {
+    ResolverConfig(String id, String endpoint, ProfileFields profileFields, ResolverPolicy policy) {
         this.id = id;
         this.endpoint = endpoint;
-        this.notFoundResponseCode = notFoundResponseCode;
-        this.uuidField = uuidField;
-        this.usernameField = usernameField;
-        this.usesRawUuidFormat = usesRawUuidFormat;
-        this.reportedLimitPerMinute = reportedLimitPerMinute;
+        this.profileFields = profileFields;
+        this.policy = policy;
+        this.rateLimitGroup = policy.rateLimitGroup() == null ? id : policy.rateLimitGroup();
     }
 
     public String id() {
@@ -76,19 +69,19 @@ public enum ResolverConfig {
     }
 
     public int notFoundResponseCode() {
-        return notFoundResponseCode;
+        return profileFields.notFoundResponseCode();
     }
 
     public String uuidField() {
-        return uuidField;
+        return profileFields.uuidField();
     }
 
     public String usernameField() {
-        return usernameField;
+        return profileFields.usernameField();
     }
 
     public boolean usesRawUuidFormat() {
-        return usesRawUuidFormat;
+        return profileFields.usesRawUuidFormat();
     }
 
     /**
@@ -96,6 +89,31 @@ public enum ResolverConfig {
      * {@link #UNKNOWN_REPORTED_LIMIT} when the provider does not publish one.
      */
     int reportedLimitPerMinute() {
-        return reportedLimitPerMinute;
+        return policy.reportedLimitPerMinute();
+    }
+
+    String rateLimitGroup() {
+        return rateLimitGroup;
+    }
+
+    boolean isFallbackOnly() {
+        return policy.fallbackOnly();
+    }
+
+    boolean isAuthoritative() {
+        return policy.authoritative();
+    }
+
+    private record ProfileFields(int notFoundResponseCode, String uuidField, String usernameField,
+                                 boolean usesRawUuidFormat) implements Serializable {
+    }
+
+    private record ResolverPolicy(int reportedLimitPerMinute, String rateLimitGroup,
+                                  boolean fallbackOnly, boolean authoritative) implements Serializable {
+    }
+
+    private static final class ResolverIds {
+        private static final String MOJANG = "mojang";
+
     }
 }
