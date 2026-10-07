@@ -286,6 +286,38 @@ class ReportRedactorTest {
     }
 
     @Test
+    void redactLog_namespacedAndPartialAuthCommands_replaced() {
+        String input = """
+                Notch -> executed command /veloauth:login namespacedSecret
+                Notch -> executed command /veloauth:register onlyRegisterSecret
+                Notch -> executed command /VeloAuth:changepassword onlyOldSecret
+                Notch -> executed command /veloauth:2fa verify 111222
+                Notch -> executed command /login "quoted secret"
+                Notch -> executed command /logout now
+                Notch -> executed command /list players
+                Notch -> executed command /2fa status
+                Notch -> executed command /vauth reload
+                """;
+
+        String result = ReportRedactor.redactLog(input);
+
+        assertFalse(result.contains("namespacedSecret"));
+        assertFalse(result.contains("onlyRegisterSecret"));
+        assertFalse(result.contains("onlyOldSecret"));
+        assertFalse(result.contains("111222"));
+        assertFalse(result.contains("quoted secret"));
+        assertTrue(result.contains("/veloauth:login <redacted>"));
+        assertTrue(result.contains("/veloauth:register <redacted>"));
+        assertTrue(result.contains("/VeloAuth:changepassword <redacted>"));
+        assertTrue(result.contains("/veloauth:2fa verify <redacted>"));
+        assertTrue(result.contains("/login <redacted>"));
+        assertTrue(result.contains("/logout now"));
+        assertTrue(result.contains("/list players"));
+        assertTrue(result.contains("/2fa status"));
+        assertTrue(result.contains("/vauth reload"));
+    }
+
+    @Test
     void redact_passwordInComment_notRedacted() {
         // Comments starting with # should not be redacted — they are documentation, not values.
         // The regex anchors on ^\s*<key> which won't match a # prefix.

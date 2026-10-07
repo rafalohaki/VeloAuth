@@ -89,17 +89,23 @@ final class ReportRedactor {
 
     private static final String COMMAND_ARGUMENT = "(?:\\\"[^\\\"\\r\\n]*\\\"|'[^'\\r\\n]*'|\\S+)";
 
-    private static final Pattern SINGLE_ARGUMENT_AUTH_COMMAND = Pattern.compile(
-            "(?i)(?<!\\w)((?:/(?:login|log|l)|/(?:2fa|totp|twofa)[ \\t]+(?:verify|disable))[ \\t]+)"
-                    + COMMAND_ARGUMENT);
+    /** Optional plugin namespace, as in {@code /veloauth:login}. */
+    private static final String OPTIONAL_NAMESPACE = "(?:[\\w.-]+:)?";
 
-    private static final Pattern REGISTER_COMMAND = Pattern.compile(
-            "(?i)(?<!\\w)(/(?:register|reg)[ \\t]+)"
-                    + COMMAND_ARGUMENT + "([ \\t]+)" + COMMAND_ARGUMENT);
+    /**
+     * Longer names precede shorter aliases so {@code /logout} and {@code /list} are not login.
+     */
+    private static final Pattern PASSWORD_COMMAND_ARGUMENTS = Pattern.compile(
+            "(?i)(?<!\\w)(/" + OPTIONAL_NAMESPACE
+                    + "(?:login|register|changepassword|log|reg|l)\\b)"
+                    + "((?:[ \\t]+" + COMMAND_ARGUMENT + ")*)");
 
-    private static final Pattern CHANGE_PASSWORD_COMMAND = Pattern.compile(
-            "(?i)(?<!\\w)(/changepassword[ \\t]+)"
-                    + COMMAND_ARGUMENT + "([ \\t]+)" + COMMAND_ARGUMENT);
+    private static final Pattern TWO_FACTOR_COMMAND_ARGUMENTS = Pattern.compile(
+            "(?i)(?<!\\w)(/" + OPTIONAL_NAMESPACE
+                    + "(?:2fa|totp|twofa)[ \\t]+(?:verify|disable)\\b)"
+                    + "((?:[ \\t]+" + COMMAND_ARGUMENT + ")*)");
+
+    private static final Pattern COMMAND_ARGUMENT_TOKEN = Pattern.compile("([ \\t]+)" + COMMAND_ARGUMENT);
 
     private ReportRedactor() {
     }
@@ -179,11 +185,18 @@ final class ReportRedactor {
     }
 
     private static String redactAuthenticationCommands(String input) {
-        String redacted = SINGLE_ARGUMENT_AUTH_COMMAND.matcher(input)
-                .replaceAll(m -> m.group(1) + REDACTED);
-        redacted = REGISTER_COMMAND.matcher(redacted)
-                .replaceAll(m -> m.group(1) + REDACTED + m.group(2) + REDACTED);
-        return CHANGE_PASSWORD_COMMAND.matcher(redacted)
-                .replaceAll(m -> m.group(1) + REDACTED + m.group(2) + REDACTED);
+        String redacted = redactCommandArguments(input, PASSWORD_COMMAND_ARGUMENTS);
+        return redactCommandArguments(redacted, TWO_FACTOR_COMMAND_ARGUMENTS);
+    }
+
+    private static String redactCommandArguments(String input, Pattern command) {
+        return command.matcher(input).replaceAll(match -> {
+            String arguments = match.group(2);
+            if (arguments.isEmpty()) {
+                return match.group(1);
+            }
+            return match.group(1) + COMMAND_ARGUMENT_TOKEN.matcher(arguments)
+                    .replaceAll(argument -> argument.group(1) + REDACTED);
+        });
     }
 }
