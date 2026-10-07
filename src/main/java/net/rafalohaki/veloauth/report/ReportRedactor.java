@@ -87,25 +87,10 @@ final class ReportRedactor {
                     + "(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;&#]+)"
     );
 
-    private static final String COMMAND_ARGUMENT = "(?:\\\"[^\\\"\\r\\n]*\\\"|'[^'\\r\\n]*'|\\S+)";
-
-    /** Optional plugin namespace, as in {@code /veloauth:login}. */
-    private static final String OPTIONAL_NAMESPACE = "(?:[\\w.-]+:)?";
-
-    /**
-     * Longer names precede shorter aliases so {@code /logout} and {@code /list} are not login.
-     */
-    private static final Pattern PASSWORD_COMMAND_ARGUMENTS = Pattern.compile(
-            "(?i)(?<!\\w)(/" + OPTIONAL_NAMESPACE
-                    + "(?:login|register|changepassword|log|reg|l)\\b)"
-                    + "((?:[ \\t]+" + COMMAND_ARGUMENT + ")*)");
-
-    private static final Pattern TWO_FACTOR_COMMAND_ARGUMENTS = Pattern.compile(
-            "(?i)(?<!\\w)(/" + OPTIONAL_NAMESPACE
-                    + "(?:2fa|totp|twofa)[ \\t]+(?:verify|disable)\\b)"
-                    + "((?:[ \\t]+" + COMMAND_ARGUMENT + ")*)");
-
-    private static final Pattern COMMAND_ARGUMENT_TOKEN = Pattern.compile("([ \\t]+)" + COMMAND_ARGUMENT);
+    private static final Set<String> PASSWORD_COMMANDS = Set.of(
+            "login", "register", "changepassword", "log", "reg", "l");
+    private static final Set<String> TWO_FACTOR_COMMANDS = Set.of("2fa", "totp", "twofa");
+    private static final Set<String> TWO_FACTOR_SECRET_SUBCOMMANDS = Set.of("verify", "disable");
 
     private ReportRedactor() {
     }
@@ -184,19 +169,155 @@ final class ReportRedactor {
         return redactConnectionUrl(redacted);
     }
 
+    /**
+     * Scans instead of matching a repeated argument group. Java's regex engine recurses on
+     * that shape and can overflow the stack on a long log line.
+     */
     private static String redactAuthenticationCommands(String input) {
-        String redacted = redactCommandArguments(input, PASSWORD_COMMAND_ARGUMENTS);
-        return redactCommandArguments(redacted, TWO_FACTOR_COMMAND_ARGUMENTS);
+        StringBuilder redacted = new StringBuilder(input.length());
+        int index = 0;
+        while (index < input.length()) {
+            int slash = indexOfCommandSlash(input, index);
+            if (slash < 0) {
+                redacted.append(input, index, input.length());
+                break;
+            }
+            redacted.append(input, index, slash);
+            int commandEnd = authCommandEnd(input, slash + 1);
+            if (commandEnd < 0) {
+                redacted.append('/');
+                index = slash + 1;
+                continue;
+            }
+            redacted.append(input, slash, commandEnd);
+            index = appendRedactedArguments(input, commandEnd, redacted);
+        }
+        return redacted.toString();
     }
 
-    private static String redactCommandArguments(String input, Pattern command) {
-        return command.matcher(input).replaceAll(match -> {
-            String arguments = match.group(2);
-            if (arguments.isEmpty()) {
-                return match.group(1);
+    private static int indexOfCommandSlash(String input, int from) {
+        for (int index = from; index < input.length(); index++) {
+            if (input.charAt(index) == '/' && (index == 0 || !isWord(input.charAt(index - 1)))) {
+                return index;
             }
-            return match.group(1) + COMMAND_ARGUMENT_TOKEN.matcher(arguments)
-                    .replaceAll(argument -> argument.group(1) + REDACTED);
-        });
+        }
+        return -1;
+    }
+
+    /** Returns the end of a secret-bearing command, or {@code -1} when the slash is unrelated. */
+    private static int authCommandEnd(String input, int start) {
+        int cursor = start;
+        int namespaceEnd = namespaceEnd(input, cursor);
+        if (namespaceEnd >= 0) {
+            cursor = namespaceEnd;
+        }
+        int nameEnd = tokenEnd(input, cursor);
+        if (nameEnd == cursor) {
+            return -1;
+        }
+        String name = input.substring(cursor, nameEnd).toLowerCase(Locale.ROOT);
+        if (PASSWORD_COMMANDS.contains(name)) {
+            return nameEnd;
+        }
+        return twoFactorCommandEnd(input, name, nameEnd);
+    }
+
+    private static int twoFactorCommandEnd(String input, String name, int nameEnd) {
+        if (!TWO_FACTOR_COMMANDS.contains(name)) {
+            return -1;
+        }
+        int subcommandStart = skipHorizontalSpace(input, nameEnd);
+        if (subcommandStart == nameEnd) {
+            return -1;
+        }
+        int subcommandEnd = tokenEnd(input, subcommandStart);
+        String subcommand = input.substring(subcommandStart, subcommandEnd).toLowerCase(Locale.ROOT);
+        return TWO_FACTOR_SECRET_SUBCOMMANDS.contains(subcommand) ? subcommandEnd : -1;
+    }
+
+    private static int appendRedactedArguments(String input, int index, StringBuilder redacted) {
+        int cursor = index;
+        while (cursor < input.length()) {
+            int argumentStart = skipHorizontalSpace(input, cursor);
+            if (argumentStart == cursor || argumentStart >= input.length()) {
+                break;
+            }
+            int argumentEnd = argumentEnd(input, argumentStart);
+            redacted.append(input, cursor, argumentStart).append(REDACTED);
+            cursor = argumentEnd;
+        }
+        return cursor;
+    }
+
+    private static int argumentEnd(String input, int start) {
+        char quote = input.charAt(start);
+        if (quote == '"' || quote == '\'') {
+            int close = input.indexOf(quote, start + 1);
+            int lineEnd = lineEnd(input, start);
+            if (close >= 0 && close < lineEnd) {
+                return close + 1;
+            }
+        }
+        int end = start;
+        while (end < input.length() && !isAsciiWhitespace(input.charAt(end))) {
+            end++;
+        }
+        return end;
+    }
+
+    /** Optional {@code veloauth:} prefix. Returns the index after {@code :}, or {@code -1}. */
+    private static int namespaceEnd(String input, int start) {
+        int cursor = start;
+        while (cursor < input.length() && isNamespaceChar(input.charAt(cursor))) {
+            cursor++;
+        }
+        if (cursor > start && cursor < input.length() && input.charAt(cursor) == ':') {
+            return cursor + 1;
+        }
+        return -1;
+    }
+
+    private static int tokenEnd(String input, int start) {
+        int cursor = start;
+        while (cursor < input.length() && isWord(input.charAt(cursor))) {
+            cursor++;
+        }
+        return cursor;
+    }
+
+    private static int skipHorizontalSpace(String input, int start) {
+        int cursor = start;
+        while (cursor < input.length()) {
+            char character = input.charAt(cursor);
+            if (character != ' ' && character != '\t') {
+                break;
+            }
+            cursor++;
+        }
+        return cursor;
+    }
+
+    private static int lineEnd(String input, int start) {
+        int cursor = start;
+        while (cursor < input.length() && input.charAt(cursor) != '\n' && input.charAt(cursor) != '\r') {
+            cursor++;
+        }
+        return cursor;
+    }
+
+    private static boolean isNamespaceChar(char character) {
+        return character == '.' || character == '-' || isWord(character);
+    }
+
+    private static boolean isWord(char character) {
+        return character == '_'
+                || (character >= '0' && character <= '9')
+                || (character >= 'A' && character <= 'Z')
+                || (character >= 'a' && character <= 'z');
+    }
+
+    private static boolean isAsciiWhitespace(char character) {
+        return character == ' ' || character == '\t' || character == '\n'
+                || character == '\r' || character == '\f' || character == '\u000B';
     }
 }
