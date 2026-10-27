@@ -159,7 +159,7 @@ workflow_fragments = (
     "dependency-inventory:\n    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}",
     "name: veloauth-osv-input-${{ github.sha }}",
     "osv-scan:\n    needs: dependency-inventory\n    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}",
-    "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0",
+    "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0",
     "download-artifact: veloauth-osv-input-${{ github.sha }}",
     "--no-resolve\n        --lockfile=pom.xml\n"
     "        --lockfile=veloauth-${{ needs.dependency-inventory.outputs.version }}.cdx.json",
@@ -176,7 +176,7 @@ for evidence in (
     "Maven Dependency Plugin 3.11.0",
     "CycloneDX Maven Plugin 2.9.3",
     "Dependency Review v5.0.0",
-    "OSV-Scanner v2.6.0",
+    "OSV-Scanner v2.7.0",
     "advisory ID, reason, owner and expiry date",
     "There are no vulnerability allowlists",
 ):
@@ -296,7 +296,7 @@ if sbom_path:
         ("com.mysql", "mysql-connector-j", "9.5.0"),
         ("org.postgresql", "postgresql", "42.7.13"),
         ("com.h2database", "h2", "2.4.240"),
-        ("org.xerial", "sqlite-jdbc", "3.51.1.0"),
+        ("org.xerial", "sqlite-jdbc", "3.53.4.0"),
     }
     missing_components = required_components - components
     if missing_components:

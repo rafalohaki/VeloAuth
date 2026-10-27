@@ -175,7 +175,8 @@ public class DatabaseManager {
                     }
                     return false;
                 }
-                return performDatabaseInitialization();
+                return SchemaInitializationRetry.execute(config.getStorageType(),
+                        this::performDatabaseInitialization, this::closeConnectionResources);
             } catch (SQLException e) {
                 if (logger.isErrorEnabled()) {
                     logger.error(DB_MARKER, "Error during database initialization", e);
