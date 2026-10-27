@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-VELOCITY_URL="https://fill-data.papermc.io/v1/objects/0c3d16b70ed757638b696a9a87d670b4301f23a6fef30c3acbbd9b0e0d7b29bb/velocity-3.5.0-SNAPSHOT-609.jar"
-VELOCITY_SHA256="0c3d16b70ed757638b696a9a87d670b4301f23a6fef30c3acbbd9b0e0d7b29bb"
+VELOCITY_URL="https://fill-data.papermc.io/v1/objects/35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8/velocity-4.2.0-30.jar"
+VELOCITY_SHA256="35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8"
 TARGETS="${VELOAUTH_CAPACITY_TARGETS:-1000,5000,10000}"
 CONNECT_CONCURRENCY="${VELOAUTH_CAPACITY_CONNECT_CONCURRENCY:-256}"
 STATUS_SAMPLES="${VELOAUTH_CAPACITY_STATUS_SAMPLES:-60}"
@@ -80,8 +80,8 @@ fi
 
 JAVA_MAJOR="$("${JAVA_COMMAND}" -XshowSettings:properties -version 2>&1 \
   | awk -F'= ' '/^[[:space:]]*java.specification.version = / { print $2; exit }')"
-if [[ "${JAVA_MAJOR}" != 21 ]]; then
-  echo "The VeloAuth capacity profile requires Java 21; found ${JAVA_MAJOR:-unknown}" >&2
+if [[ "${JAVA_MAJOR}" != 25 ]]; then
+  echo "The VeloAuth capacity profile requires Java 25; found ${JAVA_MAJOR:-unknown}" >&2
   exit 1
 fi
 
@@ -629,7 +629,7 @@ cat >"${EVIDENCE_DIR}/result.txt" <<EOF
 VeloAuth real Velocity embedded capacity profile: PASS
 targets=${TARGETS}
 client_protocol=26.2
-velocity_build=3.5.0-SNAPSHOT-609
+velocity_build=4.2.0-30
 velocity_sha256=${VELOCITY_SHA256}
 candidate_sha256=${PLUGIN_SHA256}
 proxy_descriptor_budget=approximately 3 established TCP descriptors per held player

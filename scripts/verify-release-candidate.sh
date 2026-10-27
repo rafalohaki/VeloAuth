@@ -7,14 +7,14 @@ MANIFEST_CREATOR="${SCRIPT_DIR}/create-release-manifest.sh"
 TEST_MODE="${VELOAUTH_RELEASE_ARTIFACT_TEST_MODE:-false}"
 
 BUILD_COMMAND="./mvnw -B -V clean verify pmd:cpd-check -DskipTests=false"
-JDK_IDENTITY="Eclipse Temurin 21.0.12+8"
+JDK_IDENTITY="Eclipse Temurin 25.0.4+7"
 MAVEN_IDENTITY="Apache Maven 3.10.0"
 REPOSITORY="rafalohaki/VeloAuth"
 
-PINNED_JAVA_VERSION="21.0.12"
-PINNED_JAVA_RUNTIME_PREFIX="21.0.12+8"
+PINNED_JAVA_VERSION="25.0.4"
+PINNED_JAVA_RUNTIME_PREFIX="25.0.4+7"
 PINNED_JAVA_VENDOR="Eclipse Adoptium"
-PINNED_JAVA_VENDOR_VERSION="Temurin-21.0.12+8"
+PINNED_JAVA_VENDOR_VERSION="Temurin-25.0.4+7"
 PINNED_MAVEN_VERSION="3.10.0"
 
 TEMP_PARENT=""
@@ -448,14 +448,14 @@ java_home_is_pinned() {
 discover_pinned_java_home() {
   local candidates=()
   local candidate metadata path_java_home mac_java_home
-  if [[ -n "${VELOAUTH_JAVA21_HOME:-}" ]]; then
-    java_home_is_pinned "${VELOAUTH_JAVA21_HOME}" \
-      || fail "VELOAUTH_JAVA21_HOME is not exact Temurin ${PINNED_JAVA_VERSION}+8"
-    cd -- "${VELOAUTH_JAVA21_HOME}" && pwd -P
+  if [[ -n "${VELOAUTH_JAVA25_HOME:-}" ]]; then
+    java_home_is_pinned "${VELOAUTH_JAVA25_HOME}" \
+      || fail "VELOAUTH_JAVA25_HOME is not exact Temurin ${PINNED_JAVA_VERSION}+7"
+    cd -- "${VELOAUTH_JAVA25_HOME}" && pwd -P
     return
   fi
   if [[ -x /usr/libexec/java_home ]]; then
-    mac_java_home="$(/usr/libexec/java_home -v 21 2>/dev/null || true)"
+    mac_java_home="$(/usr/libexec/java_home -v 25 2>/dev/null || true)"
     [[ -z "${mac_java_home}" ]] || candidates+=("${mac_java_home}")
   fi
   [[ -z "${JAVA_HOME:-}" ]] || candidates+=("${JAVA_HOME}")
@@ -470,7 +470,7 @@ discover_pinned_java_home() {
       return
     fi
   done
-  fail "Exact Temurin ${PINNED_JAVA_VERSION}+8 was not found; set VELOAUTH_JAVA21_HOME"
+  fail "Exact Temurin ${PINNED_JAVA_VERSION}+7 was not found; set VELOAUTH_JAVA25_HOME"
 }
 
 select_built_artifact() {

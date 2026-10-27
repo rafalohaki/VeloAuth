@@ -21,8 +21,8 @@ E2E_DIR="${ROOT}/e2e"
 CACHE_DIR="${E2E_DIR}/.cache"
 RUN_ROOT="${ROOT}/target/e2e"
 
-VELOCITY_URL="https://fill-data.papermc.io/v1/objects/b4e3164df5377346854dc6cb9e6a78022b1946ff69e89676313f5f6f1c6f0fb3/velocity-3.5.1-615.jar"
-VELOCITY_SHA256="b4e3164df5377346854dc6cb9e6a78022b1946ff69e89676313f5f6f1c6f0fb3"
+VELOCITY_URL="https://fill-data.papermc.io/v1/objects/35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8/velocity-4.2.0-30.jar"
+VELOCITY_SHA256="35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8"
 PICO_URL="https://github.com/Quozul/PicoLimbo/releases/download/v1.13.2%2Bmc26.2/pico_limbo_linux-x86_64-gnu.tar.gz"
 PICO_SHA256="75f34b7d379c5b94cb425c395a9c366b34a2779b9acb7b924db8a6c9f846f2de"
 

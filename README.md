@@ -38,7 +38,7 @@ Want to see VeloAuth in action? **[2b2t.pl](https://2b2t.pl)** runs the plugin i
 - 🌍 **23 Languages** - EN, PL, DE, FR, RU, TR, SI, FI, NL, ES, IT, CS, RO, SK, ZH_CN, ZH_HK, JA, HI, VI, KO, TH, ID, PT_BR
 - 🔄 **LimboAuth Schema Compatible** - existing accounts are upgraded in place with additive, automatic schema changes; no manual UUID rewrite
 - 📢 **Discord Alerts** - Webhook notifications for security events; failed deliveries are retried instead of consuming the alert cooldown
-- 🧵 **Virtual Threads** - Built on Java 21 for maximum performance
+- 🧵 **Virtual Threads** - Built on Java 25 for maximum performance
 - 📈 **bStats Analytics** - Anonymous aggregate usage statistics, including privacy-safe client-version and feature-adoption charts; metrics can never block authentication startup
 
 ## When to use VeloAuth
@@ -128,8 +128,8 @@ built JAR's internal identity matches the Maven version.
 
 ## Requirements
 
-- **Java 21 or newer**
-- **Velocity proxy** (3.5.x; VeloAuth currently targets the 3.5 API line)
+- **Java 25 or newer**
+- **Velocity proxy** (4.2.x; VeloAuth currently targets the 4.2 API line)
 - **Database**: MySQL, PostgreSQL, H2, or SQLite
 - **Default external mode:** NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or
   another Velocity-compatible auth server registered in `velocity.toml`
@@ -355,7 +355,7 @@ VELOAUTH_PLUGIN_JAR=/absolute/path/to/veloauth-1.5.0.jar \
 ./scripts/profile-velocity-embedded.sh
 ```
 
-It starts checksum-pinned Velocity 3.5 build 609, drives real Minecraft 26.2 logins through
+It starts checksum-pinned Velocity 4.2.0 build 30, drives real Minecraft 26.2 logins through
 Velocity and the translated embedded endpoint, and holds plateaus of 1,000, 5,000 and 10,000
 clients. Every client must join, receive a keepalive and remain connected; each plateau also proves
 the Velocity-owned command path. The gate validates socket ratios, status latency, heap headroom,
@@ -784,7 +784,7 @@ the plugin installed, against both auth-server topologies (`embedded` limbo and 
 PicoLimbo). The first bot connects while VeloAuth is still initializing, exercising the startup
 queue and asserting that the register/login instructions, the repeating reminder, `/register`
 and a reconnect `/login` all work end to end. Offline mode only — premium Mojang session auth
-cannot be simulated by a bot. Requires Node.js 22+, Java 21+ and network access on first run
+cannot be simulated by a bot. Requires Node.js 22+, Java 25+ and network access on first run
 (downloads Velocity, PicoLimbo and the embedded ViaVersion runtime, all checksum-pinned):
 
 ```bash
@@ -859,17 +859,17 @@ The verifier requires exactly three flat files, canonical JSON, a decimal workfl
 version/output timestamp, current source commit, fixed signer workflow and an exact checksum. In
 GitHub Actions it additionally matches every available `GITHUB_*` identity field. It also runs the
 read-only Task5 internal identity check for `velocity-plugin.json`, packaged `pom.properties` and
-`BuildConstants.VERSION` using exact Temurin 21. The root POM version is parsed directly as XML;
+`BuildConstants.VERSION` using exact Temurin 25. The root POM version is parsed directly as XML;
 the identity verifier neither invokes Maven nor reads Maven settings or repositories. `--existing`
 performs zero builds and zero smoke tests; it is the offline candidate handoff contract and
-requires exact Temurin 21.0.12+8 to be discoverable or supplied through `VELOAUTH_JAVA21_HOME`.
+requires exact Temurin 25.0.4+7 to be discoverable or supplied through `VELOAUTH_JAVA25_HOME`.
 
-Prove byte-for-byte reproducibility from a clean committed HEAD with the exact Temurin 21.0.12+8
+Prove byte-for-byte reproducibility from a clean committed HEAD with the exact Temurin 25.0.4+7
 toolchain. The verifier creates two local, no-hardlink clones, gives each build an isolated Maven
 repository, builds both through the checked-in wrapper and compares their JAR bytes:
 
 ```bash
-VELOAUTH_JAVA21_HOME=/path/to/temurin-21.0.12+8/Contents/Home \
+VELOAUTH_JAVA25_HOME=/path/to/temurin-25.0.4+7/Contents/Home \
   ./scripts/verify-reproducible-jar.sh
 ```
 
@@ -894,7 +894,7 @@ afterwards. GitHub Actions runs the normal build and both database gates before 
 artifact.
 
 `./scripts/test-velocity-external.sh` is the external-mode release canary. It downloads only the
-hard-pinned, SHA-256-verified Velocity 3.5 build 609 and NanoLimbo 1.13.0, starts distinct auth and
+hard-pinned, SHA-256-verified Velocity 4.2.0 build 30 and NanoLimbo 1.13.0, starts distinct auth and
 backend servers, then drives a real Minecraft 26.2 cracked connection through register, logout,
 login, disconnect, reconnect, reauthentication and backend transfer. It scans generated files for
 the disposable password and retains the process logs plus hashes in `target/external-smoke-evidence.*`.

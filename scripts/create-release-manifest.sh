@@ -6,13 +6,13 @@ PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 TEST_MODE="${VELOAUTH_RELEASE_ARTIFACT_TEST_MODE:-false}"
 
 BUILD_COMMAND="./mvnw -B -V clean verify pmd:cpd-check -DskipTests=false"
-JDK_IDENTITY="Eclipse Temurin 21.0.12+8"
+JDK_IDENTITY="Eclipse Temurin 25.0.4+7"
 MAVEN_IDENTITY="Apache Maven 3.10.0"
 REPOSITORY="rafalohaki/VeloAuth"
-PINNED_JAVA_VERSION="21.0.12"
-PINNED_JAVA_RUNTIME_PREFIX="21.0.12+8"
+PINNED_JAVA_VERSION="25.0.4"
+PINNED_JAVA_RUNTIME_PREFIX="25.0.4+7"
 PINNED_JAVA_VENDOR="Eclipse Adoptium"
-PINNED_JAVA_VENDOR_VERSION="Temurin-21.0.12+8"
+PINNED_JAVA_VENDOR_VERSION="Temurin-25.0.4+7"
 PINNED_MAVEN_VERSION="3.10.0"
 
 fail() {
@@ -57,7 +57,7 @@ validate_pinned_java() {
         || "${java_runtime}" == "${PINNED_JAVA_RUNTIME_PREFIX}-LTS" ) \
       && "${java_vendor}" == "${PINNED_JAVA_VENDOR}" \
       && "${java_vendor_version}" == "${PINNED_JAVA_VENDOR_VERSION}" ]] \
-    || fail "Canonical manifest creation requires exact Temurin ${PINNED_JAVA_VERSION}+8"
+    || fail "Canonical manifest creation requires exact Temurin ${PINNED_JAVA_VERSION}+7"
 }
 
 [[ $# -eq 1 ]] || fail "Usage: $0 /absolute/path/to/veloauth-VERSION.jar"

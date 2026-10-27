@@ -54,11 +54,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up exact Temurin 21.0.12+8 for dependency resolution
+      - name: Set up exact Temurin 25.0.4+7 for dependency resolution
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: '21.0.12'
+          java-version: '25.0.4+7.0.LTS'
           show-download-progress: true
 
       - name: Resolve and verify the complete Maven production inventory
@@ -144,11 +144,11 @@ jobs:
           java-version: '25.0.4+7.0.LTS'
           show-download-progress: true
 
-      - name: Restore exact Temurin 21.0.12+8 as the build default
+      - name: Restore exact Temurin 25.0.4+7 as the build default
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: '21.0.12'
+          java-version: '25.0.4+7.0.LTS'
           show-download-progress: true
 
       - name: Verify release and reproducibility fixtures
@@ -169,7 +169,7 @@ jobs:
 
       - name: Prove the committed JAR is reproducible
         env:
-          VELOAUTH_JAVA21_HOME: ${{ env.JAVA_HOME }}
+          VELOAUTH_JAVA25_HOME: ${{ env.JAVA_HOME }}
         run: ./scripts/verify-reproducible-jar.sh
 
       - name: Smoke the pinned embedded topology on Velocity
