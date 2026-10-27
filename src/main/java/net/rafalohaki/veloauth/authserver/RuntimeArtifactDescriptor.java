@@ -113,23 +113,23 @@ record RuntimeArtifactDescriptor(String version, URI uri, String sha256) {
             if (releaseComparison != 0) {
                 return releaseComparison;
             }
-            if (snapshotTimestamp == null) {
-                return other.snapshotTimestamp == null ? 0 : 1;
+            if (snapshotTimestamp() == null) {
+                return other.snapshotTimestamp() == null ? 0 : 1;
             }
-            if (other.snapshotTimestamp == null) {
+            if (other.snapshotTimestamp() == null) {
                 return -1;
             }
-            int timestampComparison = snapshotTimestamp.compareTo(other.snapshotTimestamp);
+            int timestampComparison = snapshotTimestamp().compareTo(other.snapshotTimestamp());
             return timestampComparison != 0
                     ? timestampComparison
-                    : Integer.compare(snapshotBuild, other.snapshotBuild);
+                    : Integer.compare(snapshotBuild(), other.snapshotBuild());
         }
 
         private int compareRelease(VersionKey other) {
-            int components = Math.max(releaseParts.size(), other.releaseParts.size());
+            int components = Math.max(releaseParts().size(), other.releaseParts().size());
             for (int index = 0; index < components; index++) {
-                int current = index < releaseParts.size() ? releaseParts.get(index) : 0;
-                int compared = index < other.releaseParts.size() ? other.releaseParts.get(index) : 0;
+                int current = index < releaseParts().size() ? releaseParts().get(index) : 0;
+                int compared = index < other.releaseParts().size() ? other.releaseParts().get(index) : 0;
                 int comparison = Integer.compare(current, compared);
                 if (comparison != 0) {
                     return comparison;

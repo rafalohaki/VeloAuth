@@ -131,12 +131,12 @@ final class McLogsClient {
     record MetadataEntry(String key, Object value, String label, boolean visible) {
         Map<String, Object> toMap() {
             Map<String, Object> map = new LinkedHashMap<>();
-            map.put("key", key);
-            map.put("value", value);
-            if (label != null) {
-                map.put("label", label);
+            map.put("key", key());
+            map.put("value", value());
+            if (label() != null) {
+                map.put("label", label());
             }
-            map.put("visible", visible);
+            map.put("visible", visible());
             return map;
         }
 
