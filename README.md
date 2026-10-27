@@ -329,7 +329,7 @@ that downloads and executes no JAR. `--skip-smoke` is intended only for local di
 ordinary `./mvnw clean verify` proves the test, coverage
 and static-analysis gates; it does not by itself prove byte-for-byte reproducibility or publication
 provenance. Those are separate release-candidate gates. The checked-in Maven Wrapper pins Maven
-3.9.16 and verifies the official distribution checksum before use.
+3.10.0 and verifies the official distribution checksum before use.
 
 For a repeatable local direct-listener baseline, run:
 
@@ -827,8 +827,8 @@ SLF4J, Jakarta Inject, Adventure, Gson, Configurate, SnakeYAML and Netty classes
 
 CI pins [Dependency Review v5.0.0](https://github.com/actions/dependency-review-action/releases/tag/v5.0.0)
 to `a1d282b36b6f3519aa1f3fc636f609c47dddb294` for pull requests and pins
-[OSV-Scanner v2.6.0](https://github.com/google/osv-scanner-action/releases/tag/v2.6.0) to
-`a345acffa64b0eaede81a3d9aae6141214d9c8fc` for full `pom.xml` scans on pushes and the weekly
+[OSV-Scanner v2.7.0](https://github.com/google/osv-scanner-action/releases/tag/v2.7.0) to
+`b1d267aea5211fa648d9d442fa64b90dbdcbdd36` for full `pom.xml` scans on pushes and the weekly
 schedule. OSV cannot resolve the immutable timestamped MCProtocolLib build by itself, so the same
 workflow first resolves Maven's complete production graph into the tested CycloneDX SBOM. OSV scans
 both the direct POM inventory and that same-run transitive inventory with external
