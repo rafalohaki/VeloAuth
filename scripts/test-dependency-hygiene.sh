@@ -82,9 +82,9 @@ required_dependencies = {
     "io.netty:netty-handler": ("${embedded.netty.version}", "provided"),
     "org.bstats:bstats-base": ("3.2.1", "compile"),
     "org.cloudburstmc.math:immutable": ("2.0", "compile"),
-    "org.junit.jupiter:junit-jupiter-api": ("5.12.0", "test"),
-    "org.junit.jupiter:junit-jupiter-params": ("5.12.0", "test"),
-    "org.junit.jupiter:junit-jupiter-engine": ("5.12.0", "test"),
+    "org.junit.jupiter:junit-jupiter-api": ("6.1.3", "test"),
+    "org.junit.jupiter:junit-jupiter-params": ("6.1.3", "test"),
+    "org.junit.jupiter:junit-jupiter-engine": ("6.1.3", "test"),
     "org.slf4j:slf4j-simple": ("2.0.18", "test"),
 }
 for coordinate, expected in required_dependencies.items():
