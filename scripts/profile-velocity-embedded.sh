@@ -481,10 +481,18 @@ sample_plateau() {
 
   "${JCMD}" "${VELOCITY_PID}" GC.heap_info >"${heap_info}"
   read -r heap_total_kb heap_used_kb < <(
-    awk '/ heap +total [0-9]+K, used [0-9]+K/ {
-      gsub(/[^0-9]/, "", $4)
-      gsub(/[^0-9]/, "", $6)
-      print $4, $6
+    awk '/ heap +total / {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "committed" || ($i == "total" && $(i + 1) != "reserved")) {
+          heap_total = $(i + 1)
+        }
+        if ($i == "used") {
+          heap_used = $(i + 1)
+        }
+      }
+      gsub(/[^0-9]/, "", heap_total)
+      gsub(/[^0-9]/, "", heap_used)
+      print heap_total, heap_used
       exit
     }' "${heap_info}"
   )
