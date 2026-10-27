@@ -32,12 +32,12 @@
     </developers>
 
     <properties>
-        <java.version>21</java.version>
+        <java.version>25</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <project.build.outputTimestamp>2026-08-11T00:00:00Z</project.build.outputTimestamp>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
         <!--
           Reproducible embedded-limbo network engine. VeloAuth supplies its own minimal 1.8
           PacketCodec and translates newer clients through the separately managed ViaVersion
@@ -106,7 +106,7 @@
         <dependency>
             <groupId>com.velocitypowered</groupId>
             <artifactId>velocity-api</artifactId>
-            <version>3.5.0-SNAPSHOT</version>
+            <version>4.2.0</version>
             <scope>provided</scope>
         </dependency>
 
@@ -130,31 +130,31 @@
         <dependency>
             <groupId>net.kyori</groupId>
             <artifactId>adventure-api</artifactId>
-            <version>4.26.1</version>
+            <version>5.2.0</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>net.kyori</groupId>
             <artifactId>adventure-key</artifactId>
-            <version>4.26.1</version>
+            <version>5.2.0</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>net.kyori</groupId>
             <artifactId>adventure-text-serializer-gson</artifactId>
-            <version>4.26.1</version>
+            <version>5.2.0</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>net.kyori</groupId>
             <artifactId>adventure-text-serializer-legacy</artifactId>
-            <version>4.26.1</version>
+            <version>5.2.0</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>net.kyori</groupId>
             <artifactId>adventure-text-serializer-plain</artifactId>
-            <version>4.26.1</version>
+            <version>5.2.0</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -233,7 +233,7 @@
             <version>3.2.4</version>
         </dependency>
 
-        <!-- Velocity 3.5 owns this Configurate/SnakeYAML type universe. -->
+        <!-- Velocity 4.2 owns this Configurate/SnakeYAML type universe. -->
         <dependency>
             <groupId>org.spongepowered</groupId>
             <artifactId>configurate-core</artifactId>
@@ -438,15 +438,15 @@
                 <version>3.6.3</version>
                 <executions>
                     <execution>
-                        <id>enforce-jdk21</id>
+                        <id>enforce-jdk25</id>
                         <goals>
                             <goal>enforce</goal>
                         </goals>
                         <configuration>
                             <rules>
                                 <requireJavaVersion>
-                                    <version>[21,)</version>
-                                    <message>VeloAuth requires JDK 21 or newer to build. Note: PMD currently has known issues with class files compiled by JDK 22+ (Unsupported class file major version). For PMD static analysis builds, use JDK 21 explicitly.</message>
+                                    <version>[25,)</version>
+                                    <message>VeloAuth requires JDK 25 or newer to build against the Velocity 4.2 API.</message>
                                 </requireJavaVersion>
                             </rules>
                         </configuration>
@@ -796,7 +796,7 @@
                     <rulesets>
                         <ruleset>${project.basedir}/pmd-ruleset.xml</ruleset>
                     </rulesets>
-                    <targetJdk>21</targetJdk>
+                    <targetJdk>25</targetJdk>
                     <printFailingErrors>true</printFailingErrors>
                     <linkXRef>false</linkXRef>
                     <includeTests>true</includeTests>
