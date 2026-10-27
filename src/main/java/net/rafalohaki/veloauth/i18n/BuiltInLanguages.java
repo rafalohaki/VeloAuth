@@ -13,9 +13,16 @@ public final class BuiltInLanguages {
     private static final String PROPERTIES_SUFFIX = ".properties";
     private static final String ENGLISH_CODE = "en";
     private static final String[] CODES = {
+            // full translations
             "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "nl", "es", "it",
             "cs", "ro", "sk", "zh_cn", "zh_hk", "ja", "hi", "vi",
-            "ko", "th", "id", "pt_br"
+            "ko", "th", "id", "pt_br",
+            // player-facing auth + dialog translations for the remaining Minecraft client
+            // locale families (missing keys fall back to English per key)
+            "af", "ar", "az", "ba", "be", "bg", "bs", "ca", "cy", "da", "el", "eo", "et", "eu",
+            "fa", "fil", "fy", "ga", "gd", "gl", "he", "hr", "hu", "hy", "is", "ka", "kk", "kn",
+            "ky", "la", "lb", "lt", "lv", "mk", "mn", "ms", "mt", "nn", "no", "oc", "sq", "sr",
+            "sv", "ta", "tok", "tt", "uk", "uz", "yo"
     };
 
     private BuiltInLanguages() {

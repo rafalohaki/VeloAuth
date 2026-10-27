@@ -55,7 +55,7 @@ class UnregisterCommand implements SimpleCommand {
 
             RegisteredPlayer registeredPlayer = dbResult.getValue();
             if (registeredPlayer == null) {
-                source.sendMessage(ctx.messages().component(
+                source.sendMessage(ctx.messages().forSource(source, 
                         "admin.player_not_found", NamedTextColor.RED, nickname));
                 return;
             }
@@ -83,7 +83,7 @@ class UnregisterCommand implements SimpleCommand {
                     ctx.logger().info("Disconnected player {} — account deleted by admin", nickname);
                 });
 
-                source.sendMessage(ctx.messages().component(
+                source.sendMessage(ctx.messages().forSource(source, 
                         "admin.account_deleted", NamedTextColor.GREEN, nickname));
                 String adminName = source instanceof Player player ? player.getUsername() : "CONSOLE";
                 ctx.logger().info(AUTH_MARKER, "Admin {} deleted player account: {}", adminName, nickname);
@@ -114,7 +114,7 @@ class UnregisterCommand implements SimpleCommand {
             return UUID.fromString(registeredPlayer.getUuid());
         } catch (IllegalArgumentException e) {
             ctx.logger().warn("Invalid UUID for player {}: {}", nickname, registeredPlayer.getUuid());
-            source.sendMessage(ctx.messages().component("admin.uuid_invalid", NamedTextColor.RED));
+            source.sendMessage(ctx.messages().forSource(source, "admin.uuid_invalid", NamedTextColor.RED));
             return null;
         }
     }

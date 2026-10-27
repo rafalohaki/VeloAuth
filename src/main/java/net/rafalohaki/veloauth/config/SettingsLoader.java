@@ -13,11 +13,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @SuppressWarnings("java:S2068") // YAML config key names, not hardcoded credentials
 final class SettingsLoader {
 
     private static final String YAML_FIELD_ENABLED = "enabled";
+    private static final Set<String> DIALOG_FORMATS_CHAT = Set.of("chat_system", "chat", "command", "commands", "classic");
+    private static final Set<String> DIALOG_FORMATS_DIALOG = Set.of("dialog", "gui", "menu");
     private static final String CONFIG_KEY_DATABASE = "database";
     private static final String CONFIG_KEY_AUTH_SERVER = "auth-server";
     private static final String CONFIG_KEY_PICOLIMBO = "picolimbo";
@@ -55,6 +58,7 @@ final class SettingsLoader {
         loadAlertSettings(config, state);
         loadAuditLogSettings(config, state);
         loadTwoFactorSettings(config, state);
+        loadDialogSettings(config, state);
         loadDebugSettings(config, state);
         loadReportSettings(config, state);
         loadLanguageSettings(config, state);
@@ -111,6 +115,44 @@ final class SettingsLoader {
         state.auditLogSettings = new Settings.AuditLogSettings(
                 YamlParserUtils.getBoolean(auditLog, YAML_FIELD_ENABLED, target.isEnabled()),
                 YamlParserUtils.getInt(auditLog, "retention-days", target.getRetentionDays()));
+    }
+
+    private static void loadDialogSettings(Map<String, Object> config, Builder state) {
+        Map<String, Object> dialog = mapSectionOrEmpty(config, "dialog", "dialog");
+        if (dialog.isEmpty()) {
+            return;
+        }
+        Settings.DialogSettings target = state.dialogSettings;
+        Map<String, Object> notice = mapSectionOrEmpty(dialog, "premium-name-notice", "dialog.premium-name-notice");
+        state.dialogSettings = new Settings.DialogSettings(
+                resolveDialogEnabled(dialog, target.isEnabled()),
+                YamlParserUtils.getInt(dialog, "timeout-seconds", target.getTimeoutSeconds()),
+                YamlParserUtils.getInt(dialog, "locale-wait-millis", target.getLocaleWaitMillis()),
+                YamlParserUtils.getBoolean(dialog, "allow-cancel", target.isAllowCancel()),
+                YamlParserUtils.getBoolean(dialog, "error-icon", target.isErrorIcon()),
+                YamlParserUtils.getBoolean(notice, YAML_FIELD_ENABLED, target.isPremiumNameNotice()),
+                YamlParserUtils.getInt(notice, "check-seconds", target.getPremiumCheckSeconds()),
+                YamlParserUtils.getString(notice, "server-name", target.getServerName()));
+    }
+
+    /**
+     * {@code dialog.format} selects the login UI: {@code dialog} (GUI, default) or
+     * {@code chat_system} (classic /register and /login commands). The legacy boolean
+     * {@code dialog.enabled} is still honoured when {@code format} is absent.
+     */
+    private static boolean resolveDialogEnabled(Map<String, Object> dialog, boolean fallback) {
+        Object raw = dialog.get("format");
+        if (raw == null) {
+            return YamlParserUtils.getBoolean(dialog, YAML_FIELD_ENABLED, fallback);
+        }
+        String format = String.valueOf(raw).trim().toLowerCase(java.util.Locale.ROOT).replace('-', '_');
+        if (DIALOG_FORMATS_CHAT.contains(format)) {
+            return false;
+        }
+        if (DIALOG_FORMATS_DIALOG.contains(format)) {
+            return true;
+        }
+        throw new IllegalArgumentException("dialog.format must be 'dialog' or 'chat_system' (got '" + raw + "')");
     }
 
     private static void loadTwoFactorSettings(Map<String, Object> config, Builder state) {
@@ -579,21 +621,11 @@ final class SettingsLoader {
         Settings.PasswordPolicy passwordPolicy;
         Settings.AuditLogSettings auditLogSettings;
         Settings.TwoFactorSettings twoFactorSettings;
+        Settings.DialogSettings dialogSettings;
         Settings.EmbeddedAuthServerSettings embeddedAuthServerSettings;
 
         Builder(Settings.Snapshot snapshot) {
-            Settings.DatabaseConfig database = snapshot.database();
-            databaseStorageType = database.storageType();
-            databaseHostname = database.hostname();
-            databasePort = database.port();
-            databaseName = database.databaseName();
-            databaseUser = database.user();
-            databasePassword = database.password();
-            databaseConnectionUrl = database.connectionUrl();
-            databaseConnectionParameters = database.connectionParameters();
-            databaseConnectionPoolSize = database.connectionPoolSize();
-            databaseMaxLifetimeMillis = database.maxLifetimeMillis();
-            postgreSQLSettings = database.postgreSql();
+            copyDatabase(snapshot.database());
 
             Settings.CacheConfig cache = snapshot.cache();
             cacheTtlMinutes = cache.ttlMinutes();
@@ -631,6 +663,7 @@ final class SettingsLoader {
             alertSettings = snapshot.alerts();
             auditLogSettings = snapshot.auditLog();
             twoFactorSettings = snapshot.twoFactor();
+            dialogSettings = snapshot.dialog();
 
             Settings.HotSettings hot = snapshot.hot();
             debugEnabled = hot.debugEnabled();
@@ -638,6 +671,20 @@ final class SettingsLoader {
             reportIncludeLogs = hot.reportIncludeLogs();
             language = hot.language();
             detectClientLanguage = hot.detectClientLanguage();
+        }
+
+        private void copyDatabase(Settings.DatabaseConfig database) {
+            databaseStorageType = database.storageType();
+            databaseHostname = database.hostname();
+            databasePort = database.port();
+            databaseName = database.databaseName();
+            databaseUser = database.user();
+            databasePassword = database.password();
+            databaseConnectionUrl = database.connectionUrl();
+            databaseConnectionParameters = database.connectionParameters();
+            databaseConnectionPoolSize = database.connectionPoolSize();
+            databaseMaxLifetimeMillis = database.maxLifetimeMillis();
+            postgreSQLSettings = database.postgreSql();
         }
 
         Settings.Snapshot build() {
@@ -685,6 +732,7 @@ final class SettingsLoader {
                     alertSettings,
                     auditLogSettings,
                     twoFactorSettings,
+                    dialogSettings,
                     new Settings.HotSettings(
                             debugEnabled,
                             reportEnabled,

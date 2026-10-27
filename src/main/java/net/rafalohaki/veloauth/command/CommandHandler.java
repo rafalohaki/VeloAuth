@@ -53,24 +53,63 @@ public class CommandHandler {
     }
 
     /**
+     * Wraps a command so that everything it renders through {@link Messages} on the executing
+     * thread uses the invoking player's language (multi-language player messages).
+     */
+    private com.velocitypowered.api.command.SimpleCommand localized(com.velocitypowered.api.command.SimpleCommand delegate) {
+        return new com.velocitypowered.api.command.SimpleCommand() {
+            @Override
+            public void execute(Invocation invocation) {
+                com.velocitypowered.api.proxy.Player player =
+                        invocation.source() instanceof com.velocitypowered.api.proxy.Player p ? p : null;
+                messages.runAsPlayer(player, () -> delegate.execute(invocation));
+            }
+
+            @Override
+            public java.util.List<String> suggest(Invocation invocation) {
+                return delegate.suggest(invocation);
+            }
+
+            @Override
+            public java.util.concurrent.CompletableFuture<java.util.List<String>> suggestAsync(Invocation invocation) {
+                return delegate.suggestAsync(invocation);
+            }
+
+            @Override
+            public boolean hasPermission(Invocation invocation) {
+                return delegate.hasPermission(invocation);
+            }
+        };
+    }
+
+    /**
      * Registers all commands with the Velocity command manager.
      */
     public void registerCommands() {
         var commandManager = plugin.getServer().getCommandManager();
 
-        commandManager.register(commandManager.metaBuilder(COMMAND_LOGIN).aliases(COMMAND_LOGIN_ALIASES).build(), new LoginCommand(ctx));
-        commandManager.register(commandManager.metaBuilder(COMMAND_REGISTER).aliases(COMMAND_REGISTER_ALIASES).build(), new RegisterCommand(ctx));
-        commandManager.register(commandManager.metaBuilder(COMMAND_CHANGE_PASSWORD).build(), new ChangePasswordCommand(ctx));
-        commandManager.register(commandManager.metaBuilder(COMMAND_LOGOUT).build(), new LogoutCommand(ctx));
+        commandManager.register(commandManager.metaBuilder(COMMAND_LOGIN).aliases(COMMAND_LOGIN_ALIASES).build(), localized(new LoginCommand(ctx)));
+        commandManager.register(commandManager.metaBuilder(COMMAND_REGISTER).aliases(COMMAND_REGISTER_ALIASES).build(), localized(new RegisterCommand(ctx)));
+        commandManager.register(commandManager.metaBuilder(COMMAND_CHANGE_PASSWORD).build(), localized(new ChangePasswordCommand(ctx)));
+        commandManager.register(commandManager.metaBuilder(COMMAND_LOGOUT).build(), localized(new LogoutCommand(ctx)));
 
-        commandManager.register(commandManager.metaBuilder(COMMAND_UNREGISTER).build(), new UnregisterCommand(ctx));
-        commandManager.register(commandManager.metaBuilder(COMMAND_VAUTH).build(), new VAuthCommand(ctx));
+        commandManager.register(commandManager.metaBuilder(COMMAND_UNREGISTER).build(), localized(new UnregisterCommand(ctx)));
+        commandManager.register(commandManager.metaBuilder(COMMAND_VAUTH).build(), localized(new VAuthCommand(ctx)));
         commandManager.register(commandManager.metaBuilder(COMMAND_TWO_FACTOR).aliases(COMMAND_TWO_FACTOR_ALIASES).build(),
-                new TwoFactorCommand(ctx));
+                localized(new TwoFactorCommand(ctx)));
 
         if (logger.isDebugEnabled()) {
             logger.debug(messages.get("connection.commands.registered"));
         }
+    }
+
+    /**
+     * Creates the bridge used by the dialog (GUI) authentication flow. The bridge drives the
+     * very same {@code /login}, {@code /register} and {@code /2fa verify} pipelines as the chat
+     * commands, so every security rule applies identically to both entry points.
+     */
+    public DialogAuthBridge createDialogAuthBridge() {
+        return new DialogAuthBridge(ctx);
     }
 
     /**

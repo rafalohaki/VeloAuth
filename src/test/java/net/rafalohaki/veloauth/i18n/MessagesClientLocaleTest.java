@@ -68,8 +68,10 @@ class MessagesClientLocaleTest {
                 "pt_PT has exactly one bundled Portuguese variant — use pt_br, not English");
         assertEquals("en", messages.resolvePlayerLanguage(Locale.forLanguageTag("zh-TW")),
                 "zh has two bundled variants (zh_cn/zh_hk) — ambiguous, keep the default");
-        assertEquals("en", messages.resolvePlayerLanguage(Locale.forLanguageTag("uk-UA")),
-                "No bundled Ukrainian at all — keep the configured default");
+        assertEquals("uk", messages.resolvePlayerLanguage(Locale.forLanguageTag("uk-UA")),
+                "Ukrainian is bundled since 1.6.3 — use it directly");
+        assertEquals("en", messages.resolvePlayerLanguage(Locale.forLanguageTag("sw-KE")),
+                "No bundled Swahili at all — keep the configured default");
     }
 
     @Test

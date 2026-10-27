@@ -57,7 +57,7 @@ class VAuthCommand implements SimpleCommand {
             case "2fa-remove" -> handleTwoFactorRemoveCommand(source, args);
             case "report" -> handleReportCommand(source);
             default -> {
-                source.sendMessage(ctx.messages().component(
+                source.sendMessage(ctx.messages().forSource(source, 
                         "admin.unknown_command", NamedTextColor.RED, subcommand));
                 sendAdminHelp(source);
             }
@@ -93,12 +93,12 @@ class VAuthCommand implements SimpleCommand {
 
         RegisteredPlayer registered = dbResult.getValue();
         if (registered == null) {
-            source.sendMessage(ctx.messages().component(
+            source.sendMessage(ctx.messages().forSource(source, 
                     "admin.2fa.remove.not_found", NamedTextColor.RED, nickname));
             return;
         }
         if (registered.getTotpToken() == null || registered.getTotpToken().isBlank()) {
-            source.sendMessage(ctx.messages().component(
+            source.sendMessage(ctx.messages().forSource(source, 
                     "admin.2fa.remove.not_enabled", NamedTextColor.YELLOW, nickname));
             return;
         }
@@ -129,7 +129,7 @@ class VAuthCommand implements SimpleCommand {
 
         emitAdminAudit(source, nickname, registered);
 
-        source.sendMessage(ctx.messages().component(
+        source.sendMessage(ctx.messages().forSource(source, 
                 "admin.2fa.remove.success", NamedTextColor.GREEN, nickname));
     }
 
@@ -147,10 +147,10 @@ class VAuthCommand implements SimpleCommand {
     private void handleReloadCommand(CommandSource source) {
         boolean success = ctx.plugin().reloadConfig();
         if (success) {
-            source.sendMessage(ctx.messages().component("admin.reload.success", NamedTextColor.GREEN));
+            source.sendMessage(ctx.messages().forSource(source, "admin.reload.success", NamedTextColor.GREEN));
             sendLocalizedReloadWarning(source, ctx.settings().getPendingRestartChanges());
         } else {
-            source.sendMessage(ctx.messages().component("admin.reload.failed", NamedTextColor.RED));
+            source.sendMessage(ctx.messages().forSource(source, "admin.reload.failed", NamedTextColor.RED));
         }
     }
 
@@ -164,7 +164,7 @@ class VAuthCommand implements SimpleCommand {
             ctx.runAsyncCommand(source, () -> processSinglePlayerCacheReset(source, nickname), ERROR_DATABASE_QUERY);
         } else {
             ctx.authCache().clearAll();
-            source.sendMessage(ctx.messages().component("admin.cache_reset.success", NamedTextColor.GREEN));
+            source.sendMessage(ctx.messages().forSource(source, "admin.cache_reset.success", NamedTextColor.GREEN));
         }
     }
 
@@ -175,11 +175,11 @@ class VAuthCommand implements SimpleCommand {
     private void handleReportCommand(CommandSource source) {
         Settings.OperationSettings operationSettings = ctx.settings().captureOperationSettings();
         if (!operationSettings.report().enabled()) {
-            source.sendMessage(ctx.messages().component("admin.report.disabled", NamedTextColor.RED));
+            source.sendMessage(ctx.messages().forSource(source, "admin.report.disabled", NamedTextColor.RED));
             return;
         }
-        source.sendMessage(ctx.messages().component("admin.report.generating", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.report.warning", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.report.generating", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.report.warning", NamedTextColor.YELLOW));
         ctx.runAsyncCommand(
                 source, () -> processReport(source, operationSettings), ERROR_REPORT_FAILED);
     }
@@ -187,29 +187,29 @@ class VAuthCommand implements SimpleCommand {
     private void processReport(CommandSource source, Settings.OperationSettings operationSettings) {
         net.rafalohaki.veloauth.report.ReportService reportService = ctx.reportService();
         if (reportService == null) {
-            source.sendMessage(ctx.messages().component(
+            source.sendMessage(ctx.messages().forSource(source, 
                     ERROR_REPORT_FAILED, NamedTextColor.RED, "report service not initialized"));
             return;
         }
         net.rafalohaki.veloauth.report.ReportService.ReportResult result =
                 reportService.generateAndUpload(operationSettings);
         if (result.success()) {
-            source.sendMessage(ctx.messages().component(
+            source.sendMessage(ctx.messages().forSource(source, 
                     "admin.report.success", NamedTextColor.GREEN, result.url()));
         } else {
-            source.sendMessage(ctx.messages().component(
+            source.sendMessage(ctx.messages().forSource(source, 
                     ERROR_REPORT_FAILED, NamedTextColor.RED, result.error()));
         }
     }
 
     private void sendAdminHelp(CommandSource source) {
-        source.sendMessage(ctx.messages().component("admin.help.header", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.help.reload", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.help.cache", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.help.stats", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.help.conflicts", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.help.2fa_remove", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.help.report", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.help.header", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.help.reload", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.help.cache", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.help.stats", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.help.conflicts", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.help.2fa_remove", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.help.report", NamedTextColor.YELLOW));
     }
 
     @Override
@@ -240,14 +240,14 @@ class VAuthCommand implements SimpleCommand {
             return;
         }
 
-        source.sendMessage(ctx.messages().component("admin.conflicts.header", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.conflicts.header", NamedTextColor.YELLOW));
 
         if (conflicts.isEmpty()) {
-            source.sendMessage(ctx.messages().component("admin.conflicts.none", NamedTextColor.GREEN));
+            source.sendMessage(ctx.messages().forSource(source, "admin.conflicts.none", NamedTextColor.GREEN));
             return;
         }
 
-        source.sendMessage(ctx.messages().component(
+        source.sendMessage(ctx.messages().forSource(source, 
                 "admin.conflicts.found", NamedTextColor.YELLOW, conflicts.size()));
 
         for (int i = 0; i < conflicts.size(); i++) {
@@ -279,10 +279,10 @@ class VAuthCommand implements SimpleCommand {
         }
 
         source.sendMessage(ValidationUtils.createWarningComponent(""));
-        source.sendMessage(ctx.messages().component("admin.conflicts.tips_header", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.conflicts.tip_premium", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.conflicts.tip_offline", NamedTextColor.YELLOW));
-        source.sendMessage(ctx.messages().component("admin.conflicts.tip_admin", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.conflicts.tips_header", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.conflicts.tip_premium", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.conflicts.tip_offline", NamedTextColor.YELLOW));
+        source.sendMessage(ctx.messages().forSource(source, "admin.conflicts.tip_admin", NamedTextColor.YELLOW));
     }
 
     private void processSinglePlayerCacheReset(CommandSource source, String nickname) {
@@ -293,20 +293,20 @@ class VAuthCommand implements SimpleCommand {
 
         UUID playerUuid = playerLookup.playerUuid();
         if (playerUuid == null) {
-            source.sendMessage(ctx.messages().component(
+            source.sendMessage(ctx.messages().forSource(source, 
                     "admin.cache_reset.player_not_found", NamedTextColor.RED, nickname));
             return;
         }
 
         if (ctx.authCache().findAuthorizedPlayer(playerUuid).isEmpty()) {
-            source.sendMessage(ctx.messages().component(
+            source.sendMessage(ctx.messages().forSource(source, 
                     "admin.cache_reset.player_not_found", NamedTextColor.RED, nickname));
             return;
         }
 
         ctx.authCache().removeAuthorizedPlayer(playerUuid);
         ctx.authCache().endSession(playerUuid);
-        source.sendMessage(ctx.messages().component(
+        source.sendMessage(ctx.messages().forSource(source, 
                 "admin.cache_reset.player", NamedTextColor.GREEN, nickname));
     }
 
@@ -382,7 +382,7 @@ class VAuthCommand implements SimpleCommand {
         try {
             return new PlayerLookupResult(UUID.fromString(registeredPlayer.getUuid()), false);
         } catch (IllegalArgumentException e) {
-            source.sendMessage(ctx.messages().component("admin.uuid_invalid", NamedTextColor.RED));
+            source.sendMessage(ctx.messages().forSource(source, "admin.uuid_invalid", NamedTextColor.RED));
             return new PlayerLookupResult(null, true);
         }
     }
@@ -391,7 +391,7 @@ class VAuthCommand implements SimpleCommand {
         if (pendingChanges.isEmpty()) {
             return;
         }
-        source.sendMessage(ctx.messages().component(
+        source.sendMessage(ctx.messages().forSource(source, 
                 RELOAD_WARNING_KEY,
                 NamedTextColor.YELLOW,
                 String.join(", ", pendingChanges)));

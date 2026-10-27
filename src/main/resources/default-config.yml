@@ -224,23 +224,23 @@ premium:
   # Enable only if your server explicitly accepts cracked players on premium
   # nicks and you accept that trade-off.
   allow-cracked-on-premium-nicks: false
-  # Allow Mojang-verified Java players to skip the auth/limbo server and keep
-  # Velocity's original forced-host / try-list backend target.
+  # Mojang-verified Java players skip the auth/limbo server and go straight to Velocity's
+  # forced-host / try-list backend target. Only Player#isOnlineMode() connections get this;
+  # resolver/cache/name matches never do, cracked players are unaffected.
   #
-  # Default (false): preserve the established VeloAuth flow for upgrades — every
-  # Java player visits the auth server before the backend.
-  # true: only Player#isOnlineMode() connections bypass limbo. Resolver/cache/name
-  # matches never grant this bypass. Cracked players are unaffected.
-  #
-  # Security trade-off: bots with valid paid accounts reach backend resources
-  # directly. Enable only when that reduced limbo isolation is acceptable.
-  bypass-auth-server: false
+  # true (default): a premium account joins directly - no limbo hop, no transfer message.
+  # false: every Java player visits the auth server first (legacy flow); the connection that
+  # follows a successful premium-nick ownership check is still routed directly (it already
+  # proved itself on the auth server).
+  bypass-auth-server: true
   resolver:
     # Query Mojang. If it is temporarily unavailable, VeloAuth also tries the official
     # Minecraft Services profile lookup. Both endpoints share this request budget.
     mojang-enabled: true
-    # Query Ashcon API
-    ashcon-enabled: true
+    # Query the Ashcon mirror in parallel with Mojang. Off by default: one login = one Mojang
+    # request (plus the official Minecraft Services fallback only if Mojang fails); results are
+    # cached (hit-ttl-minutes), so the re-admission after the ownership check costs no request.
+    ashcon-enabled: false
     # Query WPME API
     wpme-enabled: false
     # Per-request timeout in milliseconds
@@ -325,6 +325,47 @@ audit-log:
   enabled: true
   # Keep entries this many days; older rows are pruned daily (1-3650)
   retention-days: 90
+
+# Login UI for Java 1.21.6+ (incl. 26.x) clients. Hot-reloadable with /vauth reload.
+#
+#   format: dialog       -> in-game GUI dialog (register/login/2FA) shown in the player's own
+#                           client language before they reach any server. Default.
+#   format: chat_system  -> classic flow: players are sent to the auth server and use
+#                           /register <pw> <pw> and /login <pw> in chat.
+#
+# Older clients (< 1.21.6), Bedrock (Floodgate) and Mojang-verified premium players always
+# use the classic flow, so the auth server must stay configured either way.
+dialog:
+  format: dialog
+  # Seconds the player may spend in the dialog before being disconnected (10-600)
+  timeout-seconds: 60
+  # Max milliseconds to wait for the client's language (ClientInformation) packet
+  # before falling back to `language` above (0-10000). Clients send it immediately,
+  # so this normally resolves in a few milliseconds.
+  locale-wait-millis: 1500
+  # Show an "Exit" button that disconnects the player.
+  allow-cancel: true
+  # Show a barrier item icon on error notices.
+  error-icon: true
+  # Premium (Mojang-registered) nickname without a VeloAuth record yet.
+  # Velocity cannot "try online, then fall back to offline", and a cracked client that
+  # receives an encryption request fails silently on its own side. VeloAuth therefore
+  # admits such a connection offline, lets it reach the auth server (limbo) and shows a
+  # short "checking your account" action bar. A client signed in with a real Mojang account
+  # automatically sends its Mojang-signed profile key right after joining; as soon as that
+  # key verifies for exactly this nickname's Mojang UUID the player is proven to be the
+  # owner, gets a premium record and continues to the backend. Without such a
+  # key the client is cracked: it gets the localized "this name belongs to a premium
+  # account, pick a unique name" notice and is disconnected when it presses the button.
+  # Nothing is authenticated or registered during the check.
+  premium-name-notice:
+    enabled: true
+    # Seconds to wait on the auth server for the client's Mojang profile key (1-30). Genuine
+    # clients send it right after joining, so 2 seconds is enough; a cracked client sees the
+    # notice when this expires.
+    check-seconds: 2
+    # Network name used in the kick message after the notice ("Kicked from <server-name>").
+    server-name: "Server"
 
 # Two-Factor Authentication (TOTP / RFC 6238) — opt-in per player.
 # Compatible with Google Authenticator, Authy, Aegis, FreeOTP, and LimboAuth tokens.

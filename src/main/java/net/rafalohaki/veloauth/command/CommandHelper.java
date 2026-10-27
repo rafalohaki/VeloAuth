@@ -35,7 +35,7 @@ public final class CommandHelper {
      */
     public static Player validatePlayerSource(CommandSource source, Messages messages) {
         if (!(source instanceof Player player)) {
-            source.sendMessage(messages.component("error.player_only", NamedTextColor.RED));
+            source.sendMessage(messages.forSource(source, "error.player_only", NamedTextColor.RED));
             return null;
         }
         return player;
@@ -55,7 +55,7 @@ public final class CommandHelper {
         }
         String[] args = invocation.arguments();
         if (args.length != requiredArgs) {
-            player.sendMessage(messages.component(usageKey, NamedTextColor.YELLOW));
+            player.sendMessage(messages.forPlayer(player, usageKey, NamedTextColor.YELLOW));
             return null;
         }
         return new CommandInputs(player, args);
@@ -257,7 +257,7 @@ public final class CommandHelper {
      */
     public static boolean checkAdminPermission(CommandSource source, Messages messages) {
         if (!source.hasPermission("veloauth.admin")) {
-            source.sendMessage(messages.component("error.permission", NamedTextColor.RED));
+            source.sendMessage(messages.forSource(source, "error.permission", NamedTextColor.RED));
             return false;
         }
         return true;
@@ -281,7 +281,7 @@ public final class CommandHelper {
      * @param key      Message key to localize
      */
     public static void sendError(CommandSource source, Messages messages, String key) {
-        source.sendMessage(messages.component(key, NamedTextColor.RED));
+        source.sendMessage(messages.forSource(source, key, NamedTextColor.RED));
     }
 
     /**
@@ -302,7 +302,7 @@ public final class CommandHelper {
      * @param key      Message key to localize
      */
     public static void sendSuccess(CommandSource source, Messages messages, String key) {
-        source.sendMessage(messages.component(key, NamedTextColor.GREEN));
+        source.sendMessage(messages.forSource(source, key, NamedTextColor.GREEN));
     }
 
     /**
@@ -315,22 +315,20 @@ public final class CommandHelper {
         source.sendMessage(ValidationUtils.createWarningComponent(message));
     }
 
-    /**
-     * Handles async command exceptions (PMD CPD fix - extracted duplicate error handling).
-     *
-     * @param throwable Exception that occurred
-     * @param source    Command source for error messages
-     * @param messages  Messages for error reporting
-     * @param errorKey  Message key for database errors
-     */
+    @javax.annotation.Nullable
+    private static Player scopePlayer(CommandSource source) {
+        return source instanceof Player player ? player : null;
+    }
+
+    /** Handles async command exceptions, rendering the error in the player's language. */
     private static void handleAsyncCommandException(
             Throwable throwable, Messages messages, String errorKey,
-            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
-        if (throwable instanceof java.util.concurrent.RejectedExecutionException) {
-            messageSender.accept(messages.component(MSG_KEY_SERVER_OVERLOADED, NamedTextColor.RED));
-        } else {
-            messageSender.accept(messages.component(errorKey, NamedTextColor.RED));
-        }
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender,
+            @javax.annotation.Nullable Player scopePlayer) {
+        String key = throwable instanceof java.util.concurrent.RejectedExecutionException
+                ? MSG_KEY_SERVER_OVERLOADED : errorKey;
+        messages.runAsPlayer(scopePlayer,
+                () -> messageSender.accept(messages.component(key, NamedTextColor.RED)));
     }
 
     /**
@@ -343,31 +341,33 @@ public final class CommandHelper {
      */
     public static void runAsyncCommand(Runnable task, Messages messages,
                                        CommandSource source, String errorKey) {
-        runAsyncCommand(task, messages, errorKey, source::sendMessage);
+        runAsyncCommand(task, messages, errorKey, source::sendMessage, scopePlayer(source));
     }
 
     static void runAsyncCommand(
             Runnable task, Messages messages, String errorKey,
             java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
-        CompletableFuture<Void> future = submitAsyncCommand(task, messages, messageSender);
+        runAsyncCommand(task, messages, errorKey, messageSender, null);
+    }
+
+    /** Variant that renders the task's and the error path's messages in {@code scopePlayer}'s language. */
+    static void runAsyncCommand(
+            Runnable task, Messages messages, String errorKey,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender,
+            @javax.annotation.Nullable Player scopePlayer) {
+        CompletableFuture<Void> future = submitAsyncCommand(task, messages, messageSender, scopePlayer);
         if (future == null) {
             return;
         }
         // skipcq: JAVA-W1087 - Future handled with exceptionally, fire-and-forget operation
         future.exceptionally(throwable -> {
-            handleAsyncCommandException(throwable, messages, errorKey, messageSender);
+            handleAsyncCommandException(throwable, messages, errorKey, messageSender, scopePlayer);
             return null;
         });
     }
 
     /**
      * Executes a command asynchronously with timeout and standard exception handling.
-     *
-     * @param task       Command task to execute
-     * @param messages   Messages for error reporting
-     * @param source     Command source for error messages
-     * @param errorKey   Message key for database errors
-     * @param timeoutKey Message key for timeout errors
      */
     // The delegation drops `source` from the middle of the signature and re-adds it as the
     // trailing message consumer; errorKey and timeoutKey keep their relative order, which is
@@ -376,24 +376,41 @@ public final class CommandHelper {
     public static void runAsyncCommandWithTimeout(Runnable task, Messages messages,
                                                   CommandSource source, String errorKey, String timeoutKey) {
         runAsyncCommandWithTimeout(
-                task, messages, errorKey, timeoutKey, source::sendMessage);
+                task, messages, errorKey, timeoutKey, source::sendMessage, scopePlayer(source));
     }
 
     static void runAsyncCommandWithTimeout(
             Runnable task, Messages messages, String errorKey,
             String timeoutKey,
             java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
+        runAsyncCommandWithTimeout(task, messages, errorKey, timeoutKey, messageSender, null);
+    }
+
+    static void runAsyncCommandWithTimeout(
+            Runnable task, Messages messages, String errorKey,
+            String timeoutKey,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender,
+            @javax.annotation.Nullable Player scopePlayer) {
         runAsyncCommandWithTimeout(
                 task, messages, errorKey, messageSender,
-                () -> messageSender.accept(
-                        messages.component(timeoutKey, NamedTextColor.RED)));
+                () -> messages.runAsPlayer(scopePlayer, () -> messageSender.accept(
+                        messages.component(timeoutKey, NamedTextColor.RED))),
+                scopePlayer);
     }
 
     static void runAsyncCommandWithTimeout(
             Runnable task, Messages messages, String errorKey,
             java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender,
             Runnable timeoutHandler) {
-        CompletableFuture<Void> future = submitAsyncCommand(task, messages, messageSender);
+        runAsyncCommandWithTimeout(task, messages, errorKey, messageSender, timeoutHandler, null);
+    }
+
+    static void runAsyncCommandWithTimeout(
+            Runnable task, Messages messages, String errorKey,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender,
+            Runnable timeoutHandler,
+            @javax.annotation.Nullable Player scopePlayer) {
+        CompletableFuture<Void> future = submitAsyncCommand(task, messages, messageSender, scopePlayer);
         if (future == null) {
             return;
         }
@@ -403,7 +420,7 @@ public final class CommandHelper {
                     if (throwable instanceof java.util.concurrent.TimeoutException) {
                         timeoutHandler.run();
                     } else {
-                        handleAsyncCommandException(throwable, messages, errorKey, messageSender);
+                        handleAsyncCommandException(throwable, messages, errorKey, messageSender, scopePlayer);
                     }
                     return null;
                 });
@@ -411,16 +428,20 @@ public final class CommandHelper {
 
     private static CompletableFuture<Void> submitAsyncCommand(
             Runnable task, Messages messages,
-            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender,
+            @javax.annotation.Nullable Player scopePlayer) {
         if (VirtualThreadExecutorProvider.isShutdown()) {
-            messageSender.accept(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
+            messages.runAsPlayer(scopePlayer, () -> messageSender.accept(
+                    messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED)));
             return null;
         }
         try {
             return CompletableFuture.runAsync(
-                    task, VirtualThreadExecutorProvider.getVirtualExecutor());
+                    () -> messages.runAsPlayer(scopePlayer, task),
+                    VirtualThreadExecutorProvider.getVirtualExecutor());
         } catch (java.util.concurrent.RejectedExecutionException exception) {
-            messageSender.accept(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
+            messages.runAsPlayer(scopePlayer, () -> messageSender.accept(
+                    messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED)));
             return null;
         }
     }

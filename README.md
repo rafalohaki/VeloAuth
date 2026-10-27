@@ -128,8 +128,10 @@ built JAR's internal identity matches the Maven version.
 
 ## Requirements
 
-- **Java 21 or newer**
-- **Velocity proxy** (3.5.x; VeloAuth currently targets the 3.5 API line)
+- **Java 21 or newer** (Java 25 when running Velocity 4.x)
+- **Velocity proxy** 3.5.x or 4.x (tested on 3.5.1 and 4.2.0 / Minecraft 26.3, protocol 777).
+  The plugin is compiled against the 3.5 API line and is binary compatible with Velocity 4.x
+  (Adventure 5.2+).
 - **Database**: MySQL, PostgreSQL, H2, or SQLite
 - **Default external mode:** NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or
   another Velocity-compatible auth server registered in `velocity.toml`
@@ -671,6 +673,35 @@ commit error is reported as an unknown outcome rather than a false success or a 
 6. By default **every Java player** is sent through the auth server. A confirmed Floodgate UUID can use its separate bypass; a Mojang-verified Java player can preserve the original forced-host/`try` target only with `premium.bypass-auth-server: true`
 7. Premium players on auth/limbo are transferred automatically; cracked players type **/login** or **/register**, are verified with BCrypt, and first registration ownership is committed atomically by the database
 8. **VeloAuth connects** the authorized player to the preserved forced-host target or first available non-auth backend from `try`
+
+### Dialog (GUI) login
+
+`dialog.format: dialog` (default) shows the in-game dialog; `dialog.format: chat_system` keeps the classic
+`/register` + `/login` chat flow. Switch at runtime with `/vauth reload`. Cracked clients that retry a premium
+(Mojang) nickname receive a localized "this name belongs to a premium account - choose a unique name" notice
+instead of a silent client-side failure (`dialog.premium-name-notice`). — Minecraft 1.21.6+ / 26.x clients
+
+Clients on protocol 771+ (1.21.6 … 26.3) authenticate through an in-game **dialog** before
+they ever reach a backend:
+
+1. `PostLoginEvent` fires while the client is still in the **CONFIGURATION** phase. VeloAuth
+   suspends the event, waits for the client's `ClientInformation` packet and maps its locale
+   (all 150+ Minecraft client locales, e.g. `tr_tr`, `pt_pt`, `zh_tw`, `lol_us`) onto one of the
+   72 bundled translations (family fallback → configured `language` → English).
+2. A **Register** (two password fields) or **Login** (one password field) dialog is shown in that
+   language. Clicks arrive as custom click actions (`veloauth:login`, `veloauth:register`,
+   `veloauth:totp`, `veloauth:back`, `veloauth:exit`) and are executed by **the same code paths as
+   `/login`, `/register` and `/2fa verify`** — brute-force limits, IP limits, BCrypt, 2FA, audit
+   log and session rules all apply identically.
+3. Failures re-open the form behind a localized error notice; accounts with 2FA get a code
+   dialog; the **Exit** button or the `dialog.timeout-seconds` deadline disconnects the player.
+4. On success the dialog is cleared and the player is routed **directly to the target backend**
+   (forced host / `try`); the auth-server hop is skipped entirely.
+
+Older clients, Bedrock/Floodgate players, Mojang-verified premium players and proxies without
+dialog packets (`< Velocity 3.4`) transparently keep the classic auth-server + `/login` flow.
+Configure under `dialog:` in `config.yml` (`enabled`, `timeout-seconds`, `locale-wait-millis`,
+`allow-cancel`, `error-icon`).
 
 ### Premium Resolution (3 layers)
 ```

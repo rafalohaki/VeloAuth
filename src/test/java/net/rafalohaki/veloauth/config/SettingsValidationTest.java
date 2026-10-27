@@ -706,13 +706,15 @@ class SettingsValidationTest {
     }
 
     @Test
-    void generatedConfigShouldDocumentPremiumAuthServerBypassAsDisabled() throws IOException {
+    void generatedConfigShouldDocumentPremiumAuthServerBypassAsEnabled() throws IOException {
         assertTrue(settings.load());
 
         String generatedConfig = Files.readString(tempDir.resolve("config.yml"));
 
-        assertTrue(generatedConfig.contains("bypass-auth-server: false"),
-                "Generated config must expose the conservative premium bypass default");
+        assertTrue(generatedConfig.contains("bypass-auth-server: true"),
+                "Generated config must expose the premium bypass default (verified premium players skip the auth server)");
+        assertTrue(generatedConfig.contains("ashcon-enabled: false"),
+                "Generated config must keep the Ashcon resolver disabled by default (single Mojang lookup per login)");
     }
 
     @Test

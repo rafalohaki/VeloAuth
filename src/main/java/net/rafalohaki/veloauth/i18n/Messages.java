@@ -195,6 +195,10 @@ public class Messages {
      */
     public String get(String key, Object... args) {
         String resolvedKey = resolveMessageKey(key);
+        String scoped = scopedLanguage();
+        if (scoped != null) {
+            return getForPlayerLanguage(scoped, resolvedKey, args);
+        }
         if (useExternalFiles) {
             return getFromBundle(resolvedKey, args);
         } else {
@@ -212,9 +216,149 @@ public class Messages {
      * @param args message format arguments
      * @return rendered Adventure component
      */
+    // ------------------------------------------------------------------------------------
+    // Per-player language (multi-language player messages).
+    //
+    // Every message addressed to a player goes through forPlayer/forSource so it is rendered in
+    // the client's own Minecraft language (when language.detect-client-language is on), with the
+    // configured default and English as fallbacks - the same resolution the dialogs use.
+    // ------------------------------------------------------------------------------------
+
+    private volatile java.util.function.BooleanSupplier clientLanguageDetection = () -> false;
+
+    /** Language of the player whose request is being handled on the current thread, or null. */
+    private static final ThreadLocal<String> PLAYER_SCOPE = new ThreadLocal<>();
+
+    /**
+     * Makes every {@link #get}/{@link #component} call on the current thread render in the given
+     * player's language until the returned scope is closed. Used around command execution and the
+     * dialog bridge so that validators and helpers without a player reference are localized too.
+     */
+    public AutoCloseable playerScope(@javax.annotation.Nullable com.velocitypowered.api.proxy.Player player) {
+        return languageScope(player != null && clientLanguageDetection.getAsBoolean()
+                ? resolvePlayerLanguage(net.rafalohaki.veloauth.util.PlayerLocaleUtils.clientLocale(player))
+                : null);
+    }
+
+    /**
+     * Same as {@link #playerScope} for a language that is already known (for example the language
+     * remembered for an address during pre-login, when there is no player object yet).
+     */
+    public AutoCloseable languageScope(@javax.annotation.Nullable String language) {
+        String previous = PLAYER_SCOPE.get();
+        if (language != null && clientLanguageDetection.getAsBoolean()) {
+            PLAYER_SCOPE.set(language);
+        } else {
+            PLAYER_SCOPE.remove();
+        }
+        return () -> {
+            if (previous == null) {
+                PLAYER_SCOPE.remove();
+            } else {
+                PLAYER_SCOPE.set(previous);
+            }
+        };
+    }
+
+    /** Runs {@code task} inside {@link #playerScope(com.velocitypowered.api.proxy.Player)}. */
+    public void runAsPlayer(@javax.annotation.Nullable com.velocitypowered.api.proxy.Player player, Runnable task) {
+        try (AutoCloseable ignored = playerScope(player)) {
+            task.run();
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception closeFailure) {
+            throw new IllegalStateException(closeFailure);
+        }
+    }
+
+    @javax.annotation.Nullable
+    private String scopedLanguage() {
+        String language = PLAYER_SCOPE.get();
+        if (language == null || language.equals(currentLanguage) || !isLanguageSupported(language)) {
+            return null;
+        }
+        return language;
+    }
+
+    /** Wires the (hot-reloadable) {@code detect-client-language} setting. */
+    public void setClientLanguageDetection(java.util.function.BooleanSupplier detection) {
+        this.clientLanguageDetection = detection == null ? () -> false : detection;
+    }
+
+    /** Message for a player, in the player's own language when detection is enabled. */
+    public Component forPlayer(@javax.annotation.Nullable com.velocitypowered.api.proxy.Player player,
+                               String key, NamedTextColor fallbackColor, Object... args) {
+        if (player == null || !clientLanguageDetection.getAsBoolean()) {
+            return component(key, fallbackColor, args);
+        }
+        return componentForLocale(net.rafalohaki.veloauth.util.PlayerLocaleUtils.clientLocale(player),
+                key, fallbackColor, args);
+    }
+
+    /** {@link #forPlayer} for any command source (console keeps the configured language). */
+    public Component forSource(@javax.annotation.Nullable com.velocitypowered.api.command.CommandSource source,
+                               String key, NamedTextColor fallbackColor, Object... args) {
+        return forPlayer(source instanceof com.velocitypowered.api.proxy.Player player ? player : null,
+                key, fallbackColor, args);
+    }
+
+    /** Plain-text variant of {@link #forPlayer}. */
+    public String getForPlayer(@javax.annotation.Nullable com.velocitypowered.api.proxy.Player player,
+                               String key, Object... args) {
+        if (player == null || !clientLanguageDetection.getAsBoolean()) {
+            return get(key, args);
+        }
+        return getForPlayerLanguageOrDefault(
+                resolvePlayerLanguage(net.rafalohaki.veloauth.util.PlayerLocaleUtils.clientLocale(player)),
+                key, args);
+    }
+
     public Component component(String key, NamedTextColor fallbackColor, Object... args) {
         String text = get(key, protectFormattingArguments(args));
-        return restoreFormattingArguments(parseWithColors(text, fallbackColor));
+        Component component = restoreFormattingArguments(parseWithColors(text, fallbackColor));
+        recordCapture(resolveMessageKey(key), fallbackColor, args, component);
+        return component;
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Thread-local feedback capture.
+    //
+    // The dialog (GUI) authentication flow re-uses the exact /login, /register and /2fa code
+    // paths. Those paths report their outcome to the player as chat components built here.
+    // While a capture is active on the current thread, every component produced by this class
+    // is also recorded, so the dialog layer can translate the outcome into a localized notice
+    // without duplicating any authentication logic.
+    // ------------------------------------------------------------------------------------
+
+    /** A player-facing message produced while a capture was active on the current thread. */
+    public record CapturedMessage(
+            @javax.annotation.Nullable String key,
+            NamedTextColor fallbackColor,
+            Object[] args,
+            Component component) {
+    }
+
+    private static final ThreadLocal<java.util.List<CapturedMessage>> CAPTURE = new ThreadLocal<>();
+
+    /** Starts recording messages produced on the current thread. */
+    public static void beginCapture() {
+        CAPTURE.set(new java.util.ArrayList<>());
+    }
+
+    /** Stops recording on the current thread and returns everything captured (never null). */
+    public static java.util.List<CapturedMessage> endCapture() {
+        java.util.List<CapturedMessage> captured = CAPTURE.get();
+        CAPTURE.remove();
+        return captured == null ? java.util.List.of() : java.util.List.copyOf(captured);
+    }
+
+    private static void recordCapture(@javax.annotation.Nullable String key, NamedTextColor fallbackColor,
+                                      Object[] args, Component component) {
+        java.util.List<CapturedMessage> captured = CAPTURE.get();
+        if (captured != null) {
+            captured.add(new CapturedMessage(key, fallbackColor,
+                    args == null ? new Object[0] : args.clone(), component));
+        }
     }
 
     /**
@@ -282,12 +426,32 @@ public class Messages {
      */
     public Component componentForLocale(@javax.annotation.Nullable Locale clientLocale,
                                         String key, NamedTextColor fallbackColor, Object... args) {
-        String language = resolvePlayerLanguage(clientLocale);
-        if (language.equals(currentLanguage)) {
+        return componentForLanguage(resolvePlayerLanguage(clientLocale), key, fallbackColor, args);
+    }
+
+    /**
+     * Resolves a message for an explicit language code (e.g. one chosen from the client's
+     * Minecraft locale by {@link MinecraftLocales}). Unknown languages fall back to the
+     * configured default; missing keys fall back to English per key.
+     */
+    public Component componentForLanguage(@javax.annotation.Nullable String language,
+                                          String key, NamedTextColor fallbackColor, Object... args) {
+        if (language == null || language.equals(currentLanguage) || !isLanguageSupported(language)) {
             return component(key, fallbackColor, args);
         }
         String text = getForPlayerLanguage(language, resolveMessageKey(key), protectFormattingArguments(args));
-        return restoreFormattingArguments(parseWithColors(text, fallbackColor));
+        Component component = restoreFormattingArguments(parseWithColors(text, fallbackColor));
+        recordCapture(resolveMessageKey(key), fallbackColor, args, component);
+        return component;
+    }
+
+    /** Plain-text variant of {@link #componentForLanguage}. */
+    public String getForPlayerLanguageOrDefault(@javax.annotation.Nullable String language,
+                                                String key, Object... args) {
+        if (language == null || language.equals(currentLanguage) || !isLanguageSupported(language)) {
+            return get(key, args);
+        }
+        return getForPlayerLanguage(language, resolveMessageKey(key), args);
     }
 
     private String getForPlayerLanguage(String language, String resolvedKey, Object... args) {
@@ -330,7 +494,9 @@ public class Messages {
      * @return rendered Adventure component
      */
     public Component componentFromResolvedText(String resolvedText, NamedTextColor fallbackColor) {
-        return parseWithColors(resolvedText, fallbackColor);
+        Component component = parseWithColors(resolvedText, fallbackColor);
+        recordCapture(null, fallbackColor, new Object[0], component);
+        return component;
     }
 
     private static Component parseWithColors(String text, NamedTextColor fallbackColor) {

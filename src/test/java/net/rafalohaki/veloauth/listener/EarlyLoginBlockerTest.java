@@ -134,7 +134,7 @@ class EarlyLoginBlockerTest {
         getInitializationFuture().completeExceptionally(new IllegalStateException("init failed"));
         await(task);
         assertFalse(event.getResult().isAllowed(), "Initialization failure should deny queued connections");
-        assertEquals("VeloAuth ⏳",
+        assertEquals("VeloAuth is starting. Please wait.",
                 event.getResult().getReasonComponent().map(PLAIN_TEXT::serialize).orElse(null));
     }
 

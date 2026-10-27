@@ -2,6 +2,67 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
+## [1.6.3] - 2026-10-10
+
+### Added
+
+- **Dialog (GUI) login** for Minecraft 1.21.6 … 26.3 clients (protocol 771–777). Register, login,
+  2FA and error dialogs are shown on the auth server in the player's own language; the forms are a
+  front-end for the existing `/register`, `/login` and `/2fa` logic (same validation, brute-force
+  tracking, database access and post-auth transfer). Typed `/login`, `/register` or chat bring the
+  form back. Built on Velocity's own `DialogShowPacket`/`DialogClearPacket` and `custom_click_action`
+  with no extra dependencies. New `dialog:` config section (`format`, `timeout-seconds`,
+  `locale-wait-millis`, `allow-cancel`, `error-icon`, `premium-name-notice`), hot-reloadable via
+  `/vauth reload`.
+- `dialog.format: dialog | chat_system` selects the GUI (default) or the classic chat-command flow.
+  Existing `config.yml` files without a `dialog` section keep working with defaults; a startup hint
+  shows how to add the key.
+- **Premium-nick ownership check.** A premium nickname without a VeloAuth record used to fail
+  silently on the client ("Invalid session") when a cracked client tried it. Such connections are
+  now admitted offline and verified on the auth server with the client's Mojang-signed profile
+  key (`chat_session_update`): the real owner is authorized in place, receives a premium record and
+  continues to the backend (later joins take Velocity's regular Mojang handshake and skip the auth
+  server); a cracked client gets a localized "pick another name" notice whose only button
+  disconnects with `connection.premium_name.kicked` ("You were kicked from {0}", `{0}` =
+  `dialog.premium-name-notice.server-name`). While the check or the notice is open every command
+  and chat message is denied and the notice is re-opened. The check shows an action bar only
+  (`dialog.premium_check.title`); nothing is written to chat. New keys
+  `dialog.premium-name-notice.check-seconds` (default 2) and `server-name`.
+- Full Minecraft client locale table (`MinecraftLocales`): every in-game language code (150+)
+  maps to a bundled translation with region/script/family fallbacks.
+- 49 new language bundles (af ar az ba be bg bs ca cy da el eo et eu fa fil fy ga gd gl he hr hu
+  hy is ka kk kn ky la lb lt lv mk mn ms mt nn no oc sq sr sv ta tok tt uk uz yo) covering the
+  player-facing authentication and dialog messages (other keys fall back to English), and
+  `dialog.*` / `connection.premium_name.*` keys in all 23 existing bundles.
+
+### Changed
+
+- Every player-facing message follows the client's language when `detect-client-language` is on:
+  `Messages.forPlayer`/`forSource`, a per-thread player scope around command execution and async
+  command results, and pre-login denials rendered in the language last seen from that address.
+- Dialog-format connections receive no plugin chat lines at all (an outbound filter drops system
+  chat until the player reaches a backend; action bar and the backend's own chat are unaffected).
+  `chat_system` users keep the classic chat prompts.
+- `premium.bypass-auth-server` now defaults to `true` and `premium.resolver.ashcon-enabled` to
+  `false`: a verified premium player goes straight to the backend and each login costs one Mojang
+  lookup. Existing configs are not rewritten.
+- Verified against Velocity 3.5.1 (Java 21, protocol 776) and Velocity 4.2.0 (Java 25, Minecraft
+  26.3 / protocol 777). `adventure-nbt` is consumed from the proxy instead of being shaded, so
+  dialog NBT shares Velocity's type universe on both Adventure 4.x and 5.x.
+- `AuthListener#onPostLogin` returns an `EventTask`; the dialog service hooks the server-connected
+  path through a single `onServerConnected` call.
+
+### Fixed
+
+- Brute-force block, "already connecting" and other pre-login denials are localized; reaching the
+  block inside a dialog disconnects with the localized message.
+- Serverbound `custom_click_action` is `id + VarInt size + NBT` (no boolean flag); passwords typed
+  in dialogs were previously never read.
+- Dialog clicks are processed strictly in order per session (fast consecutive clicks are queued,
+  not dropped).
+- Join Game `onlineMode` flag is rewritten for the ownership-check connection so 26.2+ clients send
+  their profile key behind an offline backend.
+
 ## [1.6.2] - 2026-10-07
 
 ### Added

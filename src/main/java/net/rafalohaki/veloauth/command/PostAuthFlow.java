@@ -77,7 +77,12 @@ final class PostAuthFlow {
         if (!ctx.isConnectionCurrent(connectionOperation)) {
             return false;
         }
-        boolean transferred = ctx.plugin().getConnectionManager().transferToBackend(p);
+        // Dialog (GUI) authentication runs while the client is still in the CONFIGURATION phase,
+        // before Velocity has picked an initial server. There is nothing to transfer yet: once the
+        // dialog session completes, the normal initial-connection path routes the (now authorized)
+        // player straight to the target backend.
+        boolean preJoinDialog = ctx.plugin().isDialogPreJoinSession(p.getUniqueId());
+        boolean transferred = preJoinDialog || ctx.plugin().getConnectionManager().transferToBackend(p);
         if (!transferred) {
             // Hard transfer failure: roll back authorization so the next /login attempt
             // does not skip auth on a stale cache entry. Background retry path returns true,

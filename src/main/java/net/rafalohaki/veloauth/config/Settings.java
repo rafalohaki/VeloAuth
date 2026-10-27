@@ -72,6 +72,8 @@ public class Settings {
             if (!Files.exists(configFile)) {
                 logger.debug("Creating default config file: {}", configFile);
                 DefaultConfigGenerator.createDefaultConfig(configFile);
+            } else {
+                DefaultConfigGenerator.warnIfDialogSectionMissing(configFile, logger);
             }
 
             logger.debug("Loading configuration from: {}", configFile);
@@ -374,6 +376,11 @@ public class Settings {
         return activeSnapshot().twoFactor();
     }
 
+    /** Pre-join dialog authentication (1.21.6+ clients, CONFIGURATION phase). */
+    public DialogSettings getDialogSettings() {
+        return activeSnapshot().dialog();
+    }
+
     public Set<String> getPendingRestartChanges() {
         return publication.pendingRestartChanges();
     }
@@ -476,7 +483,7 @@ public class Settings {
             int maxConcurrentLookups,
             ResolverRateLimitSettings rateLimit) {
         public PremiumResolverSettings() {
-            this(true, true, false, 3000, 30, 10, true, 10_000, 30, 32,
+            this(true, false, false, 3000, 30, 10, true, 10_000, 30, 32,
                     new ResolverRateLimitSettings());
         }
         public boolean isMojangEnabled() { return mojangEnabled; }
@@ -544,7 +551,7 @@ public class Settings {
             boolean bypassAuthServer,
             PremiumResolverSettings resolver) {
         public PremiumSettings() {
-            this(true, false, false, new PremiumResolverSettings());
+            this(true, false, true, new PremiumResolverSettings());
         }
         public boolean isCheckEnabled() { return checkEnabled; }
         public boolean isAllowCrackedOnPremiumNicks() { return allowCrackedOnPremiumNicks; }
@@ -609,6 +616,48 @@ public class Settings {
         }
         public boolean isEnabled() { return enabled; }
         public int getRetentionDays() { return retentionDays; }
+    }
+
+    /**
+     * Dialog-based (GUI) authentication shown to 1.21.6+ clients during the CONFIGURATION
+     * phase, before any backend server is contacted. Older clients and disabled installs keep
+     * the classic auth-server + {@code /login} flow.
+     *
+     * @param enabled           feature switch
+     * @param timeoutSeconds    how long a player may stay in the dialog before being kicked
+     * @param localeWaitMillis  how long to wait for the client's language packet before falling
+     *                          back to the configured default language
+     * @param allowCancel       whether the dialog shows a cancel/exit button
+     * @param errorIcon         whether error notices show a barrier item icon
+     * @param premiumNameNotice whether cracked clients that retry a premium nickname get a
+     *                          localized explanation instead of a silent client-side failure
+     * @param premiumCheckSeconds how long the ownership check waits for the Mojang profile key
+     * @param serverName network name shown in the premium-name kick message
+     */
+    public record DialogSettings(
+            boolean enabled,
+            int timeoutSeconds,
+            int localeWaitMillis,
+            boolean allowCancel,
+            boolean errorIcon,
+            boolean premiumNameNotice,
+            int premiumCheckSeconds,
+            String serverName) {
+        public DialogSettings() {
+            this(true, 60, 1500, true, true, true, 2, "Server");
+        }
+        /** Display name of the network used in the premium-name kick message ("Kicked from {0}"). */
+        public String getServerName() {
+            return serverName == null || serverName.isBlank() ? "Server" : serverName;
+        }
+        /** Seconds to wait on the auth server for the client's Mojang profile key. */
+        public int getPremiumCheckSeconds() { return premiumCheckSeconds; }
+        public boolean isPremiumNameNotice() { return premiumNameNotice; }
+        public boolean isEnabled() { return enabled; }
+        public int getTimeoutSeconds() { return timeoutSeconds; }
+        public int getLocaleWaitMillis() { return localeWaitMillis; }
+        public boolean isAllowCancel() { return allowCancel; }
+        public boolean isErrorIcon() { return errorIcon; }
     }
 
     /**
@@ -756,6 +805,7 @@ public class Settings {
             AlertSettings alerts,
             AuditLogSettings auditLog,
             TwoFactorSettings twoFactor,
+            DialogSettings dialog,
             HotSettings hot) {
 
         static Snapshot defaults() {
@@ -776,6 +826,7 @@ public class Settings {
                     new AlertSettings(),
                     new AuditLogSettings(),
                     new TwoFactorSettings(),
+                    new DialogSettings(),
                     new HotSettings(false, true, false, "en", true));
         }
 
@@ -792,6 +843,7 @@ public class Settings {
                     alerts,
                     auditLog,
                     twoFactor,
+                    configured.dialog,   // dialog section is hot-reloadable (/vauth reload)
                     configured.hot);
         }
 
@@ -804,13 +856,13 @@ public class Settings {
                             password.minLength,
                             maximum,
                             password.policy),
-                    bruteForce, premium, floodgate, alerts, auditLog, twoFactor, hot);
+                    bruteForce, premium, floodgate, alerts, auditLog, twoFactor, dialog, hot);
         }
 
         Snapshot withLanguage(String language) {
             return new Snapshot(
                     database, cache, authServer, connection, password, bruteForce,
-                    premium, floodgate, alerts, auditLog, twoFactor,
+                    premium, floodgate, alerts, auditLog, twoFactor, dialog,
                     new HotSettings(
                             hot.debugEnabled,
                             hot.reportEnabled,

@@ -86,7 +86,7 @@ final class BackendTransferCoordinator {
                 return BackendTransferOutcome.REJECTED;
             }
 
-            player.sendMessage(messages.component("connection.connecting", NamedTextColor.YELLOW));
+            player.sendMessage(messages.forPlayer(player, "connection.connecting", NamedTextColor.YELLOW));
             if (logger.isDebugEnabled()) {
                 logger.debug(messages.get(
                         "player.transfer.backend.attempt", player.getUsername(), serverName));
@@ -443,7 +443,7 @@ final class BackendTransferCoordinator {
         if (isStale(state)) {
             return;
         }
-        String resolved = messages.get(messageKey);
+        String resolved = messages.getForPlayer(player, messageKey);
         if (resolved == null || resolved.isEmpty() || isStale(state)) {
             return;
         }
@@ -521,7 +521,7 @@ final class BackendTransferCoordinator {
     }
 
     private void sendErrorMessage(Player player, String reason) {
-        player.sendMessage(messages.component(CONNECTION_ERROR_GAME_SERVER, NamedTextColor.RED, reason));
+        player.sendMessage(messages.forPlayer(player, CONNECTION_ERROR_GAME_SERVER, NamedTextColor.RED, reason));
     }
 
     private void sendErrorMessageIfCurrent(Player player, PlayerTransferState state) {
@@ -551,7 +551,7 @@ final class BackendTransferCoordinator {
         if (isStale(state)) {
             return false;
         }
-        player.sendMessage(messages.component("connection.retry", NamedTextColor.YELLOW));
+        player.sendMessage(messages.forPlayer(player, "connection.retry", NamedTextColor.YELLOW));
 
         scheduleTimeoutRetry(player, state, targetServer, serverName);
         return true;

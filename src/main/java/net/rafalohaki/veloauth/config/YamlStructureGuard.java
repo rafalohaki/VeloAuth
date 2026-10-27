@@ -18,7 +18,7 @@ final class YamlStructureGuard {
     private static final Set<String> MAP_KEYS = Set.of(
             "database", "postgresql", "cache", "auth-server", "embedded", "picolimbo",
             "connection", "security", "password-policy", "premium", "resolver", "floodgate",
-            "alerts", "discord", "audit-log", "two-factor", "report");
+            "alerts", "discord", "audit-log", "two-factor", "dialog", "report");
     private static final Set<String> REQUIRED_SCALAR_KEYS = Set.of("mode");
 
     private YamlStructureGuard() {

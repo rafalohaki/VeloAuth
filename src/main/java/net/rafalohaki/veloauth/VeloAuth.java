@@ -39,6 +39,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -79,6 +80,7 @@ public class VeloAuth {
     private DatabaseManager databaseManager;
     private AuthCache authCache;
     private CommandHandler commandHandler;
+    private volatile net.rafalohaki.veloauth.dialog.DialogAuthService dialogAuthService;
     private ConnectionManager connectionManager;
     private AuthServerProvider authServerProvider;
     private AuthTimeoutScheduler authTimeoutScheduler;
@@ -399,6 +401,7 @@ public class VeloAuth {
         
         try {
             messages = new Messages(dataDirectory, language);
+            messages.setClientLanguageDetection(settings::isDetectClientLanguage);
             if (logger.isDebugEnabled()) {
                 logger.debug("✅ Message system initialized in {} ms (Language: {}, External files: enabled)", 
                         System.currentTimeMillis() - startTime, language);
@@ -407,6 +410,7 @@ public class VeloAuth {
             logger.error("Failed to initialize external language files, falling back to JAR-embedded files", e);
             messages = new Messages();
             messages.setLanguage(language);
+            messages.setClientLanguageDetection(settings::isDetectClientLanguage);
             if (logger.isDebugEnabled()) {
                 logger.debug("✅ Message system initialized in {} ms (Language: {}, External files: disabled)", 
                         System.currentTimeMillis() - startTime, language);
@@ -552,8 +556,36 @@ public class VeloAuth {
         
         commandHandler = new CommandHandler(this, databaseManager, authCache, settings, messages);
         commandHandler.registerCommands();
+        initializeDialogAuth();
         
         logger.debug("✅ Commands registered in {} ms", System.currentTimeMillis() - startTime);
+    }
+
+    /**
+     * Dialog (GUI) login for 1.21.6+ clients. Requires the dialog packets of the running proxy
+     * (Velocity 3.4.0+ / 4.x); on older proxies the feature silently stays off and the classic
+     * auth-server flow is used.
+     */
+    private void initializeDialogAuth() {
+        // The service is always created when the proxy supports dialogs so that
+        // dialog.format can be switched between "dialog" and "chat_system" with /vauth reload.
+        net.rafalohaki.veloauth.dialog.VelocityDialogTransport transport =
+                new net.rafalohaki.veloauth.dialog.VelocityDialogTransport(logger);
+        if (!transport.isAvailable()) {
+            logger.warn("Dialog login unavailable: this proxy build does not expose dialog packets "
+                    + "(need Velocity 3.4.0+/4.x). Falling back to the auth server flow.");
+            return;
+        }
+        dialogAuthService = new net.rafalohaki.veloauth.dialog.DialogAuthService(
+                this, settings, messages, transport, commandHandler.createDialogAuthBridge());
+        if (!settings.getDialogSettings().isEnabled()) {
+            logger.info("Dialog login switched off (dialog.format=chat_system) - players use /register and /login "
+                    + "on the auth server. Premium-name notice stays active. Change dialog.format and /vauth reload to enable.");
+            return;
+        }
+        logger.info("Dialog login enabled (clients 1.21.6+ / protocol 771-777, timeout {}s, {} client locales mapped)",
+                settings.getDialogSettings().getTimeoutSeconds(),
+                net.rafalohaki.veloauth.i18n.MinecraftLocales.knownLocaleCodes().size());
     }
 
     private void initializeReportService() {
@@ -708,7 +740,13 @@ public class VeloAuth {
                 logger.debug("AuthListener unregistered");
             }
 
-            // 2. Unregister command handlers
+            // 2. Stop dialog sessions, then unregister command handlers
+            net.rafalohaki.veloauth.dialog.DialogAuthService dialogToClose = dialogAuthService;
+            if (dialogToClose != null) {
+                dialogToClose.shutdown();
+                dialogAuthService = null;
+                logger.debug("Dialog auth service stopped");
+            }
             if (commandHandler != null) {
                 commandHandler.unregisterCommands();
                 commandHandler.shutdown();
@@ -1033,6 +1071,18 @@ public class VeloAuth {
     /** @return shared RFC 6238 TOTP verifier (stateless). */
     public TotpService getTotpService() {
         return totpService;
+    }
+
+    /** @return dialog (GUI) login service, or {@code null} when disabled/unsupported. */
+    @javax.annotation.Nullable
+    public net.rafalohaki.veloauth.dialog.DialogAuthService getDialogAuthService() {
+        return dialogAuthService;
+    }
+
+    /** @return true while the player authenticates through the pre-join dialog. */
+    public boolean isDialogPreJoinSession(UUID playerId) {
+        net.rafalohaki.veloauth.dialog.DialogAuthService service = dialogAuthService;
+        return service != null && service.isPreJoinSession(playerId);
     }
 
     /** @return store of in-flight 2FA verification states (post-BCrypt and pending /2fa setup). */

@@ -6,7 +6,7 @@
 
     <groupId>net.rafalohaki.veloauth</groupId>
     <artifactId>veloauth</artifactId>
-    <version>1.6.2</version>
+    <version>1.6.3</version>
     <packaging>jar</packaging>
 
     <name>VeloAuth</name>
@@ -130,6 +130,13 @@
         <dependency>
             <groupId>net.kyori</groupId>
             <artifactId>adventure-api</artifactId>
+            <version>4.26.1</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- NBT used by the dialog (GUI) login packets; shipped inside Velocity at runtime -->
+        <dependency>
+            <groupId>net.kyori</groupId>
+            <artifactId>adventure-nbt</artifactId>
             <version>4.26.1</version>
             <scope>provided</scope>
         </dependency>
@@ -394,6 +401,16 @@
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
+                <excludes>
+                    <exclude>**/*.der</exclude>
+                </excludes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <includes>
+                    <include>**/*.der</include>
+                </includes>
             </resource>
             <resource>
                 <directory>${project.basedir}</directory>
@@ -649,6 +666,10 @@
                                     <exclude>net.kyori:adventure-text-serializer-legacy</exclude>
                                     <exclude>net.kyori:adventure-text-serializer-plain</exclude>
                                     <exclude>net.kyori:adventure-text-serializer-commons</exclude>
+                                    <!-- Velocity also ships adventure-nbt; the dialog login builds
+                                         CompoundBinaryTag instances that are handed to Velocity's own
+                                         DialogShowPacket, so the NBT types must be the proxy's. -->
+                                    <exclude>net.kyori:adventure-nbt</exclude>
                                     <!-- Adventure's proxy-provided Gson serializer exposes Gson
                                          types in its public method descriptors. MCProtocolLib must
                                          use Velocity's matching Gson type universe as well; bundling
@@ -741,10 +762,6 @@
                                 <relocation>
                                     <pattern>net.kyori.adventure.text.serializer.json.legacyimpl</pattern>
                                     <shadedPattern>net.rafalohaki.veloauth.libs.kyori.json.legacyimpl</shadedPattern>
-                                </relocation>
-                                <relocation>
-                                    <pattern>net.kyori.adventure.nbt</pattern>
-                                    <shadedPattern>net.rafalohaki.veloauth.libs.kyori.nbt</shadedPattern>
                                 </relocation>
                             </relocations>
                             <transformers>

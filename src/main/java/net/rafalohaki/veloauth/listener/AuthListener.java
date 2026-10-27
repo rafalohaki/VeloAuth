@@ -2,6 +2,8 @@ package net.rafalohaki.veloauth.listener;
 
 import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.player.PlayerChatEvent;
+import com.velocitypowered.api.event.command.CommandExecuteEvent;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
@@ -19,6 +21,8 @@ import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.auth.ConflictModeService;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
+import net.rafalohaki.veloauth.dialog.DialogAuthService;
+import net.rafalohaki.veloauth.premium.PremiumNameAttemptTracker;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
@@ -43,11 +47,13 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import javax.annotation.Nullable;
 
 /**
  * Listener eventów autoryzacji VeloAuth.
@@ -122,6 +128,12 @@ public class AuthListener {
      * @param messages          System wiadomości i18n
      */
     @Inject
+    private final PremiumNameAttemptTracker premiumNameAttempts = new PremiumNameAttemptTracker();
+    private final PremiumOwnershipCheckHandler premiumOwnership;
+    /** Delay before the form is re-opened after a typed command (lets VeloAuth answer first). */
+    private static final long FORM_RESHOW_DELAY_MILLIS = 400L;
+    /** Lets the "verified" dialog reach the client before the transfer/kick. */
+
     public AuthListener(VeloAuth plugin,
             AuthCache authCache,
             Settings settings,
@@ -143,6 +155,8 @@ public class AuthListener {
             "PreLoginHandler cannot be null - initialization failed");
         this.postLoginHandler = java.util.Objects.requireNonNull(postLoginHandler, 
             "PostLoginHandler cannot be null - initialization failed");
+        this.premiumOwnership = new PremiumOwnershipCheckHandler(plugin, settings, messages, authCache,
+                databaseManager, connectionManager, premiumNameAttempts);
         this.uuidVerificationHandler = new UuidVerificationHandler(databaseManager, authCache, logger,
                 plugin::getAuditLogService,
                 new ConflictModeService(databaseManager, settings.getConflictModeTtlHours()));
@@ -265,7 +279,8 @@ public class AuthListener {
             logger.warn(SECURITY_MARKER, "[DUPLICATE PRELOGIN] {} from {} - already connecting, denying",
                     username, pendingLoginKey);
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    messages.component("connection.already_connecting", NamedTextColor.RED)));
+                    connectionMessage(PlayerAddressUtils.getAddressFromPreLogin(event), username,
+                            "connection.already_connecting")));
             return null;
         }
 
@@ -377,8 +392,7 @@ public class AuthListener {
     private boolean validatePluginInitialized(PreLoginEvent event, String username) {
         if (!plugin.isInitialized()) {
             logger.warn("STARTUP BLOCK: Player {} tried to connect before VeloAuth fully initialized - PreLogin block", username);
-            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(localizedOrFallback(
-                    "system.starting", "VeloAuth is starting. Please wait.", NamedTextColor.RED)));
+            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(preLoginMessage(event, "system.starting")));
             return false;
         }
         return true;
@@ -387,8 +401,7 @@ public class AuthListener {
     private boolean validateHandlerInitialized(PreLoginEvent event, String username) {
         if (preLoginHandler == null) {
             logger.error("CRITICAL: PreLoginHandler is null during event processing for player {}", username);
-            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(localizedOrFallback(
-                    "system.init_error", "System initialization error.", NamedTextColor.RED)));
+            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(preLoginMessage(event, "system.init_error")));
             return false;
         }
         return true;
@@ -398,10 +411,37 @@ public class AuthListener {
         if (!preLoginHandler.isValidUsername(username)) {
             logger.warn(SECURITY_MARKER, "[USERNAME VALIDATION FAILED] {} - invalid format", username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    messages.component("validation.username.invalid", NamedTextColor.RED)));
+                    preLoginMessage(event, "validation.username.invalid")));
             return false;
         }
         return true;
+    }
+
+    /**
+     * Denial message for a connection that has no client settings yet (pre-login). Uses the
+     * language remembered from the player's last dialog session for this address/nick and falls
+     * back to the configured language.
+     */
+    private Component preLoginMessage(PreLoginEvent event, String key) {
+        return messages.componentForLanguage(rememberedLanguage(event), key, NamedTextColor.RED);
+    }
+
+    private Component connectionMessage(InetAddress address, String username, String key, Object... args) {
+        return messages.componentForLanguage(rememberedLanguage(address, username), key, NamedTextColor.RED, args);
+    }
+
+    @Nullable
+    private String rememberedLanguage(PreLoginEvent event) {
+        return rememberedLanguage(PlayerAddressUtils.getAddressFromPreLogin(event), event.getUsername());
+    }
+
+    @Nullable
+    private String rememberedLanguage(@Nullable InetAddress address, String username) {
+        DialogAuthService dialogAuth = plugin.getDialogAuthService();
+        if (dialogAuth == null || address == null) {
+            return null;
+        }
+        return dialogAuth.rememberedLanguage(address.getHostAddress(), username);
     }
 
     private boolean checkBruteForceBlocked(PreLoginEvent event) {
@@ -412,7 +452,7 @@ public class AuthListener {
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} blocked", playerIp);
             }
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    messages.component("security.brute_force.blocked", NamedTextColor.RED)));
+                    connectionMessage(playerAddress, event.getUsername(), "security.brute_force.blocked")));
             return true;
         }
         return false;
@@ -439,7 +479,7 @@ public class AuthListener {
                             "[ASYNC] Error during premium detection for {} - denying login for safety",
                             username, throwable);
                     event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                            messages.component(MSG_CONNECTION_ERROR_DATABASE, NamedTextColor.RED)));
+                            preLoginMessage(event, MSG_CONNECTION_ERROR_DATABASE)));
                     return null;
                 });
     }
@@ -463,7 +503,7 @@ public class AuthListener {
         logger.error("[SECURITY] Login DENIED for {} - cannot verify premium status (all API resolvers failed)",
                 username);
         event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                messages.component("security.api_failure.denied", NamedTextColor.RED)));
+                preLoginMessage(event, "security.api_failure.denied")));
     }
 
     private void applyPremiumDetectionResult(
@@ -482,7 +522,7 @@ public class AuthListener {
         }
 
         boolean playerExistsInDb = dbResult.getValue() != null;
-        setPremiumLoginMode(event, username, result.premium(), playerExistsInDb, premiumSettings);
+        setPremiumLoginMode(event, username, result, playerExistsInDb, premiumSettings);
     }
 
     private void handlePremiumLookupDatabaseError(
@@ -493,7 +533,7 @@ public class AuthListener {
             logger.warn("[SECURITY] Denying premium player {} - DB error would corrupt UUID in offline mode",
                     username);
             event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                    messages.component(MSG_CONNECTION_ERROR_DATABASE, NamedTextColor.RED)));
+                    preLoginMessage(event, MSG_CONNECTION_ERROR_DATABASE)));
         } else {
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
         }
@@ -513,16 +553,22 @@ public class AuthListener {
             return false;
         }
 
-        preLoginHandler.handleNicknameConflict(event, existingPlayer, result.premium(), result.premiumUuid());
+        try (AutoCloseable ignored = messages.languageScope(rememberedLanguage(event))) {
+            preLoginHandler.handleNicknameConflict(event, existingPlayer, result.premium(), result.premiumUuid());
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
         return true;
     }
 
     private void setPremiumLoginMode(
             PreLoginEvent event,
             String username,
-            boolean premium,
+            PreLoginHandler.PremiumResolutionResult result,
             boolean playerExistsInDb,
             Settings.PremiumSettings premiumSettings) {
+        boolean premium = result.premium();
+        UUID premiumUuid = result.premiumUuid();
         if (!premium) {
             event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
             return;
@@ -541,6 +587,12 @@ public class AuthListener {
             return;
         }
 
+        if (!playerExistsInDb && premiumOwnership.shouldRunCheck(event, username, premiumUuid)) {
+            // Unknown client on a premium nick: admit it offline (no encryption request) and prove
+            // ownership on the auth server with the client's Mojang profile key.
+            event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
+            return;
+        }
         event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
     }
 
@@ -554,7 +606,11 @@ public class AuthListener {
         Settings.OperationSettings operationSettings = settings.captureOperationSettings();
         Settings.PremiumSettings premiumSettings = operationSettings.premium();
         Settings.FloodgateSettings floodgateSettings = operationSettings.floodgate();
-        if (!premiumSettings.isCheckEnabled() || !event.isOnlineMode()) {
+        if (!premiumSettings.isCheckEnabled()) {
+            return null;
+        }
+        if (!event.isOnlineMode()) {
+            applyPremiumCheckProfile(event);
             return null;
         }
 
@@ -570,6 +626,29 @@ public class AuthListener {
                         ? CompletableFuture.completedFuture(null)
                         : reconcileVerifiedProfile(event, verifiedPremiumUuid, bindingKey));
         return EventTask.resumeWhenComplete(reconciliation);
+    }
+
+    /**
+     * Premium ownership check (offline admission): the vanilla client only sends its Mojang profile
+     * key ({@code chat_session_update}) when the UUID it received in Login Success is its own
+     * account UUID. With Velocity's offline UUID a real owner would therefore look exactly like a
+     * cracked client, so the connection gets the resolved Mojang UUID for the duration of the
+     * check. Nothing is authenticated by this; the key signature still has to verify.
+     */
+    private void applyPremiumCheckProfile(GameProfileRequestEvent event) {
+        InetAddress address = event.getConnection() != null
+                && event.getConnection().getRemoteAddress() instanceof java.net.InetSocketAddress socket
+                ? socket.getAddress() : null;
+        if (address == null) {
+            return;
+        }
+        UUID premiumUuid = premiumNameAttempts.peekCheck(address.getHostAddress(), event.getUsername());
+        if (premiumUuid == null || premiumUuid.equals(event.getOriginalProfile().getId())) {
+            return;
+        }
+        event.setGameProfile(event.getOriginalProfile().withId(premiumUuid));
+        logger.debug(PREMIUM_MARKER, "[PREMIUM CHECK] {} admitted offline with Mojang UUID {} for the ownership check",
+                event.getUsername(), premiumUuid);
     }
 
     private CompletableFuture<Void> reconcileVerifiedProfile(
@@ -626,9 +705,7 @@ public class AuthListener {
             logger.warn(
                 "STARTUP BLOCK: Player {} tried to login before VeloAuth fully initialized - login block",
                 playerName);
-            // Use English fallback - Messages may not be available yet
-            event.setResult(ComponentResult.denied(localizedOrFallback(
-                    "system.starting", "VeloAuth is starting. Please wait.", NamedTextColor.RED)));
+            event.setResult(ComponentResult.denied(messages.forPlayer(player, "system.starting", NamedTextColor.RED)));
             return;
         }
 
@@ -639,7 +716,7 @@ public class AuthListener {
                     "Denying {} because the Mojang profile could not be safely bound to AUTH.UUID",
                     playerName);
             event.setResult(ComponentResult.denied(
-                    messages.component(MSG_CONNECTION_ERROR_DATABASE, NamedTextColor.RED)));
+                    messages.forPlayer(player, MSG_CONNECTION_ERROR_DATABASE, NamedTextColor.RED)));
             return;
         }
 
@@ -655,12 +732,64 @@ public class AuthListener {
                     playerName, playerAddressText);
 
             event.setResult(ComponentResult.denied(
-                messages.component("security.brute_force.blocked", NamedTextColor.RED)));
+                connectionMessage(playerAddress, playerName, "security.brute_force.blocked")));
             return;
         }
 
         // Premium check został przeniesiony do PreLoginEvent
         event.setResult(ComponentResult.allowed());
+    }
+
+    /**
+     * While the premium-name notice (or the ownership check) is open the connection may not run
+     * any command: {@code /register}, {@code /login} and the like are denied and the notice is
+     * simply shown again.
+     */
+    @Subscribe(priority = Short.MAX_VALUE)
+    public void onCommandDuringPremiumNotice(CommandExecuteEvent event) {
+        if (!(event.getCommandSource() instanceof Player player)) {
+            return;
+        }
+        DialogAuthService dialogAuth = plugin.getDialogAuthService();
+        if (dialogAuth == null) {
+            return;
+        }
+        UUID playerUuid = player.getUniqueId();
+        if (dialogAuth.isFormSession(playerUuid)) {
+            // /login, /register ... stay VeloAuth's own commands; the form simply comes back
+            // afterwards unless the command authenticated the player.
+            plugin.getServer().getScheduler()
+                    .buildTask(plugin, () -> dialogAuth.reshowForm(playerUuid))
+                    .delay(FORM_RESHOW_DELAY_MILLIS, TimeUnit.MILLISECONDS)
+                    .schedule();
+            return;
+        }
+        if (!dialogAuth.isPremiumNameNotice(playerUuid) && !dialogAuth.isPremiumCheck(playerUuid)) {
+            return;
+        }
+        event.setResult(CommandExecuteEvent.CommandResult.denied());
+        logger.debug(PREMIUM_MARKER, "[PREMIUM NAME] command '{}' denied for {} during notice",
+                event.getCommand(), player.getUsername());
+        dialogAuth.reshowPremiumNameNotice(playerUuid);
+    }
+
+    /** Same as {@link #onCommandDuringPremiumNotice} for plain chat messages. */
+    @Subscribe(priority = Short.MAX_VALUE)
+    public void onChatDuringPremiumNotice(PlayerChatEvent event) {
+        DialogAuthService dialogAuth = plugin.getDialogAuthService();
+        if (dialogAuth == null) {
+            return;
+        }
+        UUID playerUuid = event.getPlayer().getUniqueId();
+        if (dialogAuth.isFormSession(playerUuid)) {
+            dialogAuth.reshowForm(playerUuid);
+            return;
+        }
+        if (!dialogAuth.isPremiumNameNotice(playerUuid) && !dialogAuth.isPremiumCheck(playerUuid)) {
+            return;
+        }
+        event.setResult(PlayerChatEvent.ChatResult.denied());
+        dialogAuth.reshowPremiumNameNotice(playerUuid);
     }
 
     /**
@@ -674,6 +803,11 @@ public class AuthListener {
         UUID playerUuid = player.getUniqueId();
 
         rejectedProfileBindings.invalidate(profileBindingKey(player.getUsername(), player));
+
+        DialogAuthService dialogAuth = plugin.getDialogAuthService();
+        if (dialogAuth != null) {
+            dialogAuth.onDisconnect(playerUuid);
+        }
 
         boolean allowUnownedCleanup = allowsUnownedDisconnectCleanup(event, player);
         if (!connectionLifecycleRegistry.retire(
@@ -710,7 +844,7 @@ public class AuthListener {
      * Kieruje gracza na odpowiedni serwer (auth server lub backend).
      */
     @Subscribe(priority = 0) // NORMAL priority
-    public void onPostLogin(PostLoginEvent event) {
+    public EventTask onPostLogin(PostLoginEvent event) {
         Player player = event.getPlayer();
         UUID playerId = player.getUniqueId();
         String playerName = player.getUsername();
@@ -721,13 +855,13 @@ public class AuthListener {
                             player, playerId, playerName, previousConnection));
         } catch (RuntimeException publicationFailure) {
             handlePostLoginPublicationFailure(player, playerName, publicationFailure);
-            return;
+            return null;
         }
         if (operation == null) {
             logger.debug(SECURITY_MARKER,
                     "Ignoring late PostLoginEvent for {} after lifecycle shutdown",
                     playerName);
-            return;
+            return null;
         }
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
 
@@ -738,33 +872,52 @@ public class AuthListener {
         if (postLoginHandler == null) {
             logger.error("CRITICAL: PostLoginHandler is null during event processing for player {}", 
                 player.getUsername());
-            connectionLifecycleRegistry.runIfCurrent(operation, () -> player.disconnect(localizedOrFallback(
-                    "system.init_error", "System initialization error.", NamedTextColor.RED)));
-            return;
+            connectionLifecycleRegistry.runIfCurrent(operation, () -> player.disconnect(
+                    messages.forPlayer(player, "system.init_error", NamedTextColor.RED)));
+            return null;
         }
 
         try {
-            // 🔥 USE_OFFLINE: Check for conflict resolution messages - delegate to PostLoginHandler
-            // ASYNC: Run on virtual thread to avoid blocking Netty IO threads
+            // Conflict resolution messages run on a virtual thread (no Netty IO blocking)
             checkConflictMessageAsync(player, operation);
-
-            // Delegate to PostLoginHandler based on player mode
-            if (player.isOnlineMode()) {
-                connectionLifecycleRegistry.runIfCurrent(operation,
-                        () -> postLoginHandler.handlePremiumPlayer(player, playerIp));
-                return;
-            }
-
-            // Handle offline player - delegate to PostLoginHandler
-            connectionLifecycleRegistry.runIfCurrent(operation,
-                    () -> postLoginHandler.handleOfflinePlayer(player, playerIp));
-
+            routePostLogin(player, playerIp, operation);
         } catch (RuntimeException e) {
-            logger.error("Error handling PostLoginEvent for player: {}", event.getPlayer().getUsername(), e);
-
+            logger.error("Error handling PostLoginEvent for player: {}", playerName, e);
             connectionLifecycleRegistry.runIfCurrent(operation,
-                    () -> event.getPlayer().disconnect(messages.component(
-                            "connection.error.generic", NamedTextColor.RED)));
+                    () -> player.disconnect(messages.forPlayer(player, "connection.error.generic", NamedTextColor.RED)));
+        }
+        return null;
+    }
+
+    /** Premium players are authorized directly; offline connections go through the regular route. */
+    private void routePostLogin(Player player, String playerIp, Operation operation) {
+        String playerName = player.getUsername();
+        if (player.isOnlineMode()) {
+            premiumNameAttempts.clear(playerIp, playerName);
+            connectionLifecycleRegistry.runIfCurrent(operation,
+                    () -> postLoginHandler.handlePremiumPlayer(player, playerIp));
+            return;
+        }
+
+        // Premium ownership check: this offline connection is routed to the auth server where the
+        // client's Mojang profile key decides between the real owner and a cracked client.
+        UUID premiumCheckUuid = premiumNameAttempts.consumeCheck(playerIp, playerName);
+        if (premiumCheckUuid != null) {
+            premiumOwnership.startCheck(player, premiumCheckUuid, operation);
+            return;
+        }
+
+        connectionLifecycleRegistry.runIfCurrent(operation,
+                () -> postLoginHandler.handleOfflinePlayer(player, playerIp));
+
+        // Dialog login (1.21.6+): the session is only prepared here. The player takes VeloAuth's
+        // regular route to the auth server and the form opens there (ServerConnectedEvent).
+        DialogAuthService dialogAuth = plugin.getDialogAuthService();
+        if (dialogAuth != null && dialogAuth.shouldHandle(player)) {
+            connectionLifecycleRegistry.runIfCurrent(operation, () -> {
+                logger.debug(AUTH_MARKER, "Preparing dialog authentication for {}", playerName);
+                dialogAuth.begin(player);
+            });
         }
     }
 
@@ -798,7 +951,7 @@ public class AuthListener {
                 "Failed to publish connection lifecycle for {} - disconnecting fail-secure",
                 playerName, publicationFailure);
         try {
-            player.disconnect(messages.component("connection.error.generic", NamedTextColor.RED));
+            player.disconnect(messages.forPlayer(player, "connection.error.generic", NamedTextColor.RED));
         } catch (RuntimeException disconnectFailure) {
             logger.error(SECURITY_MARKER,
                     "Failed to disconnect {} after PostLogin publication failure",
@@ -915,6 +1068,21 @@ public class AuthListener {
             return null;
         }
 
+        // 🪟 DIALOG LOGIN: the player already authenticated through the configuration-phase
+        // dialog - route straight to the real backend, never to the auth server.
+        DialogAuthService dialogAuth = plugin.getDialogAuthService();
+        if (dialogAuth != null && dialogAuth.consumeAuthenticated(player)) {
+            if (targetIsAuthServer) {
+                return EventTask.resumeWhenComplete(selectInitialBackendAsync(
+                        event, player, () -> isAuthorizedWithSession(player),
+                        AUTH_MARKER, "Dialog-authenticated", operation));
+            }
+            logger.info(AUTH_MARKER, "Dialog-authenticated player {} -> {} (skipping auth server)",
+                    player.getUsername(), targetServerName);
+            allowServerIfCurrent(event, targetServer, operation);
+            return null;
+        }
+
         // ✅ BEDROCK/FLOODGATE: Skip auth server for Bedrock players.
         // Floodgate already authenticated the player via Xbox Live during the handshake
         // phase, before this event fires. Redirecting to limbo causes
@@ -964,10 +1132,16 @@ public class AuthListener {
         return null;
     }
 
-    private static boolean shouldBypassAuthServerForPremium(
+    private boolean shouldBypassAuthServerForPremium(
             Player player,
             Settings.PremiumSettings premiumSettings) {
-        return premiumSettings.isBypassAuthServer() && player.isOnlineMode();
+        return player.isOnlineMode() && premiumSettings.isBypassAuthServer();
+    }
+
+    private boolean isAuthorizedWithSession(Player player) {
+        String ip = PlayerAddressUtils.getPlayerIp(player);
+        return authCache.isPlayerAuthorized(player.getUniqueId(), ip)
+                && authCache.hasActiveSession(player.getUniqueId(), player.getUsername(), ip);
     }
 
     private CompletableFuture<Void> selectInitialBackendAsync(
@@ -1184,10 +1358,15 @@ public class AuthListener {
             logger.debug("ServerConnectedEvent for player {} -> server {}",
                     player.getUsername(), serverName);
 
-            if (!connectionManager.isAuthServer(event.getServer())) {
-                handleBackendConnection(player, serverName, operation);
-            } else {
+            boolean authServer = connectionManager.isAuthServer(event.getServer());
+            DialogAuthService dialogAuth = plugin.getDialogAuthService();
+            // Dialog users get no plugin chat lines (the GUI already said everything).
+            boolean dialogHandled = dialogAuth != null && dialogAuth.onServerConnected(player, authServer);
+
+            if (authServer) {
                 handleAuthServerConnection(player, operation);
+            } else if (!dialogHandled) {
+                handleBackendConnection(player, serverName, operation);
             }
         } catch (RuntimeException e) {
             logger.error("Error in ServerConnected", e);
@@ -1200,13 +1379,17 @@ public class AuthListener {
                 logger.debug(AUTH_MARKER, messages.get("player.connected.backend"),
                         player.getUsername(), serverName);
             }
-            player.sendMessage(messages.component("general.welcome.full", NamedTextColor.GREEN));
+            player.sendMessage(messages.forPlayer(player, "general.welcome.full", NamedTextColor.GREEN));
         });
     }
 
     private void handleAuthServerConnection(Player player, Operation operation) {
         if (logger.isDebugEnabled()) {
             logger.debug(AUTH_MARKER, "ServerConnected to auth server: {}", player.getUsername());
+        }
+        DialogAuthService dialogAuth = plugin.getDialogAuthService();
+        if (dialogAuth != null && dialogAuth.isPremiumCheck(player.getUniqueId())) {
+            return; // the ownership check owns this connection (dialog + kick/hand-over)
         }
 
         String playerIp = PlayerAddressUtils.getPlayerIp(player);
@@ -1220,6 +1403,13 @@ public class AuthListener {
             if (refreshPremiumAuthorizationIfCurrent(player, playerIp, operation)) {
                 triggerAutoTransfer(player, operation);
             }
+            return;
+        }
+
+        if (dialogAuth != null && dialogAuth.isFormSession(player.getUniqueId())) {
+            // The GUI form replaces the chat instructions; VeloAuth's auth timeout still applies.
+            connectionLifecycleRegistry.runIfCurrent(operation,
+                    () -> plugin.getAuthTimeoutScheduler().schedule(player));
             return;
         }
 
@@ -1278,13 +1468,6 @@ public class AuthListener {
         }
     }
 
-
-    private Component localizedOrFallback(String key, String fallback, NamedTextColor fallbackColor) {
-        if (messages == null) {
-            return Component.text(fallback, fallbackColor);
-        }
-        return messages.component(key, fallbackColor);
-    }
 
     private record PendingLoginAttempt(InboundConnection connection) {
     }

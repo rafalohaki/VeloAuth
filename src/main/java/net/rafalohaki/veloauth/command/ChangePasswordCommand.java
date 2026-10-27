@@ -101,7 +101,7 @@ class ChangePasswordCommand implements SimpleCommand {
         }
         if (authCtx.registeredPlayer() == null) {
             ctx.runIfConnectionCurrent(operation,
-                    () -> authCtx.player().sendMessage(ctx.messages().component(
+                    () -> authCtx.player().sendMessage(ctx.messages().forPlayer(authCtx.player(), 
                             "auth.login.not_registered", NamedTextColor.RED)));
             return null;
         }
@@ -114,7 +114,7 @@ class ChangePasswordCommand implements SimpleCommand {
             // Premium accounts have no password hash — same guard as LoginCommand,
             // otherwise BCrypt.verify throws IllegalArgumentException on null hash.
             ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
-                    () -> authCtx.player().sendMessage(ctx.messages().component(
+                    () -> authCtx.player().sendMessage(ctx.messages().forPlayer(authCtx.player(), 
                             "auth.login.not_registered", NamedTextColor.RED)));
             return false;
         }
@@ -124,7 +124,7 @@ class ChangePasswordCommand implements SimpleCommand {
         }
         if (!result.verified) {
             ctx.runIfConnectionCurrent(authCtx.connectionOperation(), () -> {
-                authCtx.player().sendMessage(ctx.messages().component(
+                authCtx.player().sendMessage(ctx.messages().forPlayer(authCtx.player(), 
                         "auth.changepassword.incorrect_old_password", NamedTextColor.RED));
                 SecurityUtils.registerFailedLogin(
                         authCtx.playerAddress(), authCtx.username(), ctx.authCache());
@@ -183,7 +183,7 @@ class ChangePasswordCommand implements SimpleCommand {
         disconnectDuplicateSessions(origin, authCtx.username(), playerIp);
 
         ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
-                () -> authCtx.player().sendMessage(ctx.messages().component(
+                () -> authCtx.player().sendMessage(ctx.messages().forPlayer(authCtx.player(), 
                         "auth.changepassword.success", NamedTextColor.GREEN)));
         if (ctx.logger().isInfoEnabled()) {
             ctx.logger().info(AUTH_MARKER, "Player {} changed password from IP {}",

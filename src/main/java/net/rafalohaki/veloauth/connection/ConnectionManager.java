@@ -211,7 +211,7 @@ public class ConnectionManager {
                     authServerProvider.serverName());
 
             if (state == null || !isStale(state)) {
-                player.disconnect(messages.component("connection.error.auth_server", NamedTextColor.RED));
+                player.disconnect(messages.forPlayer(player, "connection.error.auth_server", NamedTextColor.RED));
             }
             return null;
         }
@@ -228,7 +228,7 @@ public class ConnectionManager {
         }
 
         if (!isStale(state)) {
-            player.disconnect(messages.component("connection.error.auth_connect", NamedTextColor.RED));
+            player.disconnect(messages.forPlayer(player, "connection.error.auth_connect", NamedTextColor.RED));
         }
         return false;
     }
@@ -310,7 +310,7 @@ public class ConnectionManager {
             }
 
             if (!isStale(state)) {
-                player.sendMessage(messages.component("connection.error.auth_server", NamedTextColor.RED));
+                player.sendMessage(messages.forPlayer(player, "connection.error.auth_server", NamedTextColor.RED));
             }
             return false;
         }
@@ -329,7 +329,7 @@ public class ConnectionManager {
         }
 
         if (!isStale(state)) {
-            player.sendMessage(messages.component("connection.error.auth_connect", NamedTextColor.RED));
+            player.sendMessage(messages.forPlayer(player, "connection.error.auth_connect", NamedTextColor.RED));
         }
         return false;
     }
@@ -479,10 +479,10 @@ public class ConnectionManager {
         logger.warn("Auth-server preparation rejected player {} (reason={})",
                 player.getUsername(), preparation);
         if (preparation == AuthServerProvider.Preparation.UNSUPPORTED_PROTOCOL) {
-            player.disconnect(messages.component(
+            player.disconnect(messages.forPlayer(player, 
                     messageKey, NamedTextColor.RED, authServerProvider.compatibilityDescription()));
         } else {
-            player.disconnect(messages.component(messageKey, NamedTextColor.RED));
+            player.disconnect(messages.forPlayer(player, messageKey, NamedTextColor.RED));
         }
         return false;
     }

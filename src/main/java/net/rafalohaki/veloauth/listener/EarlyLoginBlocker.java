@@ -56,13 +56,22 @@ public class EarlyLoginBlocker {
                         .exceptionally(throwable -> {
                             logger.warn("STARTUP QUEUE: Initialization failed or auth delegation "
                                             + "errored for {} - denying connection", username, throwable);
-                            // i18n not available here — Messages is initialized after EarlyLoginBlocker registers
-                            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
-                                    Component.text("VeloAuth ⏳",
-                                            NamedTextColor.RED)));
+                            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(startupDenialMessage()));
                             return null;
                         })
         );
+    }
+
+    /**
+     * Messages may still be unavailable when initialization itself failed; fall back to a
+     * plain English line in that case.
+     */
+    private Component startupDenialMessage() {
+        net.rafalohaki.veloauth.i18n.Messages messages = plugin.getMessages();
+        if (messages == null) {
+            return Component.text("VeloAuth is starting. Please wait.", NamedTextColor.RED);
+        }
+        return messages.component("system.starting", NamedTextColor.RED);
     }
 
     /**

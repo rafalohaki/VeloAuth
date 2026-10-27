@@ -70,7 +70,8 @@ class RegisterCommand implements SimpleCommand {
                 ERROR_DATABASE_QUERY);
     }
 
-    private void processRegistration(
+    /** Full /register pipeline; package-private so the dialog (GUI) flow can reuse it verbatim. */
+    void processRegistration(
             Player player, String password,
             ConnectionLifecycleRegistry.Operation operation,
             Settings.PasswordSettings passwordSettings,
@@ -129,7 +130,7 @@ class RegisterCommand implements SimpleCommand {
                 player.getUsername());
         ctx.completeRegistrationWithoutCommit(
                 operation, commitPermit,
-                () -> player.sendMessage(ctx.messages().component(
+                () -> player.sendMessage(ctx.messages().forPlayer(player,
                         "security.brute_force.blocked", NamedTextColor.RED)));
         ctx.releaseCommandLock(operation.playerId(), operation);
         return false;
@@ -181,7 +182,7 @@ class RegisterCommand implements SimpleCommand {
         if (authContext.registeredPlayer() != null) {
             ctx.completeRegistrationWithoutCommit(
                     authContext.connectionOperation(), commitPermit,
-                    () -> authContext.player().sendMessage(ctx.messages().component(
+                    () -> authContext.player().sendMessage(ctx.messages().forPlayer(authContext.player(), 
                             "auth.register.already_registered", NamedTextColor.RED)));
             return;
         }
@@ -189,7 +190,7 @@ class RegisterCommand implements SimpleCommand {
         if (exceedsIpRegistrationLimit(authContext, passwordSettings)) {
             ctx.completeRegistrationWithoutCommit(
                     authContext.connectionOperation(), commitPermit,
-                    () -> player.sendMessage(ctx.messages().component(
+                    () -> player.sendMessage(ctx.messages().forPlayer(player,
                             "register.ip_limit_reached", NamedTextColor.RED)));
             return;
         }
@@ -206,7 +207,7 @@ class RegisterCommand implements SimpleCommand {
 
         if (PostAuthFlow.execute(ctx, authContext, newPlayer, "registered")) {
             ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> {
-                authContext.player().sendMessage(ctx.messages().component(
+                authContext.player().sendMessage(ctx.messages().forPlayer(authContext.player(), 
                         "auth.register.success", NamedTextColor.GREEN));
                 emitRegisterAudit(authContext);
             });
@@ -278,7 +279,7 @@ class RegisterCommand implements SimpleCommand {
             case CREATED -> true;
             case DUPLICATE -> {
                 ctx.runIfConnectionCurrent(authContext.connectionOperation(),
-                        () -> authContext.player().sendMessage(ctx.messages().component(
+                        () -> authContext.player().sendMessage(ctx.messages().forPlayer(authContext.player(), 
                                 "auth.register.already_registered", NamedTextColor.RED)));
                 yield false;
             }
@@ -286,7 +287,7 @@ class RegisterCommand implements SimpleCommand {
             case COMMIT_UNKNOWN -> {
                 if (commitPermit.claimCommitUnknownMessage()) {
                     ctx.runIfConnectionCurrent(authContext.connectionOperation(),
-                            () -> authContext.player().sendMessage(ctx.messages().component(
+                            () -> authContext.player().sendMessage(ctx.messages().forPlayer(authContext.player(), 
                                     "auth.registration.commit_unknown", NamedTextColor.RED)));
                 }
                 yield false;
