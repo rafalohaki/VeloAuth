@@ -366,14 +366,13 @@ public final class DatabaseConfig {
     
     private static String addMySqlDefaultParams(String params) {
         if (params.isEmpty()) {
-            return "?serverTimezone=UTC&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048"
-                    + "&sslMode=VERIFY_IDENTITY";
+            return "?useSSL=false&serverTimezone=UTC&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048";
         }
         if (hasMySqlParameter(params, "sslMode") || hasMySqlParameter(params, "useSSL")) {
             return params;
         }
         return params + (params.endsWith("?") || params.endsWith("&") ? "" : "&")
-                + "sslMode=VERIFY_IDENTITY";
+                + "useSSL=false";
     }
 
     private static boolean hasMySqlParameter(String parameters, String expectedName) {

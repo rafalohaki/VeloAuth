@@ -47,11 +47,8 @@ database:
   # Optional: Additional connection parameters
   # Query parameters inside connection-url are ignored; place them here instead.
   # For PostgreSQL SSL options, prefer database.postgresql.* settings below.
-  # Example: "?autoReconnect=true&initialTimeout=1&serverTimezone=UTC"
+  # Example: "?autoReconnect=true&initialTimeout=1&useSSL=false&serverTimezone=UTC"
   connection-parameters: ""
-  # MySQL defaults to sslMode=VERIFY_IDENTITY when no SSL option is set. The server certificate
-  # must be trusted by the JVM and match the configured hostname; explicit sslMode/useSSL options
-  # in connection-parameters are respected.
 
   # PostgreSQL-specific configuration (used when storage-type is POSTGRESQL)
   postgresql:

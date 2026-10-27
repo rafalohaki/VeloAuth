@@ -592,10 +592,7 @@ failure leaves the alert eligible for retry; only one delivery attempt can be in
 ### Database Config
 
 Supported: H2 (default, local), SQLite (local), MySQL and PostgreSQL. Remote databases use HikariCP;
-local databases use direct JDBC. MySQL connections default to `sslMode=VERIFY_IDENTITY`; the server
-certificate must be trusted by the JVM and match `database.hostname`. Explicit `sslMode` or legacy
-`useSSL` settings in `connection-parameters` override that default. A minimal PostgreSQL
-configuration is:
+local databases use direct JDBC. A minimal PostgreSQL configuration is:
 
 ```yaml
 database:
