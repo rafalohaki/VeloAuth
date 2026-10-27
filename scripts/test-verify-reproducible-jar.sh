@@ -177,13 +177,22 @@ for variable_name in "${BUILD_AFFECTING_ENVIRONMENT[@]}"; do
     || fail "${variable_name} must fail before JDK discovery or either Maven build"
 done
 EMPTY_ENVIRONMENT_OUTPUT="${TEMP_DIR}/environment-empty.out"
+NO_JAVA_BIN="${TEMP_DIR}/no-java-bin"
+mkdir -p "${NO_JAVA_BIN}"
+for command_name in awk basename bash cat chmod cmp diff dirname find git grep head \
+    mktemp mkdir python3 rm sed sha256sum sort tr uname wc; do
+  ln -s "$(command -v "${command_name}")" "${NO_JAVA_BIN}/${command_name}"
+done
 run_expect_failure "${EMPTY_ENVIRONMENT_OUTPUT}" "${CLEAN_BUILD_ENVIRONMENT[@]}" \
+  PATH="${NO_JAVA_BIN}" JAVA_HOME="${TEMP_DIR}/missing-jdk" \
   VELOAUTH_JAVA25_HOME="${TEMP_DIR}/missing-jdk" VELOAUTH_REPRO_ALLOW_JDK_DOWNLOAD=false \
   MAVEN_ARGS= "${VERIFIER}"
 if grep -Fq "Build-affecting environment variable must be empty or unset" \
     "${EMPTY_ENVIRONMENT_OUTPUT}"; then
   fail "an explicitly empty build-affecting variable must remain allowed"
 fi
+grep -Fq "Exact Temurin 25.0.4+7 was not found" "${EMPTY_ENVIRONMENT_OUTPUT}" \
+  || fail "empty MAVEN_ARGS must reach the expected missing-JDK failure"
 
 CLEANUP_PARENT="${TEMP_DIR}/cleanup-parent"
 mkdir -p "${CLEANUP_PARENT}/unrelated-sibling"
