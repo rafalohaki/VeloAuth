@@ -85,7 +85,7 @@ required_dependencies = {
     "org.junit.jupiter:junit-jupiter-api": ("6.1.3", "test"),
     "org.junit.jupiter:junit-jupiter-params": ("6.1.3", "test"),
     "org.junit.jupiter:junit-jupiter-engine": ("6.1.3", "test"),
-    "org.slf4j:slf4j-simple": ("2.0.18", "test"),
+    "org.slf4j:slf4j-simple": ("2.0.20", "test"),
 }
 for coordinate, expected in required_dependencies.items():
     if dependencies.get(coordinate) != expected:
@@ -293,10 +293,10 @@ if sbom_path:
         ("net.kyori", "adventure-text-serializer-plain", "5.2.0"),
         ("com.google.code.gson", "gson", "2.13.2"),
         ("io.netty", "netty-codec-base", "4.2.18.Final"),
-        ("com.mysql", "mysql-connector-j", "9.5.0"),
-        ("org.postgresql", "postgresql", "42.7.13"),
-        ("com.h2database", "h2", "2.4.240"),
-        ("org.xerial", "sqlite-jdbc", "3.53.4.0"),
+        ("com.mysql", "mysql-connector-j", "9.7.0"),
+        ("org.postgresql", "postgresql", "42.7.14"),
+        ("com.h2database", "h2", "2.5.252"),
+        ("org.xerial", "sqlite-jdbc", "3.54.1.0"),
     }
     missing_components = required_components - components
     if missing_components:

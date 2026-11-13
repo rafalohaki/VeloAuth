@@ -2,6 +2,14 @@
 
 All notable user-visible changes to VeloAuth are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Update bundled database and cache dependencies: MySQL Connector/J 9.7.0, PostgreSQL JDBC
+  42.7.14, H2 2.5.252, SQLite JDBC 3.54.1.0, HikariCP 6.3.3 and Caffeine 3.3.1.
+- Update test dependencies to Mockito 5.24.0 and align slf4j-simple with slf4j-api 2.0.20.
+
 ## [1.6.2] - 2026-10-07
 
 ### Added
