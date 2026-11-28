@@ -67,7 +67,7 @@ class EmbeddedLimboProtocolMatrixTest {
     }
 
     @Test
-    void login_Minecraft262Client_ShouldRequestVelocityForwardingAndEnterGame() throws Exception {
+    void login_LatestClient_ShouldRequestVelocityForwardingAndEnterGame() throws Exception {
         startServer();
 
         UUID playerId = UUID.randomUUID();
@@ -127,9 +127,9 @@ class EmbeddedLimboProtocolMatrixTest {
         assertArrayEquals(new byte[0], forwardingRequestData.get(),
                 "An empty request asks Velocity to use its compatible default forwarding version");
         assertTrue(joined.await(10, TimeUnit.SECONDS),
-                "Minecraft 26.2 client should receive its translated Join Game packet");
+                "The latest client should receive its translated Join Game packet");
         assertTrue(endDimensionId.get() >= 0,
-                "Minecraft 26.2 should receive the End dimension registry entry");
+                "The latest client should receive the End dimension registry entry");
         assertEquals(endDimensionId.get(), loginPacket.get().getCommonPlayerSpawnInfo().getDimension(),
                 "Translated Join Game must reference the End dimension type");
         assertEquals(Key.key("minecraft", "the_end"),
@@ -141,9 +141,9 @@ class EmbeddedLimboProtocolMatrixTest {
         assertTrue(loginPacket.get().isEnforcesSecureChat(),
                 "Embedded limbo should not trigger the modern client's insecure-chat warning toast");
         assertTrue(terrainLoadingStarted.await(10, TimeUnit.SECONDS),
-                "Minecraft 26.2 should receive the translated start-loading-chunks event");
+                "The latest client should receive the translated start-loading-chunks event");
         assertTrue(positionedOutsideVoidWorld.await(10, TimeUnit.SECONDS),
-                "Minecraft 26.2 should receive the translated initial player position");
+                "The latest client should receive the translated initial player position");
         assertEquals(400.0, positionPacket.get().getPosition().getY(),
                 "Modern clients must spawn above the unloaded void world to leave Loading terrain");
         assertTrue(keptAlive.await(20, TimeUnit.SECONDS),

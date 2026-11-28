@@ -3,8 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-EXPECTED_MCPROTOCOLLIB_SHA256="07ec18ba92c8b4041286eeff2470e08257fd1f383881515cba4a0a9bf6fa98c1"
-EXPECTED_VIAVERSION_SHA256="a4dd9f63257ed923f73a64ecece31010acd04247db12855383172e1226912b3e"
+EXPECTED_MCPROTOCOLLIB_SHA256="aac3344ae89b14d1dca961ff462532c4b75a7da42a4c73c470535e7c17a97874"
+EXPECTED_VIAVERSION_SHA256="baae1443e63fb34b8b64ecd3c74277d5fda8ffd98562c16045237c63b6bdc3ef"
+NBT_SERIALIZER_VERSION="0.2.1"
+EXPECTED_NBT_SERIALIZER_SHA256="0f0c1fcb3587ab767408fe642fcace12ef321b278ebcab2d685aeb553f282c64"
 
 if command -v mvnd >/dev/null 2>&1; then
   MAVEN=(mvnd)
@@ -46,6 +48,9 @@ fi
 "${MAVEN[@]}" -q -f "${PROJECT_DIR}/pom.xml" dependency:get \
   -Dartifact="com.viaversion:viaversion-common:${VIAVERSION_DEPENDENCY_VERSION}" \
   -Dtransitive=false
+"${MAVEN[@]}" -q -f "${PROJECT_DIR}/pom.xml" dependency:get \
+  -Dartifact="org.geysermc.mcprotocollib:text-serializer-nbt:${NBT_SERIALIZER_VERSION}" \
+  -Dtransitive=false
 
 MCPROTOCOLLIB_JAR="$(find \
   "${LOCAL_REPOSITORY}/org/geysermc/mcprotocollib/protocol" \
@@ -58,6 +63,11 @@ fi
 VIAVERSION_JAR="${LOCAL_REPOSITORY}/com/viaversion/viaversion-common/${VIAVERSION_DEPENDENCY_VERSION}/viaversion-common-${VIAVERSION_DEPENDENCY_VERSION}.jar"
 if [[ ! -f "${VIAVERSION_JAR}" ]]; then
   echo "Pinned ViaVersion runtime artifact was not found in the local Maven repository" >&2
+  exit 1
+fi
+NBT_SERIALIZER_JAR="${LOCAL_REPOSITORY}/org/geysermc/mcprotocollib/text-serializer-nbt/${NBT_SERIALIZER_VERSION}/text-serializer-nbt-${NBT_SERIALIZER_VERSION}.jar"
+if [[ ! -f "${NBT_SERIALIZER_JAR}" ]]; then
+  echo "Pinned MCProtocolLib NBT serializer was not found in the local Maven repository" >&2
   exit 1
 fi
 
@@ -89,5 +99,14 @@ if [[ "${ACTUAL_VIAVERSION_SHA256}" != "${EXPECTED_VIAVERSION_SHA256}" ]]; then
   exit 1
 fi
 
+ACTUAL_NBT_SERIALIZER_SHA256="$(sha256_file "${NBT_SERIALIZER_JAR}")"
+if [[ "${ACTUAL_NBT_SERIALIZER_SHA256}" != "${EXPECTED_NBT_SERIALIZER_SHA256}" ]]; then
+  echo "MCProtocolLib NBT serializer checksum mismatch" >&2
+  echo "Expected: ${EXPECTED_NBT_SERIALIZER_SHA256}" >&2
+  echo "Actual:   ${ACTUAL_NBT_SERIALIZER_SHA256}" >&2
+  exit 1
+fi
+
 echo "Verified MCProtocolLib ${MCPROTOCOLLIB_VERSION} SHA-256: ${ACTUAL_MCPROTOCOLLIB_SHA256}"
+echo "Verified MCProtocolLib NBT serializer ${NBT_SERIALIZER_VERSION} SHA-256: ${ACTUAL_NBT_SERIALIZER_SHA256}"
 echo "Verified ViaVersion ${VIAVERSION_VERSION} SHA-256: ${ACTUAL_VIAVERSION_SHA256}"

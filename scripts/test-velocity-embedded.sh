@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 PLUGIN_JAR_OVERRIDE="${VELOAUTH_PLUGIN_JAR:-}"
-EXPECTED_RUNTIME_VERSION="${VELOAUTH_EXPECTED_RUNTIME_VERSION:-5.11.0}"
+EXPECTED_RUNTIME_VERSION="${VELOAUTH_EXPECTED_RUNTIME_VERSION:-5.12.3}"
 COPY_TEST_MODE="${VELOAUTH_SMOKE_COPY_TEST_MODE:-false}"
 COPY_TEST_DESTINATION="${VELOAUTH_SMOKE_COPY_DESTINATION:-}"
 
@@ -43,9 +43,9 @@ case "${COPY_TEST_MODE}" in
     ;;
 esac
 
-VELOCITY_URL="${VELOAUTH_VELOCITY_URL:-https://fill-data.papermc.io/v1/objects/35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8/velocity-4.2.0-30.jar}"
-VELOCITY_SHA256="${VELOAUTH_VELOCITY_SHA256:-35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8}"
-VELOCITY_LABEL="${VELOAUTH_VELOCITY_LABEL:-Velocity 4.2.0 build 30}"
+VELOCITY_URL="${VELOAUTH_VELOCITY_URL:-https://fill-data.papermc.io/v1/objects/0844bcabdcdb4f5b875906fd4c3365bc1bb76918e42bc595ed88ad195258dd75/velocity-4.3.1-45.jar}"
+VELOCITY_SHA256="${VELOAUTH_VELOCITY_SHA256:-0844bcabdcdb4f5b875906fd4c3365bc1bb76918e42bc595ed88ad195258dd75}"
+VELOCITY_LABEL="${VELOAUTH_VELOCITY_LABEL:-Velocity 4.3.1 build 45}"
 FORWARDING_MODE="${VELOAUTH_TEST_FORWARDING_MODE:-none}"
 SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/veloauth-velocity-smoke.XXXXXX")"
 CONSOLE_PIPE="${SMOKE_DIR}/console.pipe"
@@ -155,7 +155,7 @@ if [[ ! -f "${PLUGIN_JAR}" ]]; then
   "${MAVEN[@]}" -f "${PROJECT_DIR}/pom.xml" -DskipTests package
 fi
 
-mkdir -p "${SMOKE_DIR}/plugins/veloauth"
+mkdir -p "${SMOKE_DIR}/plugins/veloauth/lang"
 curl --fail --silent --show-error --location --max-time 60 \
   --output "${SMOKE_DIR}/velocity.jar" "${VELOCITY_URL}"
 if [[ "$(sha256_file "${SMOKE_DIR}/velocity.jar")" != "${VELOCITY_SHA256}" ]]; then
@@ -165,6 +165,8 @@ fi
 cp "${PLUGIN_JAR}" "${SMOKE_DIR}/plugins/veloauth.jar"
 
 cat >"${SMOKE_DIR}/plugins/veloauth/config.yml" <<'YAML'
+language: en
+detect-client-language: true
 premium:
   check-enabled: false
 auth-server:
@@ -187,21 +189,26 @@ PY
 )"
 
 if [[ "${FORWARDING_MODE}" == modern ]]; then
-  cat >"${SMOKE_DIR}/velocity.toml" <<TOML
+  FORWARDING_SECRET="veloauth-embedded-modern-forwarding-smoke-secret"
+else
+  FORWARDING_SECRET="veloauth-embedded-loopback-only-unused-secret"
+fi
+cat >"${SMOKE_DIR}/velocity.toml" <<TOML
 config-version = "2.9"
 bind = "127.0.0.1:${PROXY_PORT}"
 online-mode = false
-player-info-forwarding-mode = "modern"
+player-info-forwarding-mode = "${FORWARDING_MODE}"
 forwarding-secret-file = "forwarding.secret"
 
 [servers]
 lobby = "127.0.0.1:30066"
 try = ["lobby"]
+# Keep this table explicitly empty; Velocity otherwise borrows its sample forced hosts,
+# which name servers this smoke does not register.
+[forced-hosts]
 TOML
-  umask 077
-  printf '%s\n' 'veloauth-embedded-modern-forwarding-smoke-secret' \
-    >"${SMOKE_DIR}/forwarding.secret"
-fi
+umask 077
+printf '%s\n' "${FORWARDING_SECRET}" >"${SMOKE_DIR}/forwarding.secret"
 
 mkfifo "${CONSOLE_PIPE}"
 exec 3<>"${CONSOLE_PIPE}"
@@ -210,7 +217,7 @@ start_velocity() {
   VELOCITY_LOG="$1"
   (
     cd "${SMOKE_DIR}"
-    "${SMOKE_JAVA}" -Xms128m -Xmx512m -jar velocity.jar --port "${PROXY_PORT}" \
+    "${SMOKE_JAVA}" -Xms128m -Xmx512m -jar velocity.jar \
       <"${CONSOLE_PIPE}" >"${VELOCITY_LOG}" 2>&1
   ) &
   VELOCITY_PID=$!
@@ -288,6 +295,10 @@ if ! grep -Fq "Ignoring invalid embedded protocol runtime manifest" "${VELOCITY_
   exit 1
 fi
 test_latest_client
+if compgen -G "${SMOKE_DIR}/plugins/veloauth/lang/messages_*.properties" >/dev/null; then
+  echo "The existing empty language override directory was repopulated" >&2
+  exit 1
+fi
 stop_velocity
-echo "${VELOCITY_LABEL} embedded limbo smoke passed with a Minecraft 26.2 client (${FORWARDING_MODE} forwarding)"
+echo "${VELOCITY_LABEL} embedded limbo smoke passed with a Minecraft 26.3 client (${FORWARDING_MODE} forwarding)"
 echo "Pinned startup, default-off updates and legacy-manifest fallback passed"

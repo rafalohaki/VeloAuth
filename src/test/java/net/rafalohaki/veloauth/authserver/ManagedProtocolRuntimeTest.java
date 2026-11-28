@@ -42,14 +42,15 @@ class ManagedProtocolRuntimeTest {
                 artifact, temporaryDirectory, mock(Logger.class), "test");
         try {
             assertEquals(47, runtime.minimumProtocol());
-            assertEquals(776, runtime.maximumProtocol());
+            assertEquals(777, runtime.maximumProtocol());
             assertEquals("1.8", runtime.minimumVersionName());
-            assertEquals("26.2", runtime.maximumVersionName());
+            assertEquals("26.3", runtime.maximumVersionName());
             assertTrue(runtime.supportsProtocol(47));
             assertTrue(runtime.supportsProtocol(340));
             assertTrue(runtime.supportsProtocol(754));
             assertTrue(runtime.supportsProtocol(769));
             assertTrue(runtime.supportsProtocol(776));
+            assertTrue(runtime.supportsProtocol(777));
             assertFalse(runtime.supportsProtocol(46));
 
             EmbeddedChannel channel = new EmbeddedChannel();

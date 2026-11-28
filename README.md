@@ -112,8 +112,8 @@ matches never grant this bypass.
   [GitHub Releases](https://github.com/rafalohaki/VeloAuth/releases) and
   [Modrinth](https://modrinth.com/plugin/veloauth).
 
-Every `main` push that passes the full verify matrix republishes the single `latest` release in
-place. Its title and notes carry the exact Maven version and source commit
+Every `main` push that passes the full verify matrix and the OSV dependency scan republishes the
+single `latest` release in place. Its title and notes carry the exact Maven version and source commit
 (`Rolling Latest Build — <version> @ <sha>`), and it owns the permanent download URL
 `https://github.com/rafalohaki/VeloAuth/releases/latest/download/veloauth-latest.jar`. The `latest`
 tag is repointed through the git ref API and the asset is replaced with `--clobber`, so watchers
@@ -129,7 +129,9 @@ built JAR's internal identity matches the Maven version.
 ## Requirements
 
 - **Java 25 or newer**
-- **Velocity proxy** (4.2.x; VeloAuth currently targets the 4.2 API line)
+- **Velocity proxy** (4.3.1 or newer recommended; VeloAuth builds against the 4.3.1 API).
+  Upgrade the proxy itself to pick up its patched Guava; updating the plugin does not replace
+  host-provided libraries.
 - **Database**: MySQL, PostgreSQL, H2, or SQLite
 - **Default external mode:** NanoLimbo, LOOHP/Limbo, LimboService, PicoLimbo, hpfxd/Limbo, or
   another Velocity-compatible auth server registered in `velocity.toml`
@@ -149,6 +151,20 @@ built JAR's internal identity matches the Maven version.
 5. Restart Velocity. Plugin upgrades and auth-topology changes always require a full proxy restart.
 
 **Note:** Floodgate support is disabled by default. Enable it only if you actually use Geyser/Floodgate.
+
+### Updating an existing 1.6.x installation
+
+1. Back up `config.yml` and `lang/` and keep the previous VeloAuth JAR. Update Velocity itself
+   to 4.3.1 or newer for the patched proxy libraries and Minecraft 26.3 support.
+2. Replace the VeloAuth JAR and restart the proxy. Existing auth-server modes do not change.
+   An embedded installation without a cached ViaVersion 5.12.3 artifact needs outbound HTTPS
+   to `repo.viaversion.com` for its first startup. External mode still depends on the external
+   limbo's own client-version support.
+3. Canary the exact JAR: register or log in with a non-default client language, verify the
+   backend transfer and welcome, and check that a verified premium player follows the existing
+   route. With embedded limbo, check a 26.3 client and at least one older client.
+4. If the update fails, put back the previous VeloAuth JAR and restart. Keep the patched proxy
+   if it is compatible with the previous JAR. This update does not require a database migration.
 
 ### Upgrading from 1.4 or a LimboAuth lineage
 
@@ -276,9 +292,16 @@ Upgraded files are not rewritten to add `auto-transfer-delay-ms`; when it is abs
 the new 1500 ms default. Connection tuning is restart-scoped, so changing it requires a full proxy
 restart rather than `/vauth reload`.
 
+Player-facing messages use the Minecraft client language when `detect-client-language` is
+enabled and a locale is available. Missing translations fall back to `language`, then English.
+The first startup creates `plugins/veloauth/lang/` with editable templates. If the directory
+already exists, deleted built-in files are not recreated; absent translations are read from the JAR.
+To use a custom language, create its `messages_<code>.properties` file before selecting it.
+An unrecognized language code with no custom file falls back to English without creating a file.
+
 Embedded limbo uses a minimal Minecraft 1.8 (protocol 47) server codec. A private ViaVersion runtime
 translates every newer release for which ViaVersion exposes a complete path back to 1.8. The pinned
-runtime in this release supports **1.8 through 26.2**; later support requires a maintainer-reviewed
+runtime in this release supports **1.8 through 26.3**; later support requires a maintainer-reviewed
 ViaVersion artifact rather than an MCProtocolLib protocol constant. ViaBackwards is intentionally
 not used: it translates older clients to a newer server, the opposite of this 1.8-base topology.
 MCProtocolLib remains the embedded listener/session/framing engine and hosts VeloAuth's custom
@@ -288,7 +311,7 @@ new ViaVersion mapping, not an MCProtocolLib update.
 
 In embedded mode, startup may use a previously activated reviewed runtime only when its complete
 version, HTTPS URL and SHA-256 still exactly match an immutable descriptor compiled into the
-installed VeloAuth release; the release's checksum-pinned ViaVersion `5.11.0` remains the final
+installed VeloAuth release; the release's checksum-pinned ViaVersion `5.12.3` remains the final
 fallback. `reviewed-runtime-updates: false` is the default and performs no remote update check. When
 an operator explicitly enables that restart-only setting, VeloAuth may stage only the exact
 candidate descriptor embedded by the VeloAuth maintainers in the installed release. It does not
@@ -298,7 +321,7 @@ and self-asserted descriptors are rejected.
 
 A staged candidate never replaces classes serving current players. On the next full restart,
 VeloAuth initializes every advertised translation path and completes a real loopback login plus
-keepalive with the bundled client (currently 26.2) before selecting it. Pending remains staged until
+keepalive with the bundled client (currently 26.3) before selecting it. Pending remains staged until
 the actual embedded listener is published in Velocity; only then is it promoted. An incompatible,
 corrupt or behaviorally broken candidate falls back to an active descriptor still approved by the
 installed release and then the build-pinned runtime in the same startup. Approved cached candidates
@@ -349,13 +372,13 @@ The opt-in full-proxy profile supplies that repeatable release baseline for held
 clients:
 
 ```bash
-JAVA_HOME=/absolute/path/to/temurin-21 \
-VELOAUTH_CAPACITY_JAVA=/absolute/path/to/temurin-21/bin/java \
-VELOAUTH_PLUGIN_JAR=/absolute/path/to/veloauth-1.5.0.jar \
+JAVA_HOME=/absolute/path/to/temurin-25 \
+VELOAUTH_CAPACITY_JAVA=/absolute/path/to/temurin-25/bin/java \
+VELOAUTH_PLUGIN_JAR=/absolute/path/to/veloauth.jar \
 ./scripts/profile-velocity-embedded.sh
 ```
 
-It starts checksum-pinned Velocity 4.2.0 build 30, drives real Minecraft 26.2 logins through
+It starts checksum-pinned Velocity 4.3.1 build 45, drives real Minecraft 26.3 logins through
 Velocity and the translated embedded endpoint, and holds plateaus of 1,000, 5,000 and 10,000
 clients. Every client must join, receive a keepalive and remain connected; each plateau also proves
 the Velocity-owned command path. The gate validates socket ratios, status latency, heap headroom,
@@ -403,9 +426,9 @@ premium routing flag immediately; an invalid reload leaves the previous valid co
 validation fails, all previously active **configuration values** remain in use. Language bundles
 are reloaded as a separate step and are not part of the same transaction; they may refresh even
 when config validation fails. Conversely, if config publication succeeds but language reload
-fails, the command reports failure although the new hot-reloadable config values may already be
-live. Removing `premium.allow-cracked-on-premium-nicks` or `premium.bypass-auth-server` from a
-valid config restores the safe `false` default.
+fails, the command reports failure and keeps the previous language bundles, although the new
+hot-reloadable config values may already be live. Removing `premium.allow-cracked-on-premium-nicks`
+or `premium.bypass-auth-server` from a valid config restores the safe `false` default.
 
 Only premium core routing flags, debug, report controls and language apply immediately. All
 password and registration policy (BCrypt, length, complexity and per-IP limits) is restart-only.
@@ -812,7 +835,7 @@ supplied by `netty-transport`; the broad `netty-codec` aggregator is replaced by
 `netty-codec-base` module.
 
 [CycloneDX Maven Plugin 2.9.3](https://github.com/CycloneDX/cyclonedx-maven-plugin/releases/tag/cyclonedx-maven-plugin-2.9.3)
-generates `target/veloauth-1.5.0.cdx.json` as a CycloneDX 1.6 production SBOM during `package`.
+generates `target/veloauth-<version>.cdx.json` as a CycloneDX 1.6 production SBOM during `package`.
 Compile, runtime and provided dependencies are included; test-only dependencies are excluded.
 After packaging, this fixture verifies the SBOM, the shaded inventory, all four original JDBC
 drivers and their merged SPI descriptor, relocated private libraries, and absence of proxy-owned
@@ -822,13 +845,12 @@ SLF4J, Jakarta Inject, Adventure, Gson, Configurate, SnakeYAML and Netty classes
 ./scripts/test-dependency-hygiene.sh
 ```
 
-CI pins [Dependency Review v5.0.0](https://github.com/actions/dependency-review-action/releases/tag/v5.0.0)
-to `a1d282b36b6f3519aa1f3fc636f609c47dddb294` for pull requests and pins
-[OSV-Scanner v2.7.0](https://github.com/google/osv-scanner-action/releases/tag/v2.7.0) to
-`b1d267aea5211fa648d9d442fa64b90dbdcbdd36` for full `pom.xml` scans on pushes and the weekly
-schedule. OSV cannot resolve the immutable timestamped MCProtocolLib build by itself, so the same
-workflow first resolves Maven's complete production graph into the tested CycloneDX SBOM. OSV scans
-both the direct POM inventory and that same-run transitive inventory with external
+CI pins [Dependency Review v5.0.1](https://github.com/actions/dependency-review-action/releases/tag/v5.0.1)
+to `bbc44d14a204704ccc493733616cd1e93a0321ec` for pull requests and pins
+[OSV-Scanner v2.7.1](https://github.com/google/osv-scanner-action/releases/tag/v2.7.1) to
+`32d3cd482bdadfb38b186c0ad1b031902d55d932` for full `pom.xml` scans on pushes and the weekly
+schedule. The workflow resolves Maven's complete production graph into the tested CycloneDX SBOM.
+OSV scans both the direct POM inventory and that same-run transitive inventory with external
 re-resolution disabled; this avoids silently dropping custom-repository dependencies.
 There are no vulnerability allowlists. Any future vulnerability exception must include an
 advisory ID, reason, owner and expiry date; an expired or incomplete exception is invalid.
@@ -891,7 +913,7 @@ afterwards. GitHub Actions runs the normal build and both database gates before 
 artifact.
 
 `./scripts/test-velocity-external.sh` is the external-mode release canary. It downloads only the
-hard-pinned, SHA-256-verified Velocity 4.2.0 build 30 and NanoLimbo 1.13.0, starts distinct auth and
+hard-pinned, SHA-256-verified Velocity 4.3.1 build 45 and NanoLimbo 1.13.0, starts distinct auth and
 backend servers, then drives a real Minecraft 26.2 cracked connection through register, logout,
 login, disconnect, reconnect, reauthentication and backend transfer. It scans generated files for
 the disposable password and retains the process logs plus hashes in `target/external-smoke-evidence.*`.
@@ -900,15 +922,15 @@ require real staging credentials/infrastructure.
 
 The normal suite also performs a native 1.8 login, bidirectional protocol-47 keepalive checks,
 translated status handshakes for representative 1.12.2, 1.16.5, 1.20.1 and 1.21.4 clients, and a
-complete MCProtocolLib 26.2 login held through the first keepalive. That latest-client path also
+complete MCProtocolLib 26.3 login held through the first keepalive. That latest-client path also
 requires the translated End registry/type/world identifiers, ViaVersion's level-loading event and a
 spectator spawn above the unloaded void, preventing gravity-driven idle movement and the client from
 remaining on "Loading terrain". Regression tests also cover the GAME read-timeout handoff, ordered
 early backend selection, per-player task ownership and shutdown-safe task publication. The real
 Velocity smoke proves pinned startup with updates disabled and a second restart that rejects a
 legacy origin-trusted pending manifest while retaining client availability through the same
-keepalive boundary. It also submits a rejected `/login` attempt and verifies that the cracked client
-remains in limbo with authentication commands still usable.
+keepalive boundary. It also checks that a Polish client gets Polish `/login` usage on an
+English-configured proxy, without VeloAuth populating an existing empty `lang/` directory.
 
 A disposable Mineflayer 4.37.1 release audit additionally completed two full connections each for
 1.8.9, 1.12.2, 1.16.5, 1.20.1 and 1.21.4 through the real pinned Velocity proxy. Every probe reached

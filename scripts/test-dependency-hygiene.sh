@@ -65,6 +65,7 @@ for dependency in root.findall(f"{namespace}dependencies/{namespace}dependency")
     dependencies[coordinate] = (text(dependency, "version"), text(dependency, "scope", "compile"))
 
 required_dependencies = {
+    "com.velocitypowered:velocity-api": ("4.3.1", "provided"),
     "org.slf4j:slf4j-api": ("2.0.20", "provided"),
     "jakarta.inject:jakarta.inject-api": ("2.0.1", "provided"),
     "net.kyori:adventure-api": ("5.2.0", "provided"),
@@ -72,7 +73,7 @@ required_dependencies = {
     "net.kyori:adventure-text-serializer-gson": ("5.2.0", "provided"),
     "net.kyori:adventure-text-serializer-legacy": ("5.2.0", "provided"),
     "net.kyori:adventure-text-serializer-plain": ("5.2.0", "provided"),
-    "com.google.code.gson:gson": ("2.13.2", "provided"),
+    "com.google.code.gson:gson": ("2.14.0", "provided"),
     "org.spongepowered:configurate-core": ("4.2.0", "provided"),
     "org.spongepowered:configurate-yaml": ("4.2.0", "provided"),
     "io.netty:netty-common": ("${embedded.netty.version}", "provided"),
@@ -155,11 +156,11 @@ workflow = workflow_path.read_text(encoding="utf-8")
 workflow_fragments = (
     "schedule:\n    - cron:",
     "dependency-review:\n    if: ${{ github.event_name == 'pull_request' }}",
-    "actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0",
+    "actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1",
     "dependency-inventory:\n    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}",
     "name: veloauth-osv-input-${{ github.sha }}",
     "osv-scan:\n    needs: dependency-inventory\n    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}",
-    "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0",
+    "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@32d3cd482bdadfb38b186c0ad1b031902d55d932 # v2.7.1",
     "download-artifact: veloauth-osv-input-${{ github.sha }}",
     "--no-resolve\n        --lockfile=pom.xml\n"
     "        --lockfile=veloauth-${{ needs.dependency-inventory.outputs.version }}.cdx.json",
@@ -175,8 +176,8 @@ readme = readme_path.read_text(encoding="utf-8")
 for evidence in (
     "Maven Dependency Plugin 3.11.0",
     "CycloneDX Maven Plugin 2.9.3",
-    "Dependency Review v5.0.0",
-    "OSV-Scanner v2.7.0",
+    "Dependency Review v5.0.1",
+    "OSV-Scanner v2.7.1",
     "advisory ID, reason, owner and expiry date",
     "There are no vulnerability allowlists",
 ):
@@ -193,6 +194,7 @@ with zipfile.ZipFile(jar_path) as jar:
         "org/sqlite/JDBC.class",
         "net/rafalohaki/veloauth/libs/bstats/charts/CustomChart.class",
         "net/rafalohaki/veloauth/libs/cloudburst/math/vector/Vector3i.class",
+        "net/rafalohaki/veloauth/libs/geysermc/adventure/text/serializer/nbt/NbtComponentSerializer.class",
         "net/rafalohaki/veloauth/libs/mcprotocollib/network/server/NetworkServer.class",
         "net/rafalohaki/veloauth/libs/ormlite/jdbc/JdbcConnectionSource.class",
     }
@@ -238,6 +240,7 @@ with zipfile.ZipFile(jar_path) as jar:
         "jakarta/inject/",
         "net/kyori/adventure/",
         "com/google/gson/",
+        "com/google/common/",
         "io/netty/",
         "org/spongepowered/configurate/",
         "org/yaml/snakeyaml/",
@@ -284,6 +287,7 @@ if sbom_path:
         ("org.spongepowered", "configurate-core", "4.2.0"),
         ("org.spongepowered", "configurate-yaml", "4.2.0"),
         ("org.cloudburstmc.math", "immutable", "2.0"),
+        ("org.geysermc.mcprotocollib", "text-serializer-nbt", "0.2.1"),
         ("org.slf4j", "slf4j-api", "2.0.20"),
         ("jakarta.inject", "jakarta.inject-api", "2.0.1"),
         ("net.kyori", "adventure-api", "5.2.0"),
@@ -291,8 +295,10 @@ if sbom_path:
         ("net.kyori", "adventure-text-serializer-gson", "5.2.0"),
         ("net.kyori", "adventure-text-serializer-legacy", "5.2.0"),
         ("net.kyori", "adventure-text-serializer-plain", "5.2.0"),
-        ("com.google.code.gson", "gson", "2.13.2"),
-        ("io.netty", "netty-codec-base", "4.2.18.Final"),
+        ("com.velocitypowered", "velocity-api", "4.3.1"),
+        ("com.google.code.gson", "gson", "2.14.0"),
+        ("com.google.guava", "guava", "33.7.2-jre"),
+        ("io.netty", "netty-codec-base", "4.2.19.Final"),
         ("com.mysql", "mysql-connector-j", "9.7.0"),
         ("org.postgresql", "postgresql", "42.7.14"),
         ("com.h2database", "h2", "2.5.252"),

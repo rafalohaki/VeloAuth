@@ -45,7 +45,7 @@ import static org.mockito.Mockito.when;
 
 class AuthServerProviderTest {
 
-    private static final int PINNED_MAXIMUM_PROTOCOL = 776;
+    private static final int PINNED_MAXIMUM_PROTOCOL = 777;
 
     @TempDir
     private Path temporaryDirectory;
@@ -121,7 +121,7 @@ class AuthServerProviderTest {
         assertEquals(AuthServerProvider.Preparation.READY,
                 provider.prepare(player(ProtocolVersion.MINECRAFT_1_8)));
         assertEquals(AuthServerProvider.Preparation.READY,
-                provider.prepare(player(ProtocolVersion.MINECRAFT_26_2)));
+                provider.prepare(player(ProtocolVersion.MINECRAFT_26_3)));
         assertEquals(AuthServerProvider.Preparation.UNSUPPORTED_PROTOCOL,
                 provider.prepare(player(ProtocolVersion.MINECRAFT_1_7_6)));
         assertEquals(1, runtime.operationalConfirmations.get());
@@ -141,7 +141,7 @@ class AuthServerProviderTest {
         provider.start();
 
         assertTrue(provider.isReady());
-        assertEquals("Minecraft 1.8-27.0 (managed ViaVersion 5.11.0)",
+        assertEquals("Minecraft 1.8-27.0 (managed ViaVersion 5.12.3)",
                 provider.compatibilityDescription());
     }
 
@@ -396,7 +396,7 @@ class AuthServerProviderTest {
         private final String maximumVersionName;
 
         private FakeProtocolRuntime() {
-            this(PINNED_MAXIMUM_PROTOCOL, "26.2");
+            this(PINNED_MAXIMUM_PROTOCOL, "26.3");
         }
 
         private FakeProtocolRuntime(int maximumProtocol, String maximumVersionName) {
@@ -432,7 +432,7 @@ class AuthServerProviderTest {
 
         @Override
         public String runtimeVersion() {
-            return "5.11.0";
+            return "5.12.3";
         }
 
         @Override

@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-VELOCITY_URL="https://fill-data.papermc.io/v1/objects/35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8/velocity-4.2.0-30.jar"
-VELOCITY_SHA256="35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8"
+VELOCITY_URL="https://fill-data.papermc.io/v1/objects/0844bcabdcdb4f5b875906fd4c3365bc1bb76918e42bc595ed88ad195258dd75/velocity-4.3.1-45.jar"
+VELOCITY_SHA256="0844bcabdcdb4f5b875906fd4c3365bc1bb76918e42bc595ed88ad195258dd75"
 TARGETS="${VELOAUTH_CAPACITY_TARGETS:-1000,5000,10000}"
 CONNECT_CONCURRENCY="${VELOAUTH_CAPACITY_CONNECT_CONCURRENCY:-256}"
 STATUS_SAMPLES="${VELOAUTH_CAPACITY_STATUS_SAMPLES:-60}"
@@ -628,8 +628,8 @@ fi
 cat >"${EVIDENCE_DIR}/result.txt" <<EOF
 VeloAuth real Velocity embedded capacity profile: PASS
 targets=${TARGETS}
-client_protocol=26.2
-velocity_build=4.2.0-30
+client_protocol=26.3
+velocity_build=4.3.1-45
 velocity_sha256=${VELOCITY_SHA256}
 candidate_sha256=${PLUGIN_SHA256}
 proxy_descriptor_budget=approximately 3 established TCP descriptors per held player

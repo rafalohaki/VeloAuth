@@ -1,6 +1,7 @@
 package net.rafalohaki.veloauth.authserver;
 
 import net.kyori.adventure.key.Key;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.geysermc.mcprotocollib.auth.GameProfile;
 import org.geysermc.mcprotocollib.network.ClientSession;
 import org.geysermc.mcprotocollib.network.Session;
@@ -9,9 +10,13 @@ import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.GameMode;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.HandPreference;
 import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
+import org.geysermc.mcprotocollib.protocol.data.game.setting.ChatVisibility;
+import org.geysermc.mcprotocollib.protocol.data.game.setting.ParticleStatus;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundRegistryDataPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundClientInformationPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundSystemChatPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerPositionPacket;
@@ -21,10 +26,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -55,7 +60,6 @@ class VelocityEmbeddedProxyIT {
         CountDownLatch positionedOutsideVoidWorld = new CountDownLatch(1);
         CountDownLatch keptAlive = new CountDownLatch(1);
         CountDownLatch commandResponse = new CountDownLatch(1);
-        AtomicBoolean commandSent = new AtomicBoolean();
         AtomicInteger endDimensionId = new AtomicInteger(-1);
         AtomicReference<ClientboundLoginPacket> loginPacket = new AtomicReference<>();
         AtomicReference<ClientboundPlayerPositionPacket> positionPacket = new AtomicReference<>();
@@ -89,7 +93,9 @@ class VelocityEmbeddedProxyIT {
                     positionedOutsideVoidWorld.countDown();
                 } else if (packet instanceof ClientboundKeepAlivePacket) {
                     keptAlive.countDown();
-                } else if (packet instanceof ClientboundSystemChatPacket && commandSent.get()) {
+                } else if (packet instanceof ClientboundSystemChatPacket chat
+                        && PlainTextComponentSerializer.plainText().serialize(chat.getContent())
+                                .contains("Użycie: /login <hasło>")) {
                     commandResponse.countDown();
                 }
             }
@@ -98,7 +104,7 @@ class VelocityEmbeddedProxyIT {
         client.connect(true);
 
         assertTrue(joined.await(20, TimeUnit.SECONDS),
-                "Minecraft 26.2 client should reach VeloAuth embedded limbo through Velocity");
+                "The latest client should reach VeloAuth embedded limbo through Velocity");
         assertTrue(endDimensionId.get() >= 0,
                 "Velocity should deliver the End dimension registry entry");
         assertEquals(endDimensionId.get(), loginPacket.get().getCommonPlayerSpawnInfo().getDimension(),
@@ -121,10 +127,11 @@ class VelocityEmbeddedProxyIT {
                 "A cracked client should survive embedded limbo's first keepalive through Velocity");
         assertTrue(client.isConnected(),
                 "The proxy must keep the cracked client connected in embedded limbo");
-        commandSent.set(true);
-        client.send(new ServerboundChatCommandPacket("login embedded-smoke-placeholder"));
+        client.send(new ServerboundClientInformationPacket("pl_pl", 8, ChatVisibility.FULL, true,
+                List.of(), HandPreference.RIGHT_HAND, false, true, ParticleStatus.ALL));
+        client.send(new ServerboundChatCommandPacket("login"));
         assertTrue(commandResponse.await(10, TimeUnit.SECONDS),
-                "Velocity-owned authentication commands must remain usable after the keepalive");
+                "An English-configured proxy should answer the Polish client's /login in Polish");
         assertTrue(client.isConnected(),
                 "An unauthenticated cracked client must remain in limbo after a rejected login");
     }

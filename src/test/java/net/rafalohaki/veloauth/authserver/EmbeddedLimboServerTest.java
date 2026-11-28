@@ -207,7 +207,7 @@ class EmbeddedLimboServerTest {
             String json = readString(response.payload());
 
             assertEquals(0x00, response.packetId());
-            assertTrue(json.contains("VeloAuth 1.8-26.2"));
+            assertTrue(json.contains("VeloAuth 1.8-26.3"));
             assertTrue(json.contains("\"protocol\":47"));
             assertEquals(0, server.playersInGame());
         }
@@ -327,7 +327,7 @@ class EmbeddedLimboServerTest {
 
         @Override
         public String maximumVersionName() {
-            return "26.2";
+            return "26.3";
         }
 
         @Override

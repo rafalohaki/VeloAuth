@@ -49,9 +49,9 @@ if [[ -n "${CTD_JAVA_HOME}" ]]; then
   export VELOAUTH_SMOKE_JAVA="${CTD_JAVA_HOME}/bin/java"
 fi
 
-export VELOAUTH_VELOCITY_URL="https://github.com/GemstoneGG/Velocity-CTD/releases/download/build-355/velocity-ctd-fatjar-4.1.0-SNAPSHOT-355.jar"
-export VELOAUTH_VELOCITY_SHA256="85d1492b815bc819e7fa263edde9c31f8cc9f837a6d0ed105825462dd2f2ad6f"
-export VELOAUTH_VELOCITY_LABEL="Velocity-CTD build 355"
+export VELOAUTH_VELOCITY_URL="https://github.com/GemstoneGG/Velocity-CTD/releases/download/build-425/velocity-ctd-fatjar-4.3.2-SNAPSHOT-425.jar"
+export VELOAUTH_VELOCITY_SHA256="5848bb5bf9835443620a5f7f87a1e9e27d1c282943bcffdc6d53957caede84e9"
+export VELOAUTH_VELOCITY_LABEL="Velocity-CTD build 425"
 export VELOAUTH_TEST_FORWARDING_MODE="modern"
 
 exec "${SCRIPT_DIR}/test-velocity-embedded.sh"

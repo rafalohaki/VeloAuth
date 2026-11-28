@@ -4,10 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 PLUGIN_JAR_OVERRIDE="${VELOAUTH_PLUGIN_JAR:-}"
-VELOCITY_URL="https://fill-data.papermc.io/v1/objects/35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8/velocity-4.2.0-30.jar"
-VELOCITY_SHA256="35a5596a5468a035d8a32c8de5ebb0dc6b8d8f0cc3ff5169d514aca762af8aa8"
+# Keep this pin aligned with the known-good Velocity pin in scripts/test-velocity-embedded.sh.
+VELOCITY_URL="https://fill-data.papermc.io/v1/objects/0844bcabdcdb4f5b875906fd4c3365bc1bb76918e42bc595ed88ad195258dd75/velocity-4.3.1-45.jar"
+VELOCITY_SHA256="0844bcabdcdb4f5b875906fd4c3365bc1bb76918e42bc595ed88ad195258dd75"
 NANOLIMBO_URL="https://github.com/Nan1t/NanoLimbo/releases/download/v1.13.0/NanoLimbo.jar"
 NANOLIMBO_SHA256="884dc3d4941fb0964dfd348cebc66afb692b156a213cc980d6f47f02441432cf"
+EXTERNAL_MCPROTOCOLLIB_VERSION="26.2-20260809.160751-16"
+EXTERNAL_MCPROTOCOLLIB_SHA256="07ec18ba92c8b4041286eeff2470e08257fd1f383881515cba4a0a9bf6fa98c1"
 AUTH_MARKER="VELOAUTH_EXTERNAL_AUTH_V1_13_0"
 BACKEND_MARKER="VELOAUTH_EXTERNAL_BACKEND_V1_13_0"
 JOURNEY_USERNAME="VAuthExtCanary"
@@ -108,6 +111,33 @@ evaluate_maven_expression() {
     | awk 'NF && $0 !~ /^\[/ { value=$0 } END { print value }'
 }
 
+verify_external_client_artifact() {
+  local repository jar actual
+  repository="$(evaluate_maven_expression settings.localRepository)"
+  if [[ -z "${repository}" || ! -d "${repository}" ]]; then
+    echo "Unable to locate the local Maven repository for the pinned external client" >&2
+    exit 1
+  fi
+  "${MAVEN[@]}" -q -f "${PROJECT_DIR}/pom.xml" dependency:get \
+    -Dartifact="org.geysermc.mcprotocollib:protocol:${EXTERNAL_MCPROTOCOLLIB_VERSION}" \
+    -Dtransitive=false
+  jar="$(find "${repository}/org/geysermc/mcprotocollib/protocol" \
+    -maxdepth 2 -type f -name "protocol-${EXTERNAL_MCPROTOCOLLIB_VERSION}.jar" \
+    -print -quit 2>/dev/null || true)"
+  if [[ -z "${jar}" ]]; then
+    echo "Pinned external MCProtocolLib client artifact was not found in the local Maven repository" >&2
+    exit 1
+  fi
+  actual="$(sha256_file "${jar}")"
+  if [[ "${actual}" != "${EXTERNAL_MCPROTOCOLLIB_SHA256}" ]]; then
+    echo "External MCProtocolLib client checksum mismatch" >&2
+    echo "Expected: ${EXTERNAL_MCPROTOCOLLIB_SHA256}" >&2
+    echo "Actual:   ${actual}" >&2
+    exit 1
+  fi
+  echo "Verified external MCProtocolLib client ${EXTERNAL_MCPROTOCOLLIB_VERSION} SHA-256: ${actual}"
+}
+
 if [[ -z "${PLUGIN_JAR_OVERRIDE}" ]]; then
   FINAL_NAME="$(evaluate_maven_expression project.build.finalName)"
   PLUGIN_JAR="${PROJECT_DIR}/target/${FINAL_NAME}.jar"
@@ -120,6 +150,7 @@ if [[ ! -f "${PLUGIN_JAR}" ]]; then
   "${MAVEN[@]}" -f "${PROJECT_DIR}/pom.xml" -DskipTests package
 fi
 CANDIDATE_SHA256="$(sha256_file "${PLUGIN_JAR}")"
+verify_external_client_artifact
 
 read -r PROXY_PORT AUTH_PORT BACKEND_PORT <<EOF
 $(python3 - <<'PY'
@@ -282,8 +313,11 @@ wait_for_log "${VELOCITY_PID}" "${SMOKE_DIR}/velocity.log" \
 
 run_journey_phase() {
   local phase="$1"
+  # NanoLimbo 1.13.0 ends at 26.2; select the old client only for this test invocation.
   "${MAVEN[@]}" -q -f "${PROJECT_DIR}/pom.xml" \
     -Dtest=VelocityExternalJourneyIT \
+    -Dmcprotocollib.version="${EXTERNAL_MCPROTOCOLLIB_VERSION}" \
+    -Dmcprotocollib.sha256="${EXTERNAL_MCPROTOCOLLIB_SHA256}" \
     -Dveloauth.external.host=127.0.0.1 \
     -Dveloauth.external.port="${PROXY_PORT}" \
     -Dveloauth.external.username="${JOURNEY_USERNAME}" \
@@ -336,6 +370,8 @@ cat >"${EVIDENCE_DIR}/journey.txt" <<EOF
 VeloAuth external-mode journey: PASS
 candidate_sha256=${CANDIDATE_SHA256}
 velocity_sha256=${VELOCITY_SHA256}
+external_client_version=${EXTERNAL_MCPROTOCOLLIB_VERSION}
+external_client_sha256=${EXTERNAL_MCPROTOCOLLIB_SHA256}
 nanolimbo_version=1.13.0
 nanolimbo_sha256=${NANOLIMBO_SHA256}
 flow=auth -> register -> backend -> logout -> auth -> login -> backend -> disconnect -> auth -> login -> backend

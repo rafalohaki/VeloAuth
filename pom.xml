@@ -41,14 +41,14 @@
         <!--
           Reproducible embedded-limbo network engine. VeloAuth supplies its own minimal 1.8
           PacketCodec and translates newer clients through the separately managed ViaVersion
-          runtime. This immutable timestamped MCProtocolLib build is not a floating SNAPSHOT.
+          runtime. The bundled release also supplies the current offline client for the loopback probe.
           Update only together with protocol/runtime tests and the recorded checksum.
         -->
-        <mcprotocollib.version>26.2-20260809.160751-16</mcprotocollib.version>
+        <mcprotocollib.version>26.3-4</mcprotocollib.version>
         <mcprotocollib.resolved-version>${mcprotocollib.version}</mcprotocollib.resolved-version>
-        <mcprotocollib.sha256>07ec18ba92c8b4041286eeff2470e08257fd1f383881515cba4a0a9bf6fa98c1</mcprotocollib.sha256>
+        <mcprotocollib.sha256>aac3344ae89b14d1dca961ff462532c4b75a7da42a4c73c470535e7c17a97874</mcprotocollib.sha256>
         <!-- Compile/test contract for the Netty API supplied by Velocity at runtime. -->
-        <embedded.netty.version>4.2.18.Final</embedded.netty.version>
+        <embedded.netty.version>4.2.19.Final</embedded.netty.version>
         <!--
           The embedded protocol runtime is downloaded on first use, verified byte-for-byte and
           loaded from VeloAuth's private runtime directory. The coordinate remains a compile-only
@@ -57,10 +57,10 @@
           candidate may be recorded by maintainers for operator-opt-in staging; its digest is
           embedded in the VeloAuth release and is never accepted from the artifact origin.
         -->
-        <viaversion.runtime.dependency-version>5.11.0</viaversion.runtime.dependency-version>
-        <viaversion.runtime.version>5.11.0</viaversion.runtime.version>
-        <viaversion.runtime.url>https://repo.viaversion.com/com/viaversion/viaversion-common/5.11.0/viaversion-common-5.11.0.jar</viaversion.runtime.url>
-        <viaversion.runtime.sha256>a4dd9f63257ed923f73a64ecece31010acd04247db12855383172e1226912b3e</viaversion.runtime.sha256>
+        <viaversion.runtime.dependency-version>5.12.3</viaversion.runtime.dependency-version>
+        <viaversion.runtime.version>5.12.3</viaversion.runtime.version>
+        <viaversion.runtime.url>https://repo.viaversion.com/com/viaversion/viaversion-common/5.12.3/viaversion-common-5.12.3.jar</viaversion.runtime.url>
+        <viaversion.runtime.sha256>baae1443e63fb34b8b64ecd3c74277d5fda8ffd98562c16045237c63b6bdc3ef</viaversion.runtime.sha256>
         <viaversion.reviewed.version>${viaversion.runtime.version}</viaversion.reviewed.version>
         <viaversion.reviewed.url>${viaversion.runtime.url}</viaversion.reviewed.url>
         <viaversion.reviewed.sha256>${viaversion.runtime.sha256}</viaversion.reviewed.sha256>
@@ -80,8 +80,8 @@
         <repository>
             <id>opencollab-mcprotocollib-snapshots</id>
             <url>https://repo.opencollab.dev/maven-snapshots/</url>
-            <!-- The dependency uses an immutable timestamped coordinate. Maven classifies that
-                 coordinate as a release even though OpenCollab stores it in the snapshot repo. -->
+            <!-- The external NanoLimbo canary still uses a pinned timestamped 26.2 test client.
+                 Maven classifies that coordinate as a release in the snapshot repository. -->
             <releases>
                 <enabled>true</enabled>
                 <updatePolicy>never</updatePolicy>
@@ -106,7 +106,7 @@
         <dependency>
             <groupId>com.velocitypowered</groupId>
             <artifactId>velocity-api</artifactId>
-            <version>4.2.0</version>
+            <version>4.3.1</version>
             <scope>provided</scope>
         </dependency>
 
@@ -160,7 +160,7 @@
         <dependency>
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
-            <version>2.13.2</version>
+            <version>2.14.0</version>
             <scope>provided</scope>
         </dependency>
 
@@ -233,7 +233,7 @@
             <version>3.3.1</version>
         </dependency>
 
-        <!-- Velocity 4.2 owns this Configurate/SnakeYAML type universe. -->
+        <!-- Velocity owns this Configurate/SnakeYAML type universe. -->
         <dependency>
             <groupId>org.spongepowered</groupId>
             <artifactId>configurate-core</artifactId>
@@ -446,7 +446,7 @@
                             <rules>
                                 <requireJavaVersion>
                                     <version>[25,)</version>
-                                    <message>VeloAuth requires JDK 25 or newer to build against the Velocity 4.2 API.</message>
+                                    <message>VeloAuth requires JDK 25 or newer to build against the Velocity 4.3 API.</message>
                                 </requireJavaVersion>
                             </rules>
                         </configuration>
@@ -457,7 +457,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
+                <version>3.16.0</version>
                 <configuration>
                     <release>${java.version}</release>
                     <compilerArgs>
@@ -470,7 +470,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.5.0</version>
+                <version>3.5.1</version>
                 <configuration>
                     <outputTimestamp>${project.build.outputTimestamp}</outputTimestamp>
                     <forceCreation>true</forceCreation>
@@ -713,6 +713,10 @@
                                 <relocation>
                                     <pattern>org.geysermc.mcprotocollib</pattern>
                                     <shadedPattern>net.rafalohaki.veloauth.libs.mcprotocollib</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.geysermc.adventure.text.serializer.nbt</pattern>
+                                    <shadedPattern>net.rafalohaki.veloauth.libs.geysermc.adventure.text.serializer.nbt</shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>org.cloudburstmc.nbt</pattern>

@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
 
       - name: Reject vulnerable runtime dependency changes
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
         with:
           fail-on-severity: low
           fail-on-scopes: runtime
@@ -55,7 +55,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up exact Temurin 25.0.4+7 for dependency resolution
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '25.0.4+7.0.LTS'
@@ -88,7 +88,7 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@32d3cd482bdadfb38b186c0ad1b031902d55d932 # v2.7.1
     with:
       download-artifact: veloauth-osv-input-${{ github.sha }}
       scan-args: |-
@@ -138,14 +138,14 @@ jobs:
 
       - name: Install exact Temurin 25.0.4+7 for the Velocity-CTD proxy only
         id: verify-java25
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '25.0.4+7.0.LTS'
           show-download-progress: true
 
       - name: Restore exact Temurin 25.0.4+7 as the build default
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '25.0.4+7.0.LTS'
@@ -220,10 +220,10 @@ jobs:
 
   # Exactly one rolling release, updated in place. The release object and its tag name are
   # never recreated: the tag is repointed through the git ref API and the asset is replaced
-  # with --clobber, so watchers are not notified again on every push. Publishing is gated on
-  # the full verify matrix, so a red build can never reach the download link.
+  # with --clobber, so watchers are not notified again on every push.
+  # Both the full verify matrix and the dependency scan must pass before publishing.
   rolling:
-    needs: verify
+    needs: [verify, osv-scan]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
@@ -287,7 +287,7 @@ jobs:
           # Every line goes through a '%s\n' format string: a literal leading '-' would
           # otherwise be parsed as a printf option and abort the step.
           {
-            printf '%s\n' 'Rolling build of `main`, published only after the full verify matrix passed.'
+            printf '%s\n' 'Rolling build of `main`, published only after verification and OSV scanning passed.'
             printf '%s\n' ''
             printf '%s\n' "- Version: \`${VERSION}\`"
             printf '%s\n' "- Commit: ${GITHUB_SHA}"

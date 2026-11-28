@@ -738,7 +738,7 @@ import sys
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 required = [
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-    "actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad",
+    "actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880",
     "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
     "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
     "./scripts/test-verify-reproducible-jar.sh",
@@ -785,7 +785,7 @@ for versioned_token in ("gh release create", "gh release download"):
 if "--clobber" not in rolling_section:
     raise SystemExit("TEST FAILURE: rolling release must replace assets in place")
 for rolling_token in (
-    "needs: verify",
+    "needs: [verify, osv-scan]",
     "github.ref == 'refs/heads/main'",
     "Expected exactly one release with the rolling tag",
     "Unexpected release tag in inventory",
@@ -822,7 +822,8 @@ setup_steps.each do |step|
 end
 raise "TEST FAILURE: branch/PR verifier must reject tag refs" unless verify.fetch("if").include?("!startsWith")
 raise "TEST FAILURE: rolling must publish only from main pushes" unless rolling.fetch("if").include?("refs/heads/main")
-raise "TEST FAILURE: rolling must be gated on the full verify matrix" unless rolling.fetch("needs") == "verify"
+raise "TEST FAILURE: rolling must wait for verification and OSV" unless Array(rolling.fetch("needs")).sort == %w[osv-scan verify]
+raise "TEST FAILURE: OSV must fail on vulnerable dependencies" unless jobs.fetch("osv-scan").fetch("with").fetch("fail-on-vuln") == true
 RUBY
 
 grep -Fq 'verify-release-candidate.sh --existing' "${PROJECT_DIR}/README.md" \
