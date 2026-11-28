@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.MissingResourceException;
 import java.util.Properties;
 import java.util.ResourceBundle;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -118,6 +119,37 @@ class LanguageFileManagerTest {
         // Then
         String newContent = Files.readString(enFile);
         assertEquals(originalContent, newContent, "Existing files should not be overwritten");
+    }
+
+    @Test
+    void initializeLanguageFiles_existingEmptyLangDir_createsNoFiles() throws IOException {
+        Path langDir = tempDir.resolve("lang");
+        Files.createDirectories(langDir);
+
+        languageFileManager.initializeLanguageFiles();
+
+        try (var entries = Files.list(langDir)) {
+            assertEquals(0, entries.count(),
+                    "An existing lang/ directory is operator-owned and must not be populated");
+        }
+    }
+
+    @Test
+    void initializeLanguageFiles_existingLangDir_doesNotRecreateRemovedBuiltIns() throws IOException {
+        languageFileManager.initializeLanguageFiles();
+        Path polish = languageFile("pl");
+        Path french = languageFile("fr");
+        Files.delete(polish);
+        Files.delete(french);
+        String customizedEnglish = "# operator header\n" + Files.readString(languageFile("en"));
+        Files.writeString(languageFile("en"), customizedEnglish, StandardCharsets.UTF_8);
+
+        languageFileManager.initializeLanguageFiles();
+
+        assertFalse(Files.exists(polish), "Removed bundled Polish file must stay removed");
+        assertFalse(Files.exists(french), "Removed bundled French file must stay removed");
+        assertEquals(customizedEnglish, Files.readString(languageFile("en")),
+                "Existing customized file must keep its operator edits");
     }
 
     @Test
@@ -319,11 +351,54 @@ class LanguageFileManagerTest {
     }
 
     @Test
-    void testLoadLanguageBundle_ThrowsExceptionWhenNoFiles() {
-        // When/Then - no files initialized
-        assertThrows(IOException.class, () -> {
-            languageFileManager.loadLanguageBundle("en");
-        }, "Should throw IOException when no language files exist");
+    void loadLanguageBundle_builtInAbsentFromDisk_loadsFromJarWithoutWriting() throws IOException {
+        Path langDir = tempDir.resolve("lang");
+
+        ResourceBundle bundle = languageFileManager.loadLanguageBundle("pl");
+
+        assertEquals("Zalogowano pomyślnie!", bundle.getString("auth.login.success"));
+        assertFalse(Files.exists(langDir),
+                "Loading an absent bundled language must not create the lang directory");
+    }
+
+    @Test
+    void loadLanguageBundle_removedBuiltIn_loadsFromJarWithoutRecreating() throws IOException {
+        languageFileManager.initializeLanguageFiles();
+        Path polish = languageFile("pl");
+        Files.delete(polish);
+
+        ResourceBundle bundle = languageFileManager.loadLanguageBundle("pl");
+
+        assertNotNull(bundle, "Removed bundled language should still be served from the JAR");
+        assertFalse(Files.exists(polish), "Loading must not recreate a deliberately removed file");
+    }
+
+    @Test
+    void loadLanguageBundle_unknownLanguage_fallsBackToEnglishWithoutCreatingFile() throws IOException {
+        languageFileManager.initializeLanguageFiles();
+        Path unknown = languageFile("xx");
+
+        ResourceBundle bundle = languageFileManager.loadLanguageBundle("xx");
+
+        assertEquals("Logged in successfully!", bundle.getString("auth.login.success"));
+        assertFalse(Files.exists(unknown),
+                "Unknown languages must fall back without generating a custom file");
+    }
+
+    @Test
+    void loadLanguageBundle_withoutBackfill_keepsPartialFileAndExposesMissingKeys() throws IOException {
+        languageFileManager.initializeLanguageFiles();
+        Path custom = languageFile("custom");
+        String partial = "custom.present=value\n";
+        Files.writeString(custom, partial, StandardCharsets.UTF_8);
+
+        ResourceBundle bundle = languageFileManager.loadLanguageBundle("custom", false);
+
+        assertEquals("value", bundle.getString("custom.present"));
+        assertThrows(MissingResourceException.class, () -> bundle.getString(QR_WARNING_KEY),
+                "Player bundles must not receive the eager English backfill");
+        assertEquals(partial, Files.readString(custom),
+                "Player bundle loading must not rewrite the external file");
     }
 
     // ===== fileExists: pure query, does not mutate the filesystem =====

@@ -90,7 +90,8 @@ class AuthenticationFlowIntegrationTest {
 
         configureSchedulerMocks();
 
-        postLoginHandler = ListenerFactory.createPostLoginHandler(authCache, databaseManager, messages, logger);
+        postLoginHandler = ListenerFactory.createPostLoginHandler(
+                authCache, databaseManager, settings, messages, logger);
     }
 
     private java.nio.file.Path createTempDirectory() {
@@ -522,7 +523,8 @@ class AuthenticationFlowIntegrationTest {
 
         // Create AuthListener with full dependencies
         ConnectionManager connectionManager = mock(ConnectionManager.class);
-        PostLoginHandler plHandler = ListenerFactory.createPostLoginHandler(authCache, databaseManager, messages, logger);
+        PostLoginHandler plHandler = ListenerFactory.createPostLoginHandler(
+                authCache, databaseManager, settings, messages, logger);
         setPluginInitialized(true);
         AuthListener authListener = new AuthListener(
                 plugin, authCache, settings, preLoginHandler, plHandler,
@@ -563,7 +565,8 @@ class AuthenticationFlowIntegrationTest {
 
         // Create AuthListener
         ConnectionManager connectionManager = mock(ConnectionManager.class);
-        PostLoginHandler plHandler = ListenerFactory.createPostLoginHandler(authCache, databaseManager, messages, logger);
+        PostLoginHandler plHandler = ListenerFactory.createPostLoginHandler(
+                authCache, databaseManager, settings, messages, logger);
         setPluginInitialized(true);
         AuthListener authListener = new AuthListener(
                 plugin, authCache, settings, preLoginHandler, plHandler,

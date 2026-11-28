@@ -4,11 +4,14 @@ import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
+
+import static net.rafalohaki.veloauth.util.PlayerMessages.playerMessage;
 
 /**
  * Utility class for consistent database error handling across the application.
@@ -34,30 +37,40 @@ public final class DatabaseErrorHandler {
      * @param operation Description of the operation being performed
      * @param logger    Logger instance for error logging
      * @param messages  Messages instance for localized error messages
+     * @param settings  Settings controlling client-language detection
      * @return true if there was a database error (handled), false if operation can continue
      */
     public static boolean handleError(DbResult<?> result, Player player, String operation,
-                                     Logger logger, Messages messages) {
-        return handleErrorWithKey(result, player, operation, logger, messages, DEFAULT_ERROR_KEY);
+                                      Logger logger, Messages messages, Settings settings) {
+        return handleErrorWithKey(
+                result, player, operation, logger, messages, settings, DEFAULT_ERROR_KEY);
     }
 
     /** Handles a player DB error while delegating delivery to an owner-aware message fence. */
     public static boolean handleError(
             DbResult<?> result, Player player, String operation, Logger logger, Messages messages,
-            java.util.function.Consumer<Component> messageSender) {
+            Settings settings, java.util.function.Consumer<Component> messageSender) {
         if (!result.isDatabaseError()) {
             return false;
         }
-        return handleErrorCore(result, player.getUsername(), operation, logger, messages,
-                DEFAULT_ERROR_KEY, messageSender);
+        return handleErrorCore(result, player.getUsername(), operation, logger,
+                () -> playerMessage(player, settings, messages, DEFAULT_ERROR_KEY,
+                        NamedTextColor.RED),
+                messageSender);
     }
 
-    /** Handles an owner-fenced DB error using an identifier captured before asynchronous work. */
+    /**
+     * Handles an owner-fenced DB error using an identifier captured before asynchronous work,
+     * so a connection retired meanwhile is never read on the success path.
+     */
     public static boolean handleError(
             DbResult<?> result, String identifier, String operation, Logger logger,
-            Messages messages, java.util.function.Consumer<Component> messageSender) {
-        return handleErrorCore(result, identifier, operation, logger, messages,
-                DEFAULT_ERROR_KEY, messageSender);
+            Messages messages, Settings settings, Player player,
+            java.util.function.Consumer<Component> messageSender) {
+        return handleErrorCore(result, identifier, operation, logger,
+                () -> playerMessage(player, settings, messages, DEFAULT_ERROR_KEY,
+                        NamedTextColor.RED),
+                messageSender);
     }
 
     /**
@@ -72,8 +85,9 @@ public final class DatabaseErrorHandler {
      * @return true if there was a database error (handled), false if operation can continue
      */
     public static boolean handleError(DbResult<?> result, CommandSource source, String identifier,
-                                     String operation, Logger logger, Messages messages) {
-        return handleErrorCore(result, identifier, operation, logger, messages, DEFAULT_ERROR_KEY,
+                                      String operation, Logger logger, Messages messages) {
+        return handleErrorCore(result, identifier, operation, logger,
+                () -> messages.component(DEFAULT_ERROR_KEY, NamedTextColor.RED),
                 source::sendMessage);
     }
 
@@ -85,12 +99,15 @@ public final class DatabaseErrorHandler {
      * @param operation Description of the operation being performed
      * @param logger    Logger instance for error logging
      * @param messages  Messages instance for localized error messages
+     * @param settings  Settings controlling client-language detection
      * @param errorKey  Custom message key for error message
      * @return true if there was a database error (handled), false if operation can continue
      */
     public static boolean handleErrorWithKey(DbResult<?> result, Player player, String operation,
-                                            Logger logger, Messages messages, String errorKey) {
-        return handleErrorCore(result, player.getUsername(), operation, logger, messages, errorKey,
+                                             Logger logger, Messages messages, Settings settings,
+                                             String errorKey) {
+        return handleErrorCore(result, player.getUsername(), operation, logger,
+                () -> playerMessage(player, settings, messages, errorKey, NamedTextColor.RED),
                 player::sendMessage);
     }
 
@@ -98,13 +115,14 @@ public final class DatabaseErrorHandler {
      * Core error handling logic shared by all handleError variants.
      */
     private static boolean handleErrorCore(DbResult<?> result, String identifier, String operation,
-                                          Logger logger, Messages messages, String errorKey,
-                                          java.util.function.Consumer<Component> messageSender) {
+                                           Logger logger,
+                                           java.util.function.Supplier<Component> errorMessage,
+                                           java.util.function.Consumer<Component> messageSender) {
         if (!result.isDatabaseError()) {
             return false;
         }
         logDatabaseError(logger, operation, identifier, result.getErrorMessage());
-        messageSender.accept(messages.component(errorKey, NamedTextColor.RED));
+        messageSender.accept(errorMessage.get());
         return true;
     }
 

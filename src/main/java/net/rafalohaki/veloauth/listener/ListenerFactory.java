@@ -30,9 +30,10 @@ public final class ListenerFactory {
 
     public static PostLoginHandler createPostLoginHandler(AuthCache authCache,
                                                           DatabaseManager databaseManager,
+                                                          Settings settings,
                                                           Messages messages,
                                                           Logger logger) {
-        return new PostLoginHandler(authCache, databaseManager, messages, logger);
+        return new PostLoginHandler(authCache, databaseManager, settings, messages, logger);
     }
 
     public static EarlyLoginBlocker createEarlyLoginBlocker(VeloAuth plugin) {

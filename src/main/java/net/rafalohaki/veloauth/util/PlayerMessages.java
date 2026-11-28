@@ -24,4 +24,17 @@ public final class PlayerMessages {
         }
         return messages.component(key, color, args);
     }
+
+    /**
+     * Resolves a player-localized message to plain text. Used when one localized message is
+     * embedded as a placeholder argument inside another player-localized message.
+     */
+    public static String playerText(@javax.annotation.Nullable Player player,
+                                    Settings settings, Messages messages,
+                                    String key, Object... args) {
+        if (settings.isDetectClientLanguage()) {
+            return messages.getForLocale(PlayerLocaleUtils.clientLocale(player), key, args);
+        }
+        return messages.get(key, args);
+    }
 }

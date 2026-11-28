@@ -46,7 +46,8 @@ class LoginCommand implements SimpleCommand {
         }
         String[] args = invocation.arguments();
         if (args.length != 1) {
-            player.sendMessage(ctx.messages().component("auth.login.usage", NamedTextColor.YELLOW));
+            player.sendMessage(ctx.playerComponent(
+                    player, "auth.login.usage", NamedTextColor.YELLOW));
             return;
         }
         String password = args[0];
@@ -85,22 +86,22 @@ class LoginCommand implements SimpleCommand {
             if (ctx.authCache().isPlayerAuthorized(player.getUniqueId(), playerIp)
                     && ctx.authCache().hasActiveSession(player.getUniqueId(), authContext.username(), playerIp)) {
                 ctx.runIfConnectionCurrent(authContext.connectionOperation(),
-                        () -> player.sendMessage(ctx.messages().component(
-                                "auth.login.already_logged_in", NamedTextColor.YELLOW)));
+                        () -> player.sendMessage(ctx.playerComponent(
+                                player, "auth.login.already_logged_in", NamedTextColor.YELLOW)));
                 return;
             }
 
             if (authContext.registeredPlayer() == null) {
                 ctx.runIfConnectionCurrent(authContext.connectionOperation(),
-                        () -> player.sendMessage(ctx.messages().component(
-                                "auth.login.not_registered", NamedTextColor.RED)));
+                        () -> player.sendMessage(ctx.playerComponent(
+                                player, "auth.login.not_registered", NamedTextColor.RED)));
                 return;
             }
             String hash = authContext.registeredPlayer().getHash();
             if (hash == null || hash.isBlank()) {
                 ctx.runIfConnectionCurrent(authContext.connectionOperation(),
-                        () -> player.sendMessage(ctx.messages().component(
-                                "auth.login.not_registered", NamedTextColor.RED)));
+                        () -> player.sendMessage(ctx.playerComponent(
+                                player, "auth.login.not_registered", NamedTextColor.RED)));
                 return;
             }
 
@@ -144,8 +145,8 @@ class LoginCommand implements SimpleCommand {
 
             if (PostAuthFlow.execute(ctx, authContext, authContext.registeredPlayer(), "logged in")) {
                 ctx.runIfConnectionCurrent(authContext.connectionOperation(), () -> {
-                    authContext.player().sendMessage(ctx.messages().component(
-                            "auth.login.success", NamedTextColor.GREEN));
+                    authContext.player().sendMessage(ctx.playerComponent(
+                            authContext.player(), "auth.login.success", NamedTextColor.GREEN));
                     emitAudit(AuditEventType.LOGIN_OK, authContext, null);
                 });
             }
@@ -178,7 +179,8 @@ class LoginCommand implements SimpleCommand {
             String ip = PlayerAddressUtils.getPlayerIp(player);
             ctx.pendingTotpStore().put(PendingTotpState.forLogin(
                     player.getUniqueId(), authContext.registeredPlayer(), ip));
-            player.sendMessage(ctx.messages().component("2fa.login.pending_prompt", NamedTextColor.GOLD));
+            player.sendMessage(ctx.playerComponent(
+                    player, "2fa.login.pending_prompt", NamedTextColor.GOLD));
 
             if (ctx.logger().isDebugEnabled()) {
                 ctx.logger().debug("Player {} parked for 2FA verification (IP {})",
@@ -197,16 +199,16 @@ class LoginCommand implements SimpleCommand {
             }
 
             if (blocked) {
-                authContext.player().sendMessage(ctx.messages().component(
-                        "security.brute_force.blocked", NamedTextColor.RED));
+                authContext.player().sendMessage(ctx.playerComponent(
+                        authContext.player(), "security.brute_force.blocked", NamedTextColor.RED));
                 if (ctx.logger().isWarnEnabled()) {
                     ctx.logger().warn("Player {} blocked for brute force from IP {}",
                             authContext.username(), PlayerAddressUtils.getPlayerIp(authContext.player()));
                 }
                 emitAudit(AuditEventType.LOGIN_FAIL, authContext, "brute-force-blocked");
             } else {
-                authContext.player().sendMessage(ctx.messages().component(
-                        "auth.login.incorrect_password", NamedTextColor.RED));
+                authContext.player().sendMessage(ctx.playerComponent(
+                        authContext.player(), "auth.login.incorrect_password", NamedTextColor.RED));
                 if (ctx.logger().isDebugEnabled()) {
                     ctx.logger().debug("Failed login attempt for player {} from IP {}",
                             authContext.username(), PlayerAddressUtils.getPlayerIp(authContext.player()));

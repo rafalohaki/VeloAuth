@@ -13,6 +13,7 @@ import net.rafalohaki.veloauth.lifecycle.ConnectionLifecycleRegistry;
 import net.rafalohaki.veloauth.util.DatabaseErrorHandler;
 import net.rafalohaki.veloauth.util.PlayerAddressUtils;
 import net.rafalohaki.veloauth.util.SecurityUtils;
+import static net.rafalohaki.veloauth.util.PlayerMessages.playerMessage;
 import org.slf4j.Logger;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
@@ -85,6 +86,13 @@ class CommandContext {
     AuthCache authCache() { return authCache; }
     Settings settings() { return settings; }
     Messages messages() { return messages; }
+    Component playerComponent(Player player, String key, NamedTextColor color) {
+        return playerMessage(player, settings, messages, key, color);
+    }
+
+    Component playerComponent(Player player, String key, NamedTextColor color, Object... args) {
+        return playerMessage(player, settings, messages, key, color, args);
+    }
     Logger logger() { return logger; }
     IPRateLimiter ipRateLimiter() { return ipRateLimiter; }
     net.rafalohaki.veloauth.auth.ConflictModeService conflictModeService() { return conflictModeService; }
@@ -169,8 +177,8 @@ class CommandContext {
         InetAddress playerAddress = PlayerAddressUtils.getPlayerAddress(player);
 
         if (playerAddress != null && authCache.isBlocked(playerAddress, player.getUsername())) {
-            messageSender.accept(messages.component(
-                    MSG_BRUTE_FORCE_BLOCKED, NamedTextColor.RED));
+            messageSender.accept(playerComponent(
+                    player, MSG_BRUTE_FORCE_BLOCKED, NamedTextColor.RED));
             if (logger.isWarnEnabled()) {
                 logger.warn(SECURITY_MARKER, "[BRUTE FORCE BLOCK] IP {} attempted {}", playerAddress.getHostAddress(), commandName);
             }
@@ -183,13 +191,14 @@ class CommandContext {
             dbResult = databaseManager.findPlayerByNickname(username).join();
         } catch (CompletionException e) {
             logger.error(DB_MARKER, "Database error during {} for player {}", commandName, username, e);
-            messageSender.accept(messages.component(MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
+            messageSender.accept(playerComponent(
+                    player, MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
             return null;
         }
 
         if (DatabaseErrorHandler.handleError(
-                dbResult, username, commandName + " lookup for", logger, messages,
-                messageSender)) {
+                dbResult, username, commandName + " lookup for", logger, messages, settings,
+                player, messageSender)) {
             return null;
         }
 
@@ -208,14 +217,14 @@ class CommandContext {
             result = databaseManager.isPremium(player.getUsername()).join();
         } catch (CompletionException e) {
             logger.error(DB_MARKER, "[DATABASE ERROR] {} failed for {}", operation, player.getUsername(), e);
-            player.sendMessage(messages.component(MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
+            player.sendMessage(playerComponent(player, MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
             return DatabaseManager.DbResult.databaseError("CompletionException: " + e.getMessage());
         }
         if (result.isDatabaseError()) {
             if (logger.isErrorEnabled()) {
                 logger.error(SECURITY_MARKER, "[DATABASE ERROR] {} failed for {}: {}", operation, player.getUsername(), result.getErrorMessage());
             }
-            player.sendMessage(messages.component(MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
+            player.sendMessage(playerComponent(player, MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
         }
         return result;
     }
@@ -229,8 +238,8 @@ class CommandContext {
         } catch (RuntimeException e) {
             logger.error(DB_MARKER, "[DATABASE ERROR] {} failed for {}", operation, username, e);
             runIfConnectionCurrent(connectionOperation,
-                    () -> player.sendMessage(messages.component(
-                            MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED)));
+                    () -> player.sendMessage(playerComponent(
+                            player, MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED)));
             return DatabaseManager.DbResult.databaseError(
                     e.getClass().getSimpleName() + ": " + e.getMessage());
         }
@@ -240,8 +249,8 @@ class CommandContext {
                         operation, username, result.getErrorMessage());
             }
             runIfConnectionCurrent(connectionOperation,
-                    () -> player.sendMessage(messages.component(
-                            MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED)));
+                    () -> player.sendMessage(playerComponent(
+                            player, MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED)));
         }
         return result;
     }
@@ -250,14 +259,15 @@ class CommandContext {
      * Handles database errors consistently across all commands.
      */
     boolean handleDatabaseError(DatabaseManager.DbResult<?> result, Player player, String operation) {
-        return DatabaseErrorHandler.handleError(result, player, operation, logger, messages);
+        return DatabaseErrorHandler.handleError(
+                result, player, operation, logger, messages, settings);
     }
 
     boolean handleDatabaseError(
             DatabaseManager.DbResult<?> result, String identifier, Player player, String operation,
             ConnectionLifecycleRegistry.Operation connectionOperation) {
         return DatabaseErrorHandler.handleError(
-                result, identifier, operation, logger, messages,
+                result, identifier, operation, logger, messages, settings, player,
                 message -> runIfConnectionCurrent(
                         connectionOperation, () -> player.sendMessage(message)));
     }
@@ -281,7 +291,8 @@ class CommandContext {
      * Sends a database error message to the player.
      */
     void sendDatabaseErrorMessage(Player player) {
-        player.sendMessage(messages.component(MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
+        player.sendMessage(playerComponent(
+                player, MSG_DATABASE_QUERY_ERROR, NamedTextColor.RED));
     }
 
     /**
@@ -301,7 +312,7 @@ class CommandContext {
     void runAsyncCommand(
             Player player, ConnectionLifecycleRegistry.Operation operation,
             Runnable task, String errorKey) {
-        CommandHelper.runAsyncCommand(task, messages, errorKey,
+        CommandHelper.runAsyncCommand(task, player, settings, messages, errorKey,
                 message -> runIfConnectionCurrent(
                         operation, () -> player.sendMessage(message)));
     }
@@ -317,9 +328,13 @@ class CommandContext {
     void runAsyncCommandWithTimeout(
             Player player, ConnectionLifecycleRegistry.Operation operation, Runnable task,
             String errorKey, String timeoutKey) {
-        CommandHelper.runAsyncCommandWithTimeout(task, messages, errorKey, timeoutKey,
+        CommandHelper.runAsyncCommandWithTimeout(
+                task, player, settings, messages, errorKey,
                 message -> runIfConnectionCurrent(
-                        operation, () -> player.sendMessage(message)));
+                        operation, () -> player.sendMessage(message)),
+                () -> runIfConnectionCurrent(operation,
+                        () -> player.sendMessage(playerComponent(player, timeoutKey,
+                                NamedTextColor.RED))));
     }
 
     void runRegistrationCommandWithTimeout(
@@ -327,7 +342,7 @@ class CommandContext {
             DatabaseManager.RegistrationCommitPermit permit, Runnable task,
             String errorKey) {
         CommandHelper.runAsyncCommandWithTimeout(
-                task, messages, errorKey,
+                task, player, settings, messages, errorKey,
                 message -> runIfConnectionCurrent(
                         operation, () -> player.sendMessage(message)),
                 () -> handleRegistrationTimeout(player, operation, permit));
@@ -373,7 +388,7 @@ class CommandContext {
             Player player, ConnectionLifecycleRegistry.Operation operation,
             String messageKey, NamedTextColor color) {
         runIfConnectionCurrent(operation,
-                () -> player.sendMessage(messages.component(messageKey, color)));
+                () -> player.sendMessage(playerComponent(player, messageKey, color)));
     }
 
     /**
@@ -395,7 +410,8 @@ class CommandContext {
      * Sends the standard per-player in-progress message.
      */
     void sendCommandInProgress(Player player) {
-        player.sendMessage(messages.component("auth.command.in_progress", NamedTextColor.YELLOW));
+        player.sendMessage(playerComponent(
+                player, "auth.command.in_progress", NamedTextColor.YELLOW));
     }
 
     boolean beginConnectionCommand(
@@ -430,8 +446,8 @@ class CommandContext {
         if (address == null || !ipRateLimiter.isRateLimited(address)) {
             return false;
         }
-        runIfConnectionCurrent(operation, () -> player.sendMessage(messages.component(
-                MSG_BRUTE_FORCE_BLOCKED, NamedTextColor.RED)));
+        runIfConnectionCurrent(operation, () -> player.sendMessage(playerComponent(
+                player, MSG_BRUTE_FORCE_BLOCKED, NamedTextColor.RED)));
         return true;
     }
 
@@ -444,8 +460,8 @@ class CommandContext {
         }
         completeRegistrationWithoutCommit(
                 operation, permit,
-                () -> player.sendMessage(messages.component(
-                        MSG_BRUTE_FORCE_BLOCKED, NamedTextColor.RED)));
+                () -> player.sendMessage(playerComponent(
+                        player, MSG_BRUTE_FORCE_BLOCKED, NamedTextColor.RED)));
         return true;
     }
 

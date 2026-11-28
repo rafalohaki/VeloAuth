@@ -5,6 +5,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.cache.AuthCache.PremiumCacheEntry;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.RegisteredPlayer;
@@ -13,6 +14,7 @@ import org.slf4j.Logger;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
+import static net.rafalohaki.veloauth.util.PlayerMessages.playerMessage;
 
 /**
  * Handles post-login routing and conflict resolution logic.
@@ -22,6 +24,7 @@ public class PostLoginHandler {
 
     private final AuthCache authCache;
     private final DatabaseManager databaseManager;
+    private final Settings settings;
     private final Messages messages;
     private final Logger logger;
 
@@ -30,15 +33,18 @@ public class PostLoginHandler {
      *
      * @param authCache         Cache for authorization and sessions
      * @param databaseManager   Manager for database operations
+     * @param settings          Plugin settings for client-language detection
      * @param messages          i18n message system
      * @param logger            Logger instance
      */
     PostLoginHandler(AuthCache authCache,
                            DatabaseManager databaseManager,
+                           Settings settings,
                            Messages messages,
                            Logger logger) {
         this.authCache = requireNonNull(authCache, "authCache");
         this.databaseManager = requireNonNull(databaseManager, "databaseManager");
+        this.settings = requireNonNull(settings, "settings");
         this.messages = requireNonNull(messages, "messages");
         this.logger = requireNonNull(logger, "logger");
     }
@@ -100,17 +106,23 @@ public class PostLoginHandler {
      */
     public void showConflictResolutionMessage(Player player) {
         Component message = Component.text()
-                .append(messages.component("player.conflict.header", NamedTextColor.YELLOW))
+                .append(playerMessage(player, settings, messages,
+                        "player.conflict.header", NamedTextColor.YELLOW))
                 .append(Component.newline())
-                .append(messages.component("player.conflict.description", NamedTextColor.RED))
+                .append(playerMessage(player, settings, messages,
+                        "player.conflict.description", NamedTextColor.RED))
                 .append(Component.newline())
-                .append(messages.component("player.conflict.options", NamedTextColor.WHITE))
+                .append(playerMessage(player, settings, messages,
+                        "player.conflict.options", NamedTextColor.WHITE))
                 .append(Component.newline())
-                .append(messages.component("player.conflict.option1", NamedTextColor.GRAY))
+                .append(playerMessage(player, settings, messages,
+                        "player.conflict.option1", NamedTextColor.GRAY))
                 .append(Component.newline())
-                .append(messages.component("player.conflict.option2", NamedTextColor.GREEN))
+                .append(playerMessage(player, settings, messages,
+                        "player.conflict.option2", NamedTextColor.GREEN))
                 .append(Component.newline())
-                .append(messages.component("player.conflict.resolution", NamedTextColor.AQUA))
+                .append(playerMessage(player, settings, messages,
+                        "player.conflict.resolution", NamedTextColor.AQUA))
                 .build();
 
         player.sendMessage(message);

@@ -41,7 +41,8 @@ class ChangePasswordCommand implements SimpleCommand {
     @SuppressWarnings("FutureReturnValueIgnored")
     public void execute(Invocation invocation) {
         CommandHelper.CommandInputs inputs = CommandHelper.requirePlayerAndArgs(
-                invocation, ctx.messages(), 2, "auth.changepassword.usage");
+                invocation, ctx.messages(), ctx.settings(), 2,
+                "auth.changepassword.usage");
         if (inputs == null) {
             return;
         }
@@ -50,7 +51,8 @@ class ChangePasswordCommand implements SimpleCommand {
         String newPassword = inputs.args()[1];
         var passwordSettings = ctx.settings().captureOperationSettings().password();
 
-        if (!CommandHelper.requireValidPassword(player, newPassword, passwordSettings, ctx.messages())) {
+        if (!CommandHelper.requireValidPassword(
+                player, newPassword, ctx.settings(), ctx.messages())) {
             return;
         }
 
@@ -101,8 +103,9 @@ class ChangePasswordCommand implements SimpleCommand {
         }
         if (authCtx.registeredPlayer() == null) {
             ctx.runIfConnectionCurrent(operation,
-                    () -> authCtx.player().sendMessage(ctx.messages().component(
-                            "auth.login.not_registered", NamedTextColor.RED)));
+                    () -> authCtx.player().sendMessage(ctx.playerComponent(
+                            authCtx.player(), "auth.login.not_registered",
+                            NamedTextColor.RED)));
             return null;
         }
         return authCtx;
@@ -114,8 +117,9 @@ class ChangePasswordCommand implements SimpleCommand {
             // Premium accounts have no password hash — same guard as LoginCommand,
             // otherwise BCrypt.verify throws IllegalArgumentException on null hash.
             ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
-                    () -> authCtx.player().sendMessage(ctx.messages().component(
-                            "auth.login.not_registered", NamedTextColor.RED)));
+                    () -> authCtx.player().sendMessage(ctx.playerComponent(
+                            authCtx.player(), "auth.login.not_registered",
+                            NamedTextColor.RED)));
             return false;
         }
         BCrypt.Result result = BCrypt.verifyer().verify(oldPassword.toCharArray(), hash);
@@ -124,8 +128,9 @@ class ChangePasswordCommand implements SimpleCommand {
         }
         if (!result.verified) {
             ctx.runIfConnectionCurrent(authCtx.connectionOperation(), () -> {
-                authCtx.player().sendMessage(ctx.messages().component(
-                        "auth.changepassword.incorrect_old_password", NamedTextColor.RED));
+                authCtx.player().sendMessage(ctx.playerComponent(
+                        authCtx.player(), "auth.changepassword.incorrect_old_password",
+                        NamedTextColor.RED));
                 SecurityUtils.registerFailedLogin(
                         authCtx.playerAddress(), authCtx.username(), ctx.authCache());
             });
@@ -183,8 +188,9 @@ class ChangePasswordCommand implements SimpleCommand {
         disconnectDuplicateSessions(origin, authCtx.username(), playerIp);
 
         ctx.runIfConnectionCurrent(authCtx.connectionOperation(),
-                () -> authCtx.player().sendMessage(ctx.messages().component(
-                        "auth.changepassword.success", NamedTextColor.GREEN)));
+                () -> authCtx.player().sendMessage(ctx.playerComponent(
+                        authCtx.player(), "auth.changepassword.success",
+                        NamedTextColor.GREEN)));
         if (ctx.logger().isInfoEnabled()) {
             ctx.logger().info(AUTH_MARKER, "Player {} changed password from IP {}",
                     authCtx.username(), playerIp);
@@ -221,8 +227,8 @@ class ChangePasswordCommand implements SimpleCommand {
             }
             try {
                 if (connected.getUsername().equalsIgnoreCase(username)) {
-                    connected.disconnect(ctx.messages().component(
-                            "general.kick.message", NamedTextColor.YELLOW));
+                    connected.disconnect(ctx.playerComponent(
+                            connected, "general.kick.message", NamedTextColor.YELLOW));
                     if (ctx.logger().isWarnEnabled()) {
                         ctx.logger().warn(
                                 "Disconnected duplicate player {} — password changed from IP {}",

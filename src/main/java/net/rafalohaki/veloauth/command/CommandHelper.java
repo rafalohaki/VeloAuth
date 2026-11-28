@@ -13,6 +13,8 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
+import static net.rafalohaki.veloauth.util.PlayerMessages.playerMessage;
+
 /**
  * Utility class for common command operations to reduce duplication.
  * Provides reusable methods for validation, messaging, and async execution.
@@ -48,14 +50,16 @@ public final class CommandHelper {
      * used to copy at the top of its {@code execute}.
      */
     public static CommandInputs requirePlayerAndArgs(
-            SimpleCommand.Invocation invocation, Messages messages, int requiredArgs, String usageKey) {
+            SimpleCommand.Invocation invocation, Messages messages, Settings settings,
+            int requiredArgs, String usageKey) {
         Player player = validatePlayerSource(invocation.source(), messages);
         if (player == null) {
             return null;
         }
         String[] args = invocation.arguments();
         if (args.length != requiredArgs) {
-            player.sendMessage(messages.component(usageKey, NamedTextColor.YELLOW));
+            player.sendMessage(playerMessage(player, settings, messages, usageKey,
+                    NamedTextColor.YELLOW));
             return null;
         }
         return new CommandInputs(player, args);
@@ -66,22 +70,23 @@ public final class CommandHelper {
      * a subcommand keyword (e.g. {@code /2fa setup}).
      */
     public static CommandInputs requirePlayerWithAtLeastOneArg(
-            SimpleCommand.Invocation invocation, Messages messages,
-            net.kyori.adventure.text.Component usageMessage) {
+            SimpleCommand.Invocation invocation, Messages messages, Settings settings,
+            String usageKey) {
         Player player = validatePlayerSource(invocation.source(), messages);
         if (player == null) {
             return null;
         }
         String[] args = invocation.arguments();
         if (args.length == 0) {
-            player.sendMessage(usageMessage);
+            player.sendMessage(playerMessage(player, settings, messages, usageKey,
+                    NamedTextColor.YELLOW));
             return null;
         }
         return new CommandInputs(player, args);
     }
 
     /**
-     * Carrier for the result of {@link #requirePlayerAndArgs(SimpleCommand.Invocation, Messages, int, String)}
+     * Carrier for the result of {@link #requirePlayerAndArgs(SimpleCommand.Invocation, Messages, Settings, int, String)}
      * — keeps the (player, args) pair as one return value so callers don't repeat the early-return guard.
      */
     public record CommandInputs(Player player, String[] args) {
@@ -162,22 +167,9 @@ public final class CommandHelper {
      */
     public static boolean requireValidPassword(
             Player player, String password, Settings settings, Messages messages) {
-        return requireValidPassword(player, password, settings.getPasswordSettings(), messages);
-    }
-
-    static boolean requireValidPassword(
-            Player player,
-            String password,
-            Settings.PasswordSettings passwordSettings,
-            Messages messages) {
         ValidationUtils.ValidationResult result =
-                ValidationUtils.validatePassword(password, passwordSettings, messages);
-        if (!result.valid()) {
-            player.sendMessage(messages.componentFromResolvedText(
-                    result.getErrorMessage(), NamedTextColor.RED));
-            return false;
-        }
-        return true;
+                ValidationUtils.validatePassword(password, settings.getPasswordSettings(), messages);
+        return sendValidationErrorIfAny(player, settings, messages, result);
     }
 
     /**
@@ -185,15 +177,26 @@ public final class CommandHelper {
      * player error message when the two passwords disagree.
      */
     public static boolean requirePasswordsMatch(
-            Player player, String password, String confirm, Messages messages) {
+            Player player, String password, String confirm, Settings settings, Messages messages) {
         ValidationUtils.ValidationResult result =
                 ValidationUtils.validatePasswordMatch(password, confirm, messages);
-        if (!result.valid()) {
+        return sendValidationErrorIfAny(player, settings, messages, result);
+    }
+
+    private static boolean sendValidationErrorIfAny(
+            Player player, Settings settings, Messages messages,
+            ValidationUtils.ValidationResult result) {
+        if (result.valid()) {
+            return true;
+        }
+        if (result.messageKey() != null) {
+            player.sendMessage(playerMessage(player, settings, messages, result.messageKey(),
+                    NamedTextColor.RED, result.messageArguments().toArray()));
+        } else {
             player.sendMessage(messages.componentFromResolvedText(
                     result.getErrorMessage(), NamedTextColor.RED));
-            return false;
         }
-        return true;
+        return false;
     }
 
     /**
@@ -316,20 +319,28 @@ public final class CommandHelper {
     }
 
     /**
+     * Resolves a command status/error message for a specific audience.
+     */
+    @FunctionalInterface
+    private interface MessageResolver {
+        net.kyori.adventure.text.Component component(
+                String key, NamedTextColor color, Object... args);
+    }
+
+    /**
      * Handles async command exceptions (PMD CPD fix - extracted duplicate error handling).
      *
      * @param throwable Exception that occurred
-     * @param source    Command source for error messages
-     * @param messages  Messages for error reporting
+     * @param resolver  Resolver for the target audience
      * @param errorKey  Message key for database errors
      */
     private static void handleAsyncCommandException(
-            Throwable throwable, Messages messages, String errorKey,
+            Throwable throwable, MessageResolver resolver, String errorKey,
             java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
         if (throwable instanceof java.util.concurrent.RejectedExecutionException) {
-            messageSender.accept(messages.component(MSG_KEY_SERVER_OVERLOADED, NamedTextColor.RED));
+            messageSender.accept(resolver.component(MSG_KEY_SERVER_OVERLOADED, NamedTextColor.RED));
         } else {
-            messageSender.accept(messages.component(errorKey, NamedTextColor.RED));
+            messageSender.accept(resolver.component(errorKey, NamedTextColor.RED));
         }
     }
 
@@ -343,19 +354,28 @@ public final class CommandHelper {
      */
     public static void runAsyncCommand(Runnable task, Messages messages,
                                        CommandSource source, String errorKey) {
-        runAsyncCommand(task, messages, errorKey, source::sendMessage);
+        runAsyncCommand(task, messages::component, errorKey, source::sendMessage);
     }
 
     static void runAsyncCommand(
-            Runnable task, Messages messages, String errorKey,
+            Runnable task, Player player, Settings settings, Messages messages,
+            String errorKey,
             java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
-        CompletableFuture<Void> future = submitAsyncCommand(task, messages, messageSender);
+        runAsyncCommand(task,
+                (key, color, args) -> playerMessage(player, settings, messages, key, color, args),
+                errorKey, messageSender);
+    }
+
+    private static void runAsyncCommand(
+            Runnable task, MessageResolver resolver, String errorKey,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
+        CompletableFuture<Void> future = submitAsyncCommand(task, resolver, messageSender);
         if (future == null) {
             return;
         }
         // skipcq: JAVA-W1087 - Future handled with exceptionally, fire-and-forget operation
         future.exceptionally(throwable -> {
-            handleAsyncCommandException(throwable, messages, errorKey, messageSender);
+            handleAsyncCommandException(throwable, resolver, errorKey, messageSender);
             return null;
         });
     }
@@ -376,24 +396,25 @@ public final class CommandHelper {
     public static void runAsyncCommandWithTimeout(Runnable task, Messages messages,
                                                   CommandSource source, String errorKey, String timeoutKey) {
         runAsyncCommandWithTimeout(
-                task, messages, errorKey, timeoutKey, source::sendMessage);
+                task, messages::component, errorKey, source::sendMessage,
+                () -> source.sendMessage(messages.component(timeoutKey, NamedTextColor.RED)));
     }
 
     static void runAsyncCommandWithTimeout(
-            Runnable task, Messages messages, String errorKey,
-            String timeoutKey,
-            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
-        runAsyncCommandWithTimeout(
-                task, messages, errorKey, messageSender,
-                () -> messageSender.accept(
-                        messages.component(timeoutKey, NamedTextColor.RED)));
-    }
-
-    static void runAsyncCommandWithTimeout(
-            Runnable task, Messages messages, String errorKey,
+            Runnable task, Player player, Settings settings, Messages messages,
+            String errorKey,
             java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender,
             Runnable timeoutHandler) {
-        CompletableFuture<Void> future = submitAsyncCommand(task, messages, messageSender);
+        runAsyncCommandWithTimeout(task,
+                (key, color, args) -> playerMessage(player, settings, messages, key, color, args),
+                errorKey, messageSender, timeoutHandler);
+    }
+
+    private static void runAsyncCommandWithTimeout(
+            Runnable task, MessageResolver resolver, String errorKey,
+            java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender,
+            Runnable timeoutHandler) {
+        CompletableFuture<Void> future = submitAsyncCommand(task, resolver, messageSender);
         if (future == null) {
             return;
         }
@@ -403,24 +424,26 @@ public final class CommandHelper {
                     if (throwable instanceof java.util.concurrent.TimeoutException) {
                         timeoutHandler.run();
                     } else {
-                        handleAsyncCommandException(throwable, messages, errorKey, messageSender);
+                        handleAsyncCommandException(throwable, resolver, errorKey, messageSender);
                     }
                     return null;
                 });
     }
 
     private static CompletableFuture<Void> submitAsyncCommand(
-            Runnable task, Messages messages,
+            Runnable task, MessageResolver resolver,
             java.util.function.Consumer<net.kyori.adventure.text.Component> messageSender) {
         if (VirtualThreadExecutorProvider.isShutdown()) {
-            messageSender.accept(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
+            messageSender.accept(resolver.component(
+                    MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
             return null;
         }
         try {
             return CompletableFuture.runAsync(
                     task, VirtualThreadExecutorProvider.getVirtualExecutor());
         } catch (java.util.concurrent.RejectedExecutionException exception) {
-            messageSender.accept(messages.component(MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
+            messageSender.accept(resolver.component(
+                    MSG_KEY_SERVER_SHUTTING_DOWN, NamedTextColor.RED));
             return null;
         }
     }

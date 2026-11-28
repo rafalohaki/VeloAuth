@@ -700,6 +700,29 @@ class CommandFlowFixesTest {
     }
 
     @Test
+    void testLoginCommand_ClientLocalePolish_UsesPolishSuccessMessage() throws Exception {
+        // Issue #88: command results must follow the client locale like auth prompts already do.
+        when(player.getEffectiveLocale()).thenReturn(Locale.forLanguageTag("pl-PL"));
+        RegisteredPlayer registeredPlayer = createRegisteredPlayer(
+                TEST_PLAYER_NAME, playerUuid, hash("secret123"));
+        databaseManager.setFindResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(registeredPlayer)));
+        databaseManager.enqueueSavePlayerResult(DatabaseManager.DbResult.success(true));
+        databaseManager.setPremiumResult(TEST_PLAYER_NAME,
+                CompletableFuture.completedFuture(DatabaseManager.DbResult.success(false)));
+        when(connectionManager.transferToBackend(player)).thenReturn(true);
+        injectAuthTimeoutScheduler();
+
+        new LoginCommand(inlineContext).execute(invocation(player, "secret123"));
+
+        ArgumentCaptor<Component> messagesCaptor = ArgumentCaptor.forClass(Component.class);
+        verify(player, atLeastOnce()).sendMessage(messagesCaptor.capture());
+        assertTrue(capturedTexts(messagesCaptor).contains("Zalogowano pomyślnie!"),
+                "A Polish client must receive the Polish command result, got: "
+                        + capturedTexts(messagesCaptor));
+    }
+
+    @Test
     void testLoginCommand_AuthorizedAndSessionActive_ShortCircuitsToAlreadyLogged() {
         // Counter-regression: when BOTH authorization and session are valid, /login must
         // still short-circuit. The fix must not weaken the normal "already logged in" path.

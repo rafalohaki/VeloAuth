@@ -121,7 +121,8 @@ class VAuthCommand implements SimpleCommand {
         // verification against the soon-to-be-deleted token. Belt and suspenders.
         ctx.plugin().getServer().getPlayer(nickname).ifPresent(p -> {
             ctx.pendingTotpStore().invalidate(p.getUniqueId());
-            p.disconnect(ctx.messages().component("general.kick.message", NamedTextColor.YELLOW));
+            p.disconnect(ctx.playerComponent(
+                    p, "general.kick.message", NamedTextColor.YELLOW));
             if (ctx.logger().isInfoEnabled()) {
                 ctx.logger().info(AUTH_MARKER, "Disconnected {} after admin 2FA wipe", nickname);
             }

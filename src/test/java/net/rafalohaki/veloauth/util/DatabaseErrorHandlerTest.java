@@ -4,6 +4,7 @@ import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.database.DatabaseManager.DbResult;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.junit.jupiter.api.Test;
@@ -48,6 +49,9 @@ class DatabaseErrorHandlerTest {
     @Mock
     private Messages messages;
 
+    @Mock
+    private Settings settings;
+
     private static final String OPERATION = "Test operation";
     // i18n message identifiers (not credentials) — referenced by DatabaseErrorHandler
     private static final String DEFAULT_MESSAGE_ID = "error.database." + "query";
@@ -66,7 +70,7 @@ class DatabaseErrorHandlerTest {
     @Test
     void handleErrorPlayer_successResult_returnsFalseAndDoesNotInteract() {
         boolean handled = DatabaseErrorHandler.handleError(
-                successResult(), player, OPERATION, logger, messages);
+                successResult(), player, OPERATION, logger, messages, settings);
 
         assertFalse(handled);
         verify(player, never()).sendMessage(any(Component.class));
@@ -82,7 +86,7 @@ class DatabaseErrorHandlerTest {
         when(messages.component(DEFAULT_MESSAGE_ID, NamedTextColor.RED)).thenReturn(localizedError);
 
         boolean handled = DatabaseErrorHandler.handleError(
-                errorResult(), player, OPERATION, logger, messages);
+                errorResult(), player, OPERATION, logger, messages, settings);
 
         assertTrue(handled);
         verify(messages).component(DEFAULT_MESSAGE_ID, NamedTextColor.RED);
@@ -94,7 +98,8 @@ class DatabaseErrorHandlerTest {
         when(logger.isErrorEnabled()).thenReturn(true);
         when(player.getUsername()).thenReturn("alice");
 
-        DatabaseErrorHandler.handleError(errorResult(), player, OPERATION, logger, messages);
+        DatabaseErrorHandler.handleError(
+                errorResult(), player, OPERATION, logger, messages, settings);
 
         ArgumentCaptor<String> opCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> idCaptor = ArgumentCaptor.forClass(String.class);
@@ -138,7 +143,7 @@ class DatabaseErrorHandlerTest {
     @Test
     void handleErrorWithKey_successResult_returnsFalseAndDoesNotInteract() {
         boolean handled = DatabaseErrorHandler.handleErrorWithKey(
-                successResult(), player, OPERATION, logger, messages, CUSTOM_MESSAGE_ID);
+                successResult(), player, OPERATION, logger, messages, settings, CUSTOM_MESSAGE_ID);
 
         assertFalse(handled);
         verify(player, never()).sendMessage(any(Component.class));
@@ -153,7 +158,7 @@ class DatabaseErrorHandlerTest {
         when(messages.component(CUSTOM_MESSAGE_ID, NamedTextColor.RED)).thenReturn(localizedError);
 
         boolean handled = DatabaseErrorHandler.handleErrorWithKey(
-                errorResult(), player, OPERATION, logger, messages, CUSTOM_MESSAGE_ID);
+                errorResult(), player, OPERATION, logger, messages, settings, CUSTOM_MESSAGE_ID);
 
         assertTrue(handled);
         verify(messages).component(CUSTOM_MESSAGE_ID, NamedTextColor.RED);
@@ -169,7 +174,7 @@ class DatabaseErrorHandlerTest {
         when(messages.component(CUSTOM_MESSAGE_ID, NamedTextColor.RED)).thenReturn(localizedError);
 
         boolean handled = DatabaseErrorHandler.handleErrorWithKey(
-                errorResult(), player, OPERATION, logger, messages, CUSTOM_MESSAGE_ID);
+                errorResult(), player, OPERATION, logger, messages, settings, CUSTOM_MESSAGE_ID);
 
         assertTrue(handled);
         // Still sends localized message even when logger is silenced

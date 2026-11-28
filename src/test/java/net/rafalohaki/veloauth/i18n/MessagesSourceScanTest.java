@@ -46,6 +46,10 @@ class MessagesSourceScanTest {
     private static final Pattern MESSAGES_COMPONENT = Pattern.compile(
             "(?:\\bmessages|ctx\\s*\\.\\s*messages\\s*\\(\\s*\\))"
                     + "\\s*\\.\\s*component\\s*\\(\\s*\"([a-zA-Z0-9._-]+)\"");
+    private static final Pattern PLAYER_MESSAGES = Pattern.compile(
+            "\\b(?:playerMessage|playerText)\\s*\\(\\s*(?:[\\w.()]+\\s*,\\s*){3}\"([a-zA-Z0-9._-]+)\"");
+    private static final Pattern PLAYER_COMPONENT = Pattern.compile(
+            "\\bplayerComponent\\s*\\(\\s*[\\w.()]+\\s*,\\s*\"([a-zA-Z0-9._-]+)\"");
     private static final Pattern RAW_LOCALIZED_COMPONENT = Pattern.compile(
             "(?:Component\\s*\\.\\s*text|ValidationUtils\\s*\\.\\s*create(?:Error|Warning|Success)Component)"
                     + "\\s*\\(\\s*(?:messages|ctx\\s*\\.\\s*messages\\s*\\(\\s*\\))"
@@ -77,7 +81,7 @@ class MessagesSourceScanTest {
         }
 
         assertTrue(missing.isEmpty(),
-                "Keys used via messages.get(\"…\") in production sources but missing from "
+                "Literal message keys in production sources missing from "
                         + EN_PROPERTIES + ":\n  " + String.join("\n  ", missing));
     }
 
@@ -132,6 +136,8 @@ class MessagesSourceScanTest {
             collectMatches(MESSAGES_GET, source, keys);
             collectMatches(MESSAGES_GET_FOR_LANGUAGE, source, keys);
             collectMatches(MESSAGES_COMPONENT, source, keys);
+            collectMatches(PLAYER_MESSAGES, source, keys);
+            collectMatches(PLAYER_COMPONENT, source, keys);
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to read source file: " + javaFile, e);
         }

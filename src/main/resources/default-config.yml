@@ -14,6 +14,7 @@ detect-client-language: true
 # Available built-in language codes: "en", "pl", "si", "ru", "tr", "fr", "de", "fi", "nl", "es", "it", "cs", "ro", "sk", "zh_cn", "zh_hk", "ja", "hi", "vi", "ko", "th", "id", "pt_br"
 # Examples: en=English, pl=Polski, nl=Nederlands, es=Español, it=Italiano, cs=Čeština, ro=Română, sk=Slovenčina, zh_cn=Chinese Simplified, zh_hk=Chinese Traditional (Hong Kong), ja=Japanese, ko=Korean, th=Thai, id=Indonesian, pt_br=Brazilian Portuguese
 # To add custom language: create messages_XX.properties in plugins/veloauth/lang/
+# Existing lang/ folders are not repopulated; missing built-in files are read from the JAR.
 
 # Debug settings
 # Set to true for development/debugging
@@ -97,7 +98,7 @@ auth-server:
   timeout-seconds: 300
   embedded:
     # The release-pinned, maintainer-reviewed ViaVersion runtime supports Java 1.8
-    # through 26.2. Remote runtime staging is disabled by default. Opting in permits
+    # through 26.3. Remote runtime staging is disabled by default. Opting in permits
     # only an exact candidate whose URL and SHA-256 are embedded in this VeloAuth
     # release; mutable latest metadata and same-origin checksums are never trusted.
     # A staged candidate becomes active only after the next full restart. Disabling

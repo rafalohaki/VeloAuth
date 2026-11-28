@@ -78,8 +78,8 @@ class UnregisterCommand implements SimpleCommand {
                 ctx.authCache().removePremiumPlayer(nickname);
 
                 ctx.plugin().getServer().getPlayer(nickname).ifPresent(player -> {
-                    player.disconnect(ctx.messages().component(
-                            "general.kick.message", NamedTextColor.YELLOW));
+                    player.disconnect(ctx.playerComponent(
+                            player, "general.kick.message", NamedTextColor.YELLOW));
                     ctx.logger().info("Disconnected player {} — account deleted by admin", nickname);
                 });
 

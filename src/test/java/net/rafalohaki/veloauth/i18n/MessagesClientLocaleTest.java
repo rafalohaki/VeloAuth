@@ -116,4 +116,14 @@ class MessagesClientLocaleTest {
 
         assertEquals(global, perPlayer);
     }
+
+    @Test
+    void getForLocale_nullLocaleMatchesGlobalGetAndFormatsArguments() {
+        Messages messages = new Messages();
+        messages.setLanguage("en");
+
+        assertEquals(messages.get("auth.first_time"), messages.getForLocale(null, "auth.first_time"));
+        assertEquals("Player Alex does not exist in database",
+                messages.getForLocale(null, "player.not_found", "Alex"));
+    }
 }

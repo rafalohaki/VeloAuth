@@ -3,6 +3,7 @@ package net.rafalohaki.veloauth.command;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.auth.totp.TotpService;
@@ -19,6 +20,8 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -52,6 +55,11 @@ class TwoFactorCommandSecurityTest {
         CommandContext context = mock(CommandContext.class);
         when(context.messages()).thenReturn(messages);
         when(context.settings()).thenReturn(settings);
+        when(context.playerComponent(
+                any(Player.class), anyString(), any(NamedTextColor.class)))
+                .thenAnswer(invocation -> messages.component(
+                        invocation.getArgument(1, String.class),
+                        invocation.getArgument(2, NamedTextColor.class)));
         when(context.authCache()).thenReturn(authCache);
         ConnectionLifecycleRegistry.Operation operation = allowConnection(context, player);
         java.net.InetAddress playerAddress = player.getRemoteAddress().getAddress();

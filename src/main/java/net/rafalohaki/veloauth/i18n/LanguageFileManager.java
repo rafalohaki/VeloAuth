@@ -89,19 +89,32 @@ public final class LanguageFileManager {
     
     /**
      * Initializes the language file system.
-     * Creates the lang directory if it doesn't exist and copies default language files from JAR.
+     * <p>
+     * First run (the lang directory does not exist yet): creates the directory and extracts
+     * every bundled template so operators have a starting point for translations.
+     * <p>
+     * Subsequent runs: the existing directory is operator-owned. Bundled files that were
+     * deliberately removed are <em>not</em> recreated; files that remain on disk still receive
+     * the documented missing-key and stock-default migration. Missing translations are served
+     * from the JAR by {@link #loadLanguageBundle(String)} without writing anything.
      *
-     * @throws IOException if directory creation or file copying fails
+     * @throws IOException if the lang directory cannot be created
      */
     public void initializeLanguageFiles() throws IOException {
-        // Create lang directory if it doesn't exist
         if (!Files.exists(langDirectory)) {
             Files.createDirectories(langDirectory);
             logger.info("Created language directory: {}", langDirectory);
+            for (String fileName : BuiltInLanguages.fileNames()) {
+                copyLanguageFileFromJar(fileName);
+            }
+            return;
         }
-        
+
         for (String fileName : BuiltInLanguages.fileNames()) {
-            copyLanguageFileFromJar(fileName);
+            Path targetFile = langDirectory.resolve(fileName);
+            if (Files.exists(targetFile)) {
+                mergeLanguageFileSafely(fileName, targetFile);
+            }
         }
     }
     
@@ -111,21 +124,6 @@ public final class LanguageFileManager {
         }
     }
 
-    /**
-     * Checks if a language file exists in the JAR resources.
-     *
-     * @param language The language code (e.g., "en", "pl", "si")
-     * @return true if the language file exists in JAR
-     */
-    private boolean existsInJar(String language) {
-        String filename = MESSAGES_PREFIX + language + PROPERTIES_SUFFIX;
-        try (InputStream is = getClass().getResourceAsStream(LANG_RESOURCE_PATH + filename)) {
-            return is != null;
-        } catch (IOException e) {
-            return false;
-        }
-    }
-    
     /**
      * Copies a language file from the JAR to the external lang directory.
      * If file exists externally, merges missing keys from JAR version.
@@ -147,6 +145,14 @@ public final class LanguageFileManager {
         }
     }
     
+    private void mergeLanguageFileSafely(String filename, Path targetFile) {
+        try {
+            mergeLanguageFile(filename, targetFile);
+        } catch (IOException e) {
+            logger.warn("Could not merge language file {}: {}", filename, e.getMessage());
+        }
+    }
+
     /**
      * Copies a language file from JAR to target path.
      */
@@ -233,96 +239,107 @@ public final class LanguageFileManager {
     }
 
     /**
-     * Loads a language bundle from the external lang directory.
-     * Falls back to English if the requested language is not found.
-     * Also fills in missing keys from English template for custom language files.
+     * Loads a language bundle, preferring an operator-supplied external file.
+     * <p>
+     * When no external file exists, bundled languages are read directly from the JAR and
+     * unknown languages fall back to English. Neither path writes to disk: only
+     * {@link #initializeLanguageFiles()} creates templates, and only when it creates the
+     * lang directory.
+     * <p>
+     * Existing non-English external files still receive the documented missing-key backfill
+     * from the external English file. Player-facing lazy loads use the non-backfill overload
+     * so missing keys can be resolved in memory against the configured server language before
+     * English.
      *
      * @param language The language code (e.g., "en", "pl")
      * @return ResourceBundle containing the language strings
      * @throws IOException if the language file cannot be loaded
      */
     public ResourceBundle loadLanguageBundle(String language) throws IOException {
+        return loadLanguageBundle(language, true);
+    }
+
+    /**
+     * Loads a language bundle, optionally skipping the external English backfill.
+     *
+     * @param language              language code
+     * @param backfillMissingEnglish whether existing non-English files should receive
+     *                               missing English keys on disk
+     * @return loaded bundle
+     * @throws IOException if the language file cannot be loaded
+     */
+    ResourceBundle loadLanguageBundle(String language, boolean backfillMissingEnglish) throws IOException {
         validateLanguageCode(language);
-        String filename = MESSAGES_PREFIX + language + PROPERTIES_SUFFIX;
+        String normalizedLanguage = language.toLowerCase(java.util.Locale.ROOT);
+        String filename = BuiltInLanguages.fileNameFor(normalizedLanguage);
         Path languageFile = langDirectory.resolve(filename).normalize();
         if (!languageFile.startsWith(langDirectory.normalize())) {
             throw new IllegalArgumentException("Invalid language code: path traversal detected");
         }
-        
-        logger.debug("Loading language: {}", language);
+
+        logger.debug("Loading language: {}", normalizedLanguage);
         logger.debug("Looking for external file: {}", languageFile.toAbsolutePath());
         logger.debug("External file exists: {}", Files.exists(languageFile));
-        
-        if (!Files.exists(languageFile)) {
-            // Check if language exists in JAR (built-in language)
-            if (existsInJar(language)) {
-                // Copy built-in language from JAR
-                logger.debug("Copying built-in language file '{}' from JAR", language);
-                copyFromJar(filename, languageFile);
-            } else {
-                // Create new file from English template for custom languages
-                logger.debug("Creating new language file for '{}' from English template", language);
-                createCustomLanguageFile(language);
-            }
-        } else {
+
+        if (Files.exists(languageFile)) {
             logger.debug("Language file already exists, using: {}", languageFile.getFileName());
-        }
-        
-        if (!Files.exists(languageFile)) {
-            logger.warn("Language file not found: {}, falling back to English", filename);
-            languageFile = langDirectory.resolve(BuiltInLanguages.englishFileName());
-        }
-        
-        if (!Files.exists(languageFile)) {
-            throw new IOException("English fallback language file not found at: " + languageFile);
-        }
-        
-        // For non-English languages, fill missing keys from English
-        if (!BuiltInLanguages.englishCode().equals(language) && Files.exists(langDirectory.resolve(filename))) {
-            fillMissingKeysFromEnglish(language);
-        }
-        
-        try (InputStream is = Files.newInputStream(languageFile);
-             InputStreamReader reader = new InputStreamReader(is, StandardCharsets.UTF_8)) {
-            PropertyResourceBundle bundle = new PropertyResourceBundle(reader);
-            // Zredukowane logowanie do INFO z podsumowaniem, DEBUG dla szczegółów
+            if (backfillMissingEnglish && !BuiltInLanguages.englishCode().equals(normalizedLanguage)) {
+                fillMissingKeysFromEnglish(normalizedLanguage);
+            }
+            ResourceBundle bundle = loadExternalBundle(languageFile);
             if (logger.isDebugEnabled()) {
-                logger.debug("Loaded EXTERNAL language file: {} ({} keys)", languageFile.toAbsolutePath(), bundle.keySet().size());
+                logger.debug("Loaded EXTERNAL language file: {} ({} keys)",
+                        languageFile.toAbsolutePath(), bundle.keySet().size());
             }
             return bundle;
         }
-    }
-    
-    /**
-     * Creates a new custom language file by copying the English template.
-     * This allows users to configure any language - the file will be created with English values
-     * that can then be translated.
-     *
-     * @param language The language code (e.g., "si", "de", "fr")
-     * @throws IOException if file creation fails
-     */
-    private void createCustomLanguageFile(String language) throws IOException {
-        Path englishFile = langDirectory.resolve(BuiltInLanguages.englishFileName());
-        Path targetFile = langDirectory.resolve(MESSAGES_PREFIX + language + PROPERTIES_SUFFIX);
-        
-        if (!Files.exists(englishFile)) {
-            throw new IOException("Cannot create custom language file - English template not found");
+
+        ResourceBundle bundled = loadBundledBundle(normalizedLanguage);
+        if (bundled != null) {
+            logger.debug("Loaded bundled language '{}' directly from JAR (no external file)",
+                    normalizedLanguage);
+            return bundled;
         }
-        
-        // Copy English file as template for new language
-        Files.copy(englishFile, targetFile);
-        
-        // Add header comment to indicate this is a new language file
-        String content = Files.readString(targetFile, StandardCharsets.UTF_8);
-        String header = "# VeloAuth Language File: " + language + "\n"
-                + "# This file was auto-generated from English template.\n"
-                + "# Please translate the values to your language.\n"
-                + "# ===================================================\n\n";
-        Files.writeString(targetFile, header + content, StandardCharsets.UTF_8);
-        
-        logger.info("Created new language file: {} (copied from English template - please translate)", targetFile.getFileName());
+
+        logger.warn("Language file not found: {}, falling back to English", filename);
+        return loadEnglishFallbackBundle();
     }
-    
+
+    private static ResourceBundle loadExternalBundle(Path languageFile) throws IOException {
+        try (InputStream is = Files.newInputStream(languageFile);
+             InputStreamReader reader = new InputStreamReader(is, StandardCharsets.UTF_8)) {
+            return new PropertyResourceBundle(reader);
+        }
+    }
+
+    @javax.annotation.Nullable
+    private ResourceBundle loadBundledBundle(String language) throws IOException {
+        try (InputStream is = getClass().getResourceAsStream(
+                LANG_RESOURCE_PATH + BuiltInLanguages.fileNameFor(language))) {
+            if (is == null) {
+                return null;
+            }
+            try (InputStreamReader reader = new InputStreamReader(is, StandardCharsets.UTF_8)) {
+                return new PropertyResourceBundle(reader);
+            }
+        }
+    }
+
+    private ResourceBundle loadEnglishFallbackBundle() throws IOException {
+        Path englishFile = langDirectory.resolve(BuiltInLanguages.englishFileName());
+        if (Files.exists(englishFile)) {
+            return loadExternalBundle(englishFile);
+        }
+
+        ResourceBundle bundledEnglish = loadBundledBundle(BuiltInLanguages.englishCode());
+        if (bundledEnglish != null) {
+            logger.debug("Using bundled English fallback (no external English file)");
+            return bundledEnglish;
+        }
+
+        throw new IOException("English fallback language file not found at: " + englishFile);
+    }
+
     /**
      * Fills missing keys in a custom language file from English template.
      * This allows users to create partial translations - missing keys will use English values.

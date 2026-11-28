@@ -24,7 +24,7 @@ class LogoutCommand implements SimpleCommand {
     @Override
     public void execute(Invocation invocation) {
         CommandHelper.CommandInputs inputs = CommandHelper.requirePlayerAndArgs(
-                invocation, context.messages(), 0, "auth.logout.usage");
+                invocation, context.messages(), context.settings(), 0, "auth.logout.usage");
         if (inputs == null) {
             return;
         }
@@ -44,7 +44,8 @@ class LogoutCommand implements SimpleCommand {
                     "Failed to retire logout connection for {}", username, cleanupFailure);
         }
         try {
-            player.disconnect(context.messages().component("auth.logged_out", NamedTextColor.YELLOW));
+            player.disconnect(context.playerComponent(
+                    player, "auth.logged_out", NamedTextColor.YELLOW));
         } catch (RuntimeException disconnectFailure) {
             context.logger().error(
                     "Failed to request terminal logout disconnect for {}", username,

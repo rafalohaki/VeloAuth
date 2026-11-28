@@ -4,12 +4,15 @@ import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.scheduler.ScheduledTask;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
 import net.rafalohaki.veloauth.model.CachedAuthUser;
 import net.rafalohaki.veloauth.util.VirtualThreadExecutorProvider;
+import static net.rafalohaki.veloauth.util.PlayerMessages.playerMessage;
+import static net.rafalohaki.veloauth.util.PlayerMessages.playerText;
 import org.slf4j.Logger;
 
 import java.net.InetSocketAddress;
@@ -86,7 +89,8 @@ final class BackendTransferCoordinator {
                 return BackendTransferOutcome.REJECTED;
             }
 
-            player.sendMessage(messages.component("connection.connecting", NamedTextColor.YELLOW));
+            player.sendMessage(playerMessage(
+                    player, settings, messages, "connection.connecting", NamedTextColor.YELLOW));
             if (logger.isDebugEnabled()) {
                 logger.debug(messages.get(
                         "player.transfer.backend.attempt", player.getUsername(), serverName));
@@ -443,11 +447,11 @@ final class BackendTransferCoordinator {
         if (isStale(state)) {
             return;
         }
-        String resolved = messages.get(messageKey);
-        if (resolved == null || resolved.isEmpty() || isStale(state)) {
+        Component message = playerMessage(player, settings, messages, messageKey, color);
+        if (message == null || Component.empty().equals(message) || isStale(state)) {
             return;
         }
-        player.sendMessage(messages.componentFromResolvedText(resolved, color));
+        player.sendMessage(message);
     }
 
     private void executeBackendRetryAfterLimbo(
@@ -517,11 +521,14 @@ final class BackendTransferCoordinator {
     }
 
     private void sendErrorMessage(Player player) {
-        sendErrorMessage(player, messages.get(MSG_ERROR_UNKNOWN));
+        sendErrorMessage(player, playerText(
+                player, settings, messages, MSG_ERROR_UNKNOWN));
     }
 
     private void sendErrorMessage(Player player, String reason) {
-        player.sendMessage(messages.component(CONNECTION_ERROR_GAME_SERVER, NamedTextColor.RED, reason));
+        player.sendMessage(playerMessage(
+                player, settings, messages,
+                CONNECTION_ERROR_GAME_SERVER, NamedTextColor.RED, reason));
     }
 
     private void sendErrorMessageIfCurrent(Player player, PlayerTransferState state) {
@@ -551,7 +558,8 @@ final class BackendTransferCoordinator {
         if (isStale(state)) {
             return false;
         }
-        player.sendMessage(messages.component("connection.retry", NamedTextColor.YELLOW));
+        player.sendMessage(playerMessage(
+                player, settings, messages, "connection.retry", NamedTextColor.YELLOW));
 
         scheduleTimeoutRetry(player, state, targetServer, serverName);
         return true;

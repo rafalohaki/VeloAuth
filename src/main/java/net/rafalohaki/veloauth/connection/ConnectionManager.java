@@ -8,6 +8,7 @@ import net.rafalohaki.veloauth.authserver.AuthServerProvider;
 import net.rafalohaki.veloauth.cache.AuthCache;
 import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
+import static net.rafalohaki.veloauth.util.PlayerMessages.playerMessage;
 import org.slf4j.Logger;
 
 import com.velocitypowered.api.scheduler.ScheduledTask;
@@ -211,7 +212,9 @@ public class ConnectionManager {
                     authServerProvider.serverName());
 
             if (state == null || !isStale(state)) {
-                player.disconnect(messages.component("connection.error.auth_server", NamedTextColor.RED));
+                player.disconnect(playerMessage(
+                        player, settings, messages,
+                        "connection.error.auth_server", NamedTextColor.RED));
             }
             return null;
         }
@@ -228,7 +231,9 @@ public class ConnectionManager {
         }
 
         if (!isStale(state)) {
-            player.disconnect(messages.component("connection.error.auth_connect", NamedTextColor.RED));
+            player.disconnect(playerMessage(
+                    player, settings, messages,
+                    "connection.error.auth_connect", NamedTextColor.RED));
         }
         return false;
     }
@@ -310,7 +315,9 @@ public class ConnectionManager {
             }
 
             if (!isStale(state)) {
-                player.sendMessage(messages.component("connection.error.auth_server", NamedTextColor.RED));
+                player.sendMessage(playerMessage(
+                        player, settings, messages,
+                        "connection.error.auth_server", NamedTextColor.RED));
             }
             return false;
         }
@@ -329,7 +336,9 @@ public class ConnectionManager {
         }
 
         if (!isStale(state)) {
-            player.sendMessage(messages.component("connection.error.auth_connect", NamedTextColor.RED));
+            player.sendMessage(playerMessage(
+                    player, settings, messages,
+                    "connection.error.auth_connect", NamedTextColor.RED));
         }
         return false;
     }
@@ -479,10 +488,12 @@ public class ConnectionManager {
         logger.warn("Auth-server preparation rejected player {} (reason={})",
                 player.getUsername(), preparation);
         if (preparation == AuthServerProvider.Preparation.UNSUPPORTED_PROTOCOL) {
-            player.disconnect(messages.component(
-                    messageKey, NamedTextColor.RED, authServerProvider.compatibilityDescription()));
+            player.disconnect(playerMessage(
+                    player, settings, messages, messageKey, NamedTextColor.RED,
+                    authServerProvider.compatibilityDescription()));
         } else {
-            player.disconnect(messages.component(messageKey, NamedTextColor.RED));
+            player.disconnect(playerMessage(
+                    player, settings, messages, messageKey, NamedTextColor.RED));
         }
         return false;
     }

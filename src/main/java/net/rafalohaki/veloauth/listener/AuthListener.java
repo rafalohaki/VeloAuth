@@ -639,7 +639,8 @@ public class AuthListener {
                     "Denying {} because the Mojang profile could not be safely bound to AUTH.UUID",
                     playerName);
             event.setResult(ComponentResult.denied(
-                    messages.component(MSG_CONNECTION_ERROR_DATABASE, NamedTextColor.RED)));
+                    playerMessage(player, settings, messages,
+                            MSG_CONNECTION_ERROR_DATABASE, NamedTextColor.RED)));
             return;
         }
 
@@ -655,7 +656,8 @@ public class AuthListener {
                     playerName, playerAddressText);
 
             event.setResult(ComponentResult.denied(
-                messages.component("security.brute_force.blocked", NamedTextColor.RED)));
+                playerMessage(player, settings, messages,
+                        "security.brute_force.blocked", NamedTextColor.RED)));
             return;
         }
 
@@ -738,8 +740,9 @@ public class AuthListener {
         if (postLoginHandler == null) {
             logger.error("CRITICAL: PostLoginHandler is null during event processing for player {}", 
                 player.getUsername());
-            connectionLifecycleRegistry.runIfCurrent(operation, () -> player.disconnect(localizedOrFallback(
-                    "system.init_error", "System initialization error.", NamedTextColor.RED)));
+            connectionLifecycleRegistry.runIfCurrent(operation, () -> player.disconnect(
+                    playerMessage(player, settings, messages,
+                            "system.init_error", NamedTextColor.RED)));
             return;
         }
 
@@ -763,7 +766,8 @@ public class AuthListener {
             logger.error("Error handling PostLoginEvent for player: {}", event.getPlayer().getUsername(), e);
 
             connectionLifecycleRegistry.runIfCurrent(operation,
-                    () -> event.getPlayer().disconnect(messages.component(
+                    () -> event.getPlayer().disconnect(playerMessage(
+                            event.getPlayer(), settings, messages,
                             "connection.error.generic", NamedTextColor.RED)));
         }
     }
@@ -798,7 +802,8 @@ public class AuthListener {
                 "Failed to publish connection lifecycle for {} - disconnecting fail-secure",
                 playerName, publicationFailure);
         try {
-            player.disconnect(messages.component("connection.error.generic", NamedTextColor.RED));
+            player.disconnect(playerMessage(
+                    player, settings, messages, "connection.error.generic", NamedTextColor.RED));
         } catch (RuntimeException disconnectFailure) {
             logger.error(SECURITY_MARKER,
                     "Failed to disconnect {} after PostLogin publication failure",
@@ -1200,7 +1205,8 @@ public class AuthListener {
                 logger.debug(AUTH_MARKER, messages.get("player.connected.backend"),
                         player.getUsername(), serverName);
             }
-            player.sendMessage(messages.component("general.welcome.full", NamedTextColor.GREEN));
+            player.sendMessage(playerMessage(
+                    player, settings, messages, "general.welcome.full", NamedTextColor.GREEN));
         });
     }
 

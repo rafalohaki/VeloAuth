@@ -4,11 +4,13 @@ import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.rafalohaki.veloauth.VeloAuth;
 import net.rafalohaki.veloauth.audit.AuditEventType;
 import net.rafalohaki.veloauth.audit.AuditLogService;
 import net.rafalohaki.veloauth.connection.ConnectionManager;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -58,6 +61,8 @@ class LogoutCommandTest {
     @Mock
     private ConnectionManager connectionManager;
     @Mock
+    private Settings settings;
+    @Mock
     private VeloAuth plugin;
 
     private Messages messages;
@@ -68,6 +73,11 @@ class LogoutCommandTest {
         messages = new Messages();
         messages.setLanguage("en");
         when(context.messages()).thenReturn(messages);
+        when(context.settings()).thenReturn(settings);
+        when(context.playerComponent(
+                any(Player.class), eq("auth.logged_out"), eq(NamedTextColor.YELLOW)))
+                .thenAnswer(ignored -> messages.component(
+                        "auth.logged_out", NamedTextColor.YELLOW));
         when(context.auditLogService()).thenReturn(auditLogService);
         when(context.plugin()).thenReturn(plugin);
         when(context.logger()).thenReturn(org.mockito.Mockito.mock(org.slf4j.Logger.class));

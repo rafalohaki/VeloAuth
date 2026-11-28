@@ -2,6 +2,7 @@ package net.rafalohaki.veloauth.listener;
 
 import com.velocitypowered.api.proxy.Player;
 import net.rafalohaki.veloauth.cache.AuthCache;
+import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.database.DatabaseManager;
 import net.rafalohaki.veloauth.i18n.Messages;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +34,7 @@ class PostLoginHandlerTest {
 
     @Mock private AuthCache authCache;
     @Mock private DatabaseManager databaseManager;
+    @Mock private Settings settings;
     @Mock private Messages messages;
     @Mock private Logger logger;
     @Mock private Player player;
@@ -46,7 +48,7 @@ class PostLoginHandlerTest {
         when(player.getUniqueId()).thenReturn(playerUuid);
         when(player.getUsername()).thenReturn(USERNAME);
 
-        handler = new PostLoginHandler(authCache, databaseManager, messages, logger);
+        handler = new PostLoginHandler(authCache, databaseManager, settings, messages, logger);
     }
 
     @Test

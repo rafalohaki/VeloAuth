@@ -6,6 +6,8 @@ import net.rafalohaki.veloauth.config.Settings;
 import net.rafalohaki.veloauth.i18n.Messages;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -34,26 +36,23 @@ public final class ValidationUtils {
             Settings.PasswordSettings passwordSettings,
             Messages messages) {
         if (password == null || password.isEmpty()) {
-            return ValidationResult.error(messages.get("validation.password.empty"));
+            return ValidationResult.localized(messages, "validation.password.empty");
         }
 
         if (password.length() < passwordSettings.minLength()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.too_short",
-                    passwordSettings.minLength()));
+            return ValidationResult.localized(messages, "validation.password.too_short",
+                    passwordSettings.minLength());
         }
 
         if (password.length() > passwordSettings.maxLength()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.too_long",
-                    passwordSettings.maxLength()));
+            return ValidationResult.localized(messages, "validation.password.too_long",
+                    passwordSettings.maxLength());
         }
 
         int byteLength = password.getBytes(StandardCharsets.UTF_8).length;
         if (byteLength > 72) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.utf8_too_long",
-                    byteLength));
+            return ValidationResult.localized(
+                    messages, "validation.password.utf8_too_long", byteLength);
         }
 
         return validateComplexity(password, passwordSettings.policy(), messages);
@@ -69,20 +68,20 @@ public final class ValidationUtils {
         CharCounts counts = countChars(password);
 
         if (counts.digits < policy.getMinDigits()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.needs_digit", policy.getMinDigits()));
+            return ValidationResult.localized(messages, "validation.password.needs_digit",
+                    policy.getMinDigits());
         }
         if (counts.uppercase < policy.getMinUppercase()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.needs_upper", policy.getMinUppercase()));
+            return ValidationResult.localized(messages, "validation.password.needs_upper",
+                    policy.getMinUppercase());
         }
         if (counts.lowercase < policy.getMinLowercase()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.needs_lower", policy.getMinLowercase()));
+            return ValidationResult.localized(messages, "validation.password.needs_lower",
+                    policy.getMinLowercase());
         }
         if (counts.special < policy.getMinSpecial()) {
-            return ValidationResult.error(messages.get(
-                    "validation.password.needs_special", policy.getMinSpecial()));
+            return ValidationResult.localized(messages, "validation.password.needs_special",
+                    policy.getMinSpecial());
         }
         return ValidationResult.success();
     }
@@ -125,7 +124,7 @@ public final class ValidationUtils {
                                                          String confirmPassword,
                                                          Messages messages) {
         if (!Objects.equals(password, confirmPassword)) {
-            return ValidationResult.error(messages.get("validation.password.mismatch"));
+            return ValidationResult.localized(messages, "validation.password.mismatch");
         }
         return ValidationResult.success();
     }
@@ -181,25 +180,42 @@ public final class ValidationUtils {
      */
     public record ValidationResult(
             boolean valid,
-            String message
+            String message,
+            @javax.annotation.Nullable String messageKey,
+            List<Object> messageArguments
     ) {
+        public ValidationResult {
+            messageArguments = messageArguments == null
+                    ? List.of()
+                    : List.copyOf(messageArguments);
+        }
+
         /**
          * Creates a valid result.
          *
          * @return Valid ValidationResult
          */
         public static ValidationResult success() {
-            return new ValidationResult(true, null);
+            return new ValidationResult(true, null, null, List.of());
         }
 
         /**
-         * Creates an invalid result with message.
+         * Creates an invalid result with a pre-rendered message (used for non-i18n text).
          *
          * @param message Error message
          * @return Invalid ValidationResult
          */
         public static ValidationResult error(String message) {
-            return new ValidationResult(false, message);
+            return new ValidationResult(false, message, null, List.of());
+        }
+
+        /**
+         * Creates an invalid result that remembers the message key and arguments so callers
+         * can render it in the player's client locale.
+         */
+        static ValidationResult localized(Messages messages, String key, Object... args) {
+            return new ValidationResult(false, messages.get(key, args), key,
+                    args.length == 0 ? List.of() : Arrays.asList(args));
         }
 
         /**

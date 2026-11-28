@@ -142,7 +142,7 @@ public class VeloAuth {
             
             // Reload with potentially new language setting
             messages.reloadWithLanguage(newLanguage);
-            logger.info("Language files reloaded successfully (language: {})", newLanguage);
+            logger.info("Language files reloaded successfully (language: {})", messages.getCurrentLanguage());
             return true;
         } catch (IOException e) {
             logger.error("Failed to reload language files", e);
@@ -614,7 +614,7 @@ public class VeloAuth {
         logger.debug("PreLoginHandler created successfully");
         
         var postLoginHandler = ListenerFactory.createPostLoginHandler(
-            authCache, databaseManager,
+            authCache, databaseManager, settings,
             messages, logger);
         logger.debug("PostLoginHandler created successfully");
         
