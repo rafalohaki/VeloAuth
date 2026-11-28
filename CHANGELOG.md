@@ -4,11 +4,32 @@ All notable user-visible changes to VeloAuth are documented in this file.
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-11-28
+
+### Added
+
+- Embedded limbo supports Minecraft 26.3 through checksum-pinned ViaVersion 5.12.3;
+  the loopback probe now logs in with a 26.3 client.
+
 ### Changed
 
 - Update bundled database and cache dependencies: MySQL Connector/J 9.7.0, PostgreSQL JDBC
   42.7.14, H2 2.5.252, SQLite JDBC 3.54.1.0, HikariCP 6.3.3 and Caffeine 3.3.1.
 - Update test dependencies to Mockito 5.24.0 and align slf4j-simple with slf4j-api 2.0.20.
+- Update to Velocity API 4.3.1 and align the provided Gson (2.14.0) and Netty (4.2.19.Final)
+  versions with that proxy. Operators must update Velocity itself to get its patched Guava.
+- Update the compiler and JAR plugins and the pinned GitHub Actions for Java setup,
+  Dependency Review and OSV-Scanner.
+- Require a passing OSV dependency scan before updating the rolling download.
+
+### Fixed
+
+- Use the Minecraft client language for player-facing command results, authentication prompts,
+  connection messages and backend welcomes when client-language detection is enabled.
+- Stop restoring deleted translation files in existing `lang/` directories. Missing built-in
+  files are read from the JAR without writing them back.
+  Custom language files must be created explicitly before selecting their language code.
+- Keep the previous language bundles and locale cache if reloading translations fails.
 
 ## [1.6.2] - 2026-10-07
 
